@@ -6,10 +6,10 @@ import { TELEGRAM_BOT_URL } from '../../utils/links'
   <section class="final-cta" aria-labelledby="final-cta-title">
     <LightFlare />
     <div class="final-mark" aria-hidden="true" data-reveal>
-      <svg viewBox="0 0 32 32">
+      <svg viewBox="-2 -2 36 36">
         <path
           pathLength="1"
-          d="M16 4c4.2 5.6 8 10.2 8 15a8 8 0 1 1-16 0c0-4.8 3.8-9.4 8-15z"
+          d="M16 2 C21.5 9.5 27.5 15 27.5 21.5 a11.5 11.5 0 1 1-23 0 C4.5 15 10.5 9.5 16 2 Z"
         />
       </svg>
     </div>
@@ -46,7 +46,7 @@ import { TELEGRAM_BOT_URL } from '../../utils/links'
   z-index: -1;
   top: 50%;
   left: 50%;
-  height: 84%;
+  height: 96%;
   aspect-ratio: 1;
   transform: translate(-50%, -50%);
 }
@@ -60,9 +60,10 @@ import { TELEGRAM_BOT_URL } from '../../utils/links'
 
 .final-mark path {
   fill: none;
-  stroke: rgba(125, 211, 252, 0.22);
-  stroke-width: 0.35px;
+  stroke: rgba(125, 211, 252, 0.28);
+  stroke-width: 0.32px;
   stroke-linejoin: round;
+  stroke-linecap: round;
 }
 
 html.motion .final-mark path {

@@ -17,7 +17,7 @@ import SiteFooter from './SiteFooter.vue'
 
 <style scoped>
 .site-closing {
-  padding-top: 56px;
+  padding: 56px 0 clamp(40px, 6vw, 72px);
 }
 
 .closing-sheet {
