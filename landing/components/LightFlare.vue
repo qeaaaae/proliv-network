@@ -20,15 +20,15 @@ onMounted(() => {
     ctx.clearRect(0, 0, w, h)
 
     // soft white bloom rising from the bottom edge, like ranteis
-    const g = ctx.createRadialGradient(w * 0.5, h * 1.15, 0, w * 0.5, h * 1.15, h * 0.95)
-    g.addColorStop(0, 'rgba(255, 255, 255, 0.22)')
-    g.addColorStop(0.5, 'rgba(255, 255, 255, 0.07)')
+    const g = ctx.createRadialGradient(w * 0.5, h * 1.2, 0, w * 0.5, h * 1.2, h * 1.15)
+    g.addColorStop(0, 'rgba(255, 255, 255, 0.32)')
+    g.addColorStop(0.45, 'rgba(255, 255, 255, 0.12)')
     g.addColorStop(1, 'rgba(255, 255, 255, 0)')
     ctx.fillStyle = g
     ctx.fillRect(0, 0, w, h)
 
-    const core = ctx.createRadialGradient(w * 0.5, h * 1.05, 0, w * 0.5, h * 1.05, h * 0.45)
-    core.addColorStop(0, 'rgba(255, 255, 255, 0.16)')
+    const core = ctx.createRadialGradient(w * 0.5, h * 1.02, 0, w * 0.5, h * 1.02, h * 0.55)
+    core.addColorStop(0, 'rgba(255, 255, 255, 0.22)')
     core.addColorStop(1, 'rgba(255, 255, 255, 0)')
     ctx.fillStyle = core
     ctx.fillRect(0, 0, w, h)

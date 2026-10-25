@@ -27,16 +27,20 @@
 
 <style scoped>
 .hero {
-  padding-top: 16px;
+  padding-top: clamp(12px, 1.6vw, 20px);
 }
 
 .hero-stage {
-  min-height: 480px;
-  padding: 28px clamp(32px, 5vw, 64px) clamp(32px, 5vw, 64px);
+  min-height: var(--stage-height);
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: clamp(100px, 14vh, 160px) 24px clamp(150px, 22vh, 220px);
 }
 
 .hero-header {
-  position: relative;
+  position: absolute;
+  inset: clamp(18px, 2.4vw, 28px) clamp(18px, 2.4vw, 28px) auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -45,44 +49,40 @@
 
 .hero-copy {
   position: relative;
-  margin-top: 64px;
+  display: grid;
+  justify-items: center;
+  gap: 26px;
+  max-width: 780px;
 }
 
 .hero-title {
-  max-width: 700px;
+  max-width: 16ch;
   font-family: var(--font-display);
-  font-size: clamp(30px, 5vw, 56px);
+  font-size: clamp(34px, 6vw, 76px);
   font-weight: 700;
-  line-height: 1.12;
-  letter-spacing: -0.01em;
+  line-height: 1.08;
+  letter-spacing: -0.045em;
   text-wrap: balance;
 }
 
 .hero-lead {
-  margin-top: 20px;
-  max-width: 560px;
-  color: var(--muted);
+  max-width: 52ch;
+  color: var(--fg-secondary);
   font-size: 18px;
+  text-wrap: pretty;
 }
 
 .hero-actions {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: 12px;
-  margin-top: 36px;
 }
 
 @media (max-width: 640px) {
-  .hero-stage {
-    padding-top: 24px;
-  }
-
-  .hero-copy {
-    margin-top: 48px;
-  }
-
   .hero-actions {
     flex-direction: column;
+    width: 100%;
   }
 
   .hero-actions :deep(.base-button) {

@@ -27,19 +27,6 @@ const priceNote = computed(() => {
   return `${period.note} · ~${Math.round(period.price / period.months)} ₽/мес`
 })
 
-const btns = useTemplateRef<HTMLElement[]>('btns')
-const pillStyle = ref({ transform: 'translateX(0)', width: '0px', opacity: 0 })
-
-function updatePill() {
-  const btn = btns.value?.[selected.value]
-  if (!btn) return
-  pillStyle.value = {
-    transform: `translateX(${btn.offsetLeft}px)`,
-    width: `${btn.offsetWidth}px`,
-    opacity: 1,
-  }
-}
-
 watch(selected, (i) => {
   animate(priceProxy, {
     v: periods[i].price,
@@ -49,20 +36,7 @@ watch(selected, (i) => {
       priceShown.value = Math.round(priceProxy.v)
     },
   })
-  updatePill()
 })
-
-let ro: ResizeObserver | null = null
-onMounted(() => {
-  updatePill()
-  const wrap = btns.value?.[0]?.parentElement
-  if (wrap) {
-    ro = new ResizeObserver(updatePill)
-    ro.observe(wrap)
-  }
-})
-
-onBeforeUnmount(() => ro?.disconnect())
 </script>
 
 <template>
@@ -81,13 +55,15 @@ onBeforeUnmount(() => ro?.disconnect())
           <p class="plan-name">Proliv Network</p>
 
           <div class="periods" role="group" aria-label="Срок подписки">
-            <span class="periods-pill" :style="pillStyle" aria-hidden="true" />
+            <span
+              class="periods-pill"
+              :style="{ '--index': selected, '--col': selected % 2, '--row': Math.floor(selected / 2) }"
+              aria-hidden="true"
+            />
             <button
               v-for="(period, index) in periods"
               :key="period.label"
-              ref="btns"
               type="button"
-              class="period-pill"
               :aria-pressed="selected === index"
               @click="selected = index"
             >
@@ -180,59 +156,57 @@ onBeforeUnmount(() => ro?.disconnect())
 }
 
 .plan-name {
-  font-family: var(--font-display);
+  color: var(--fg-secondary);
+  font-size: 15px;
   font-weight: 600;
-  font-size: 20px;
-  color: var(--accent);
 }
 
 .periods {
+  --pad: 5px;
+  --gap: 4px;
+  --columns: 4;
   position: relative;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(var(--columns), minmax(0, 1fr));
+  gap: var(--gap);
+  padding: var(--pad);
   margin: 22px 0 30px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .periods-pill {
   position: absolute;
-  top: 0;
-  left: 0;
-  height: 100%;
+  inset: var(--pad) auto var(--pad) var(--pad);
+  width: calc((100% - var(--pad) * 2 - (var(--columns) - 1) * var(--gap)) / var(--columns));
   border-radius: 999px;
-  background: var(--accent-soft);
-  border: 1px solid rgba(125, 211, 252, 0.35);
-  transition:
-    transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
-    width 0.35s cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 0.2s ease;
+  background: var(--accent);
+  transform: translateX(calc(var(--index) * (100% + var(--gap))));
+  transition: transform 0.35s var(--ease-out);
   pointer-events: none;
-  z-index: 0;
 }
 
-.period-pill {
+.periods button {
   position: relative;
   z-index: 1;
-  min-height: 44px;
-  padding: 0 18px;
+  min-height: 42px;
+  padding: 0 6px;
   border-radius: 999px;
   font-weight: 600;
-  font-size: 15px;
-  color: var(--muted);
-  background: transparent;
-  border: 1px solid var(--border);
-  transition:
-    color 0.25s ease,
-    border-color 0.25s ease;
+  font-size: 14px;
+  color: var(--fg-secondary);
+  text-align: center;
+  white-space: nowrap;
+  transition: color 0.35s var(--ease-out);
 }
 
-.period-pill:hover {
+.periods button:hover {
   color: var(--text);
 }
 
-.period-pill[aria-pressed='true'] {
-  color: var(--accent);
-  border-color: transparent;
+.periods button[aria-pressed='true'] {
+  color: var(--accent-ink);
 }
 
 .price-value {
@@ -276,15 +250,26 @@ onBeforeUnmount(() => ro?.disconnect())
 .plan-list li {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
+  min-height: 52px;
   padding: 10px 0;
+  color: var(--fg-secondary);
+  font-size: 15px;
+}
+
+.plan-list li + li {
+  border-top: 1px solid var(--line);
+}
+
+.plan-list strong {
+  color: var(--text);
 }
 
 .plan-icon {
   width: 20px;
   height: 20px;
   flex-shrink: 0;
-  color: var(--accent);
+  color: var(--muted);
 }
 
 .addon-copy {
@@ -310,6 +295,27 @@ onBeforeUnmount(() => ro?.disconnect())
   .plan-side {
     border-left: 0;
     padding-left: 0;
+    border-top: 1px solid var(--line);
+    padding-top: 24px;
+  }
+}
+
+@media (max-width: 420px) {
+  .periods {
+    --columns: 2;
+    border-radius: 26px;
+  }
+
+  .periods-pill {
+    height: calc((100% - var(--pad) * 2 - var(--gap)) / 2);
+    transform: translate(
+      calc(var(--col) * (100% + var(--gap))),
+      calc(var(--row) * (100% + var(--gap)))
+    );
+  }
+
+  .plan-actions :deep(.base-button) {
+    flex: 100%;
   }
 }
 </style>

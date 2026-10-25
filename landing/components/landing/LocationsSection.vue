@@ -6,14 +6,14 @@ import LocationScene from './LocationScene.vue'
   <section class="landing-block" aria-labelledby="locations-title">
     <div class="content-frame">
       <DotField class="dot-field--right" />
-      <header class="block-head" data-reveal >
+      <header class="block-head" data-reveal>
         <h2 id="locations-title">
-          Две локации<br><AccentMark>Порт 10 Гбит/с</AccentMark> на каждой
+          Две локации<br /><AccentMark>Порт 10 Гбит/с</AccentMark> на каждой
         </h2>
         <p>Обе локации входят в тариф. Переключайтесь между ними в приложении</p>
       </header>
       <ul class="locations">
-        <li class="location card" data-reveal  style="--delay: 0s">
+        <li class="location card" data-reveal style="--delay: 0s">
           <LocationScene seed="ee" />
           <div class="location-meta">
             <img class="location-flag" src="/images/flags/ee.svg" width="26" height="18" alt="" />
@@ -21,7 +21,7 @@ import LocationScene from './LocationScene.vue'
             <span class="location-city">Таллин</span>
           </div>
         </li>
-        <li class="location card" data-reveal  style="--delay: 0.08s">
+        <li class="location card" data-reveal style="--delay: 0.08s">
           <LocationScene seed="gb" />
           <div class="location-meta">
             <img class="location-flag" src="/images/flags/gb.svg" width="26" height="18" alt="" />
@@ -37,38 +37,58 @@ import LocationScene from './LocationScene.vue'
 <style scoped>
 .locations {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 20px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
 }
 
 .location {
-  padding: 20px;
+  position: relative;
+  display: grid;
+  align-content: end;
+  min-height: 300px;
+  padding: 22px;
+}
+
+.location :deep(.location-scene) {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  border-radius: 0;
 }
 
 .location-meta {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-top: 16px;
 }
 
 .location-meta h3 {
+  font-size: 21px;
   font-weight: 600;
-  font-size: 17px;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
 }
 
 .location-city {
   margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted);
   font-size: 14px;
 }
 
 .location-flag {
   display: block;
-  border-radius: 3px;
+  flex: none;
+  border-radius: 5px;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
 }
 
-@media (max-width: 639px) {
+@media (max-width: 620px) {
   .locations {
     grid-template-columns: 1fr;
   }
