@@ -128,11 +128,9 @@ services:
     ports:
       - 127.0.0.1:8080:80
 
-  # ---------- TG shop bot (template, see infra/bot.md) ----------
-  # tg-shop:
-  #   image: ghcr.io/.../remnawave-tg-shop:latest
-  #   <<: [*common, *logging]
-  #   env_file: infra/tg-shop.env
+  # ---------- TG shop bot ----------
+  # См. infra/bot.md. Запуск:
+  # docker compose --env-file infra/tg-shop.env -f docker-compose.yml -f infra/tg-shop.compose.yml up -d
 
 networks:
   remnawave-network:
