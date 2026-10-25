@@ -147,22 +147,38 @@ function paintLandmark(m: CanvasRenderingContext2D, seed: string) {
   }
 }
 
-// rotating spokes of the London Eye, in mask units
-function spokesAlpha(px: number, py: number, t: number): number {
+// London Eye: 12 bright cabins riding the rim + faint spokes, in mask units
+function wheelAlpha(px: number, py: number, t: number): number {
   const dx = px - WCX
   const dy = py - WCY
   const r = Math.hypot(dx, dy)
-  if (r > WHEEL_R - 1 || r < 4) return 0
-  const ang = Math.atan2(dy, dx)
   const rot = t * WHEEL_SPEED
-  let best = 1
-  for (let k = 0; k < 8; k++) {
-    let d = ang - (rot + (k * Math.PI) / 4)
-    d = ((d + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI
-    const w = 1.6 / r
-    best = Math.min(best, Math.abs(d) / w)
+  const ang = Math.atan2(dy, dx)
+
+  // rotating capsules on the rim
+  if (Math.abs(r - WHEEL_R) < 7) {
+    let best = 1e9
+    for (let k = 0; k < 12; k++) {
+      const a = rot + (k * Math.PI) / 6
+      const cx = WCX + Math.cos(a) * WHEEL_R
+      const cy = WCY + Math.sin(a) * WHEEL_R
+      best = Math.min(best, Math.hypot(px - cx, py - cy))
+    }
+    if (best < 7) return Math.min(1.1, (7 - best) / 5)
   }
-  return Math.max(0, 1 - best)
+
+  // faint rotating spokes
+  if (r > 4 && r < WHEEL_R - 2) {
+    let best = 1
+    for (let k = 0; k < 8; k++) {
+      let d = ang - (rot + (k * Math.PI) / 4)
+      d = ((d + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI
+      const w = 3.2 / r
+      best = Math.min(best, Math.abs(d) / w)
+    }
+    return Math.max(0, 1 - best) * 0.55
+  }
+  return 0
 }
 
 // waving pennant on St. Olaf's spire, in mask units
@@ -215,13 +231,13 @@ function maskAt(col: number, row: number, t: number): number {
   const mx = ((col + 0.5) / gridCols) * MASK_W
   const my = ((row + 0.5) / gridRows) * MASK_H
   if (props.seed === 'gb') {
-    const s = spokesAlpha(mx, my, t)
+    const s = wheelAlpha(mx, my, t)
     if (s > a) a = s
   } else if (props.seed === 'ee') {
     const f = flagAlpha(mx, my, t)
     if (f > a) a = f
   }
-  return Math.min(a, 1)
+  return Math.min(a, 1.2) // capsules exceed 1 -> tinted accent in draw
 }
 
 function draw(ctx: CanvasRenderingContext2D, w: number, h: number, t: number) {
@@ -235,7 +251,11 @@ function draw(ctx: CanvasRenderingContext2D, w: number, h: number, t: number) {
       const o = maskAt(col, row, t)
       const u = Math.exp(-(((i - sweep) / 0.06) ** 2))
       const alpha = Math.max(0.05 + u * 0.06 * (1 - n * 0.4), o * (0.74 + u * 0.26))
-      ctx.fillStyle = `rgba(240, 246, 252, ${alpha.toFixed(3)})`
+      // capsules (very bright dots) render in brand accent so motion reads clearly
+      ctx.fillStyle =
+        o > 1.0
+          ? `rgba(125, 211, 252, ${Math.min(1, alpha * 1.15).toFixed(3)})`
+          : `rgba(240, 246, 252, ${alpha.toFixed(3)})`
       ctx.beginPath()
       ctx.arc(cellX + col * 7, cellY + row * 7, o > 0.55 ? 1.45 : 1 + o * 0.5, 0, Math.PI * 2)
       ctx.fill()
