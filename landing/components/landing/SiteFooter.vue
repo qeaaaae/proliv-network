@@ -58,9 +58,6 @@ const documents = [
       </div>
       <ul class="payment-marks" aria-label="Способы оплаты">
         <li><img src="/images/payments/yookassa.svg" alt="ЮKassa" width="92" height="22" loading="lazy"></li>
-        <li><img src="/images/payments/heleket.svg" alt="Heleket" width="26" height="26" loading="lazy"></li>
-        <li><img src="/images/payments/cryptobot.svg" alt="CryptoBot" width="35" height="19" loading="lazy"></li>
-        <li>Карта МИР</li>
       </ul>
     </div>
   </footer>

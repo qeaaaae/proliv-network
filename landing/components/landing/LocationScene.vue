@@ -155,8 +155,8 @@ function wheelAlpha(px: number, py: number, t: number): number {
   const rot = t * WHEEL_SPEED
   const ang = Math.atan2(dy, dx)
 
-  // rotating capsules on the rim
-  if (Math.abs(r - WHEEL_R) < 7) {
+  // rotating capsules on the rim - big enough to read as moving cabins
+  if (Math.abs(r - WHEEL_R) < 12) {
     let best = 1e9
     for (let k = 0; k < 12; k++) {
       const a = rot + (k * Math.PI) / 6
@@ -164,7 +164,7 @@ function wheelAlpha(px: number, py: number, t: number): number {
       const cy = WCY + Math.sin(a) * WHEEL_R
       best = Math.min(best, Math.hypot(px - cx, py - cy))
     }
-    if (best < 7) return Math.min(1.1, (7 - best) / 5)
+    if (best < 11) return Math.min(1.2, (11 - best) / 7)
   }
 
   // faint rotating spokes
