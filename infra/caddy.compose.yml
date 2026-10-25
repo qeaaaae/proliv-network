@@ -1,0 +1,47 @@
+# ============================================================================
+# ProlivVPN - Caddy reverse proxy (отдельный compose-проект)
+#
+# Caddy живёт вне основного docker-compose.yml, но присоединяется к сети
+# remnawave-network (external) - поэтому upstream'ы в Caddyfile - это
+# имена сервисов основного стека (landing, remnawave, ...).
+#
+# ВАЖНО: сначала должен быть поднят основной стек (он создаёт сеть
+# remnawave-network), потом caddy:
+#   docker compose --env-file proliv.env --profile site --profile subpage up -d
+#   docker compose -f infra/caddy.compose.yml up -d
+#
+# Caddyfile монтируется из ${PROLIV_DIR}/Caddyfile (default /opt/proliv) -
+# его генерит deploy-vps.sh из шаблона infra/Caddyfile.
+# На основе офиц. рецепта: docs.rw/install/reverse-proxies/caddy
+# ============================================================================
+
+name: proliv-caddy
+
+services:
+  caddy:
+    image: caddy:2
+    container_name: caddy
+    hostname: caddy
+    restart: always
+    ports:
+      - '0.0.0.0:80:80'
+      - '0.0.0.0:443:443'
+      - '0.0.0.0:443:443/udp' # HTTP/3 (QUIC)
+    networks:
+      - remnawave-network
+    volumes:
+      - ${PROLIV_DIR:-/opt/proliv}/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-ssl-data:/data
+      - caddy-config-data:/config
+
+networks:
+  remnawave-network:
+    name: remnawave-network
+    driver: bridge
+    external: true
+
+volumes:
+  caddy-ssl-data:
+    name: caddy-ssl-data
+  caddy-config-data:
+    name: caddy-config-data

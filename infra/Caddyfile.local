@@ -1,0 +1,16 @@
+# Локальный dev-прокси: remnawave требует X-Forwarded-For + X-Forwarded-Proto: https.
+# Caddy сам проставляет X-Forwarded-For; proto форсируем в https.
+
+:3443 {
+	encode
+	reverse_proxy http://remnawave:3000 {
+		header_up X-Forwarded-Proto https
+	}
+}
+
+:3444 {
+	encode
+	reverse_proxy http://remnawave-subscription-page:3010 {
+		header_up X-Forwarded-Proto https
+	}
+}

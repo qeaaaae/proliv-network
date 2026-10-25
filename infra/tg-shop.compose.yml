@@ -1,0 +1,98 @@
+# ============================================================
+# TG-shop бот: Jolymmiels/remnawave-telegram-shop 5.1.0
+# Подробности и выбор форка: infra/bot.md
+# Конфигурация:           infra/tg-shop.env (из tg-shop.env.example)
+#
+# Два способа подключения:
+#  A) Без правки основного файла:
+#       docker compose -f docker-compose.yml -f infra/tg-shop.compose.yml up -d
+#     (сеть remnawave-network ниже объявлена external - её создаёт основной файл)
+#  B) Постоянно, вставкой в docker-compose.yml:
+#       - скопировать блок services: целиком в секцию services основного файла;
+#         там можно заменить restart/ulimits/networks/logging на якоря
+#         <<: [*common, *logging] и env_file оставить как есть;
+#       - добавить tg-shop-db-data в volumes: основного файла;
+#       - блок networks: из ЭТОГО файла НЕ переносить (сеть уже объявлена).
+#
+# env_file указывается относительно КОРНЯ проекта (каталога первого -f файла),
+# поэтому путь infra/tg-shop.env работает в обоих способах.
+# ============================================================
+
+services:
+  tg-shop:
+    image: ghcr.io/jolymmiels/remnawave-telegram-shop-bot:5.1.0
+    container_name: tg-shop
+    hostname: tg-shop
+    env_file: infra/tg-shop.env
+    restart: always
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    logging:
+      driver: json-file
+      options:
+        max-size: 30m
+        max-file: 3
+    networks:
+      - remnawave-network
+    ports:
+      # HTTP-сервер бота: /healthcheck + платёжные вебхуки (YooKassa/Platega/Tribute).
+      # Прод: реверс-прокси https://bot.<domain> -> 127.0.0.1:8090
+      - 127.0.0.1:8090:8080
+    # volumes:
+      # Кастомные переводы (опционально; в образе уже есть стоковые):
+      # - ./infra/translations:/translations
+      # Картинка меню для MENU_PHOTO_PATH=/assets/menu.jpg (опционально):
+      # - ./infra/assets:/assets:ro
+    depends_on:
+      tg-shop-db:
+        condition: service_healthy
+      # Панель нужна боту при старте; сервис remnawave доступен при обоих
+      # способах подключения (вставка в основной файл или -f вместе с ним)
+      remnawave:
+        condition: service_healthy
+    # healthcheck внутри контейнера невозможен: образ scratch, нет shell/curl.
+    # Снаружи: curl http://127.0.0.1:8090/healthcheck -> {"status":"ok","db":"ok","rw":"ok"}
+
+  tg-shop-db:
+    image: postgres:17
+    container_name: tg-shop-db
+    hostname: tg-shop-db
+    shm_size: 512mb
+    env_file: infra/tg-shop.env
+    restart: always
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    logging:
+      driver: json-file
+      options:
+        max-size: 30m
+        max-file: 3
+    networks:
+      - remnawave-network
+    environment:
+      - TZ=UTC
+    ports:
+      # Наружу только на localhost - для psql/дагрипа при отладке (панельная БД на 6767)
+      - 127.0.0.1:6768:5432
+    volumes:
+      - tg-shop-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 3s
+      timeout: 10s
+      retries: 5
+
+# Нужен только для способа A (отдельный -f файл). При вставке в основной
+# docker-compose.yml этот блок удалить - сеть там уже объявлена.
+networks:
+  remnawave-network:
+    name: remnawave-network
+    external: true
+
+volumes:
+  tg-shop-db-data:
+    name: tg-shop-db-data

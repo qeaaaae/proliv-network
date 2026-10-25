@@ -1,0 +1,56 @@
+# ============================================================================
+# ProlivVPN - Remnawave NODE (xray-core) для выделенного VPS ноды (EE / UK / ...)
+#
+# Источник: https://docs.rw/install/remnawave-node
+#
+# Раскладка на сервере НОДЫ:
+#   1. Установить Docker:  curl -fsSL https://get.docker.com | sh
+#   2. mkdir -p /opt/remnanode && cd /opt/remnanode
+#   3. Скопировать этот файл как docker-compose.yml
+#   4. Заполнить NODE_PORT и SECRET_KEY (см. ниже)
+#   5. docker compose up -d && docker compose logs -f -t
+#
+# Где взять значения (оба даёт ПАНЕЛЬ):
+#   - UI: Nodes -> Management -> "+" -> заполнить форму -> кнопка
+#     "Copy docker-compose.yml" вставит готовый конфиг с ключом.
+#   - CLI: на панельном VPS `docker exec -it remnawave cli` -> "Get SECRET_KEY".
+#
+#   NODE_PORT  - внутренний API-порт ноды (соединение панель -> нода, НЕ
+#                юзерский VPN-трафик). Должен совпадать с полем "Node Port"
+#                при создании ноды в панели. В фаерволе ноды открывать
+#                ТОЛЬКО для IP панели:
+#                  ufw allow from <PANEL_IP> to any port 2222 proto tcp
+#   SECRET_KEY - ключ привязки ноды к панели. Секрет - не коммитить в git,
+#                в репо лежит только плейсхолдер.
+#
+# Юзерские инбаунды (VLESS+Reality на 443/tcp и т.п.) открываются отдельно:
+# network_mode: host - нода слушает их напрямую на хосте, порты задаются
+# в config-профиле/инбаундах панели. В UFW ноды нужен 443/tcp (+udp) и
+# NODE_PORT только с IP панели.
+# ============================================================================
+
+services:
+  remnanode:
+    container_name: remnanode
+    hostname: remnanode
+    image: remnawave/node:latest
+    restart: always
+    network_mode: host
+    environment:
+      - NODE_PORT=2222                          # TODO: Node Port из панели
+      - SECRET_KEY="PASTE_SECRET_KEY_FROM_PANEL" # TODO: SECRET_KEY из панели
+    # --- Опционально (см. docs.rw/install/remnawave-node) --------------------
+    # volumes:
+    #   # Логи xray на хост. ОБЯЗАТЕЛЬНО настроить logrotate - иначе диск
+    #   # забьётся. Конфиг logrotate есть в docs.rw (раздел Node Logs).
+    #   - /var/log/remnanode:/var/log/remnanode
+    #
+    #   # Свои geosite/geoip (.dat) - монтировать ПО ОДНОМУ файлу, не папку
+    #   # целиком (перезапишет штатные файлы xray):
+    #   - ./geo-zapret.dat:/usr/local/share/xray/geo-zapret.dat
+    #   - ./ip-zapret.dat:/usr/local/share/xray/ip-zapret.dat
+
+# Полезные команды на ноде (docs.rw/guides/useful-commands):
+#   docker exec -it remnanode cli              # rescue CLI (cold config)
+#   docker exec -it remnanode cli --dump-config
+#   docker exec remnanode xlogs                # логи xray-core
