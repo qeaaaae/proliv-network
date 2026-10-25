@@ -1,3 +1,7 @@
+<script setup lang="ts">
+import { CABINET_URL, TELEGRAM_BOT_URL } from '../../utils/links'
+</script>
+
 <template>
   <section class="hero">
     <div class="content-frame">
@@ -6,7 +10,7 @@
         <LightFlare />
         <header class="hero-header">
           <ProlivLogo />
-          <BaseButton variant="primary" size="small">Кабинет</BaseButton>
+          <BaseButton variant="primary" size="small" :href="CABINET_URL" target="_blank" rel="noopener">Кабинет</BaseButton>
         </header>
         <div class="hero-copy">
           <h1 class="hero-title" data-reveal>
@@ -16,7 +20,7 @@
             Быстрая приватная сеть для всех устройств. Российские сервисы работают без отключения
           </p>
           <div class="hero-actions" data-reveal style="--delay: 0.16s">
-            <BaseButton>Попробовать бесплатно</BaseButton>
+            <BaseButton :href="TELEGRAM_BOT_URL" target="_blank" rel="noopener">Попробовать бесплатно</BaseButton>
             <BaseButton variant="secondary" href="#pricing">Выбрать срок</BaseButton>
           </div>
         </div>

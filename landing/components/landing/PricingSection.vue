@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { animate } from 'animejs'
 import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue'
+import { TELEGRAM_BOT_URL } from '../../utils/links'
 
 interface Period {
   label: string
@@ -77,8 +78,8 @@ watch(selected, (i) => {
           </div>
 
           <div class="plan-actions">
-            <BaseButton>Подключить Network</BaseButton>
-            <BaseButton variant="secondary">Попробовать бесплатно</BaseButton>
+            <BaseButton :href="TELEGRAM_BOT_URL" target="_blank" rel="noopener">Подключить Network</BaseButton>
+            <BaseButton variant="secondary" :href="TELEGRAM_BOT_URL" target="_blank" rel="noopener">Попробовать бесплатно</BaseButton>
           </div>
         </div>
 

@@ -3,20 +3,6 @@ import { onBeforeUnmount, onMounted, useTemplateRef } from 'vue'
 
 const props = defineProps<{ seed: string }>()
 
-interface Dot {
-  x: number
-  y: number
-  r: number
-  base: number
-  phase: number
-  speed: number
-  twinkle: boolean
-  born: number
-  bornY: number
-  // for dots belonging to a rotating part (london eye): polar coords in mask space
-  wheel?: { angle: number; rad: number }
-}
-
 interface Drop {
   x: number
   off: number
@@ -28,16 +14,22 @@ interface Drop {
 const canvas = useTemplateRef<HTMLCanvasElement>('canvas')
 let raf = 0
 let observer: ResizeObserver | null = null
-let dots: Dot[] = []
 let drops: Drop[] = []
-let scaleX = 1
-let scaleY = 1
+
+// landmark alpha sampled per grid cell
+let staticAlpha: Float32Array = new Float32Array(0)
+let gridCols = 0
+let gridRows = 0
+let cellX = 0
+let cellY = 0
 
 const MASK_W = 400
 const MASK_H = 170
-// London Eye wheel center in mask coords
+// London Eye wheel center (mask coords)
 const WCX = 0.24 * MASK_W
 const WCY = MASK_H - 0.45 * MASK_H
+const WHEEL_R = 0.33 * MASK_H
+const WHEEL_SPEED = 0.14
 
 function hashSeed(seed: string): number {
   let h = 2166136261
@@ -59,6 +51,7 @@ function mulberry32(a: number): () => number {
 }
 
 // landmarks in normalized coords (x: 0..1 left->right, y: 0..1 bottom->top)
+// static parts only; moving parts are evaluated analytically per frame
 function paintLandmark(m: CanvasRenderingContext2D, seed: string) {
   const X = (v: number) => v * MASK_W
   const Y = (v: number) => MASK_H - v * MASK_H
@@ -84,18 +77,10 @@ function paintLandmark(m: CanvasRenderingContext2D, seed: string) {
   }
 
   if (seed === 'gb') {
-    // London Eye - big wheel on the left
-    m.lineWidth = MASK_H * 0.035
-    circ(0.24, 0.45, 0.33, false)
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2
-      m.lineWidth = MASK_H * 0.012
-      m.beginPath()
-      m.moveTo(X(0.24), Y(0.45))
-      m.lineTo(X(0.24) + Math.cos(a) * 0.33 * MASK_H, Y(0.45) - Math.sin(a) * 0.33 * MASK_H)
-      m.stroke()
-    }
+    // London Eye - static rim + support legs; spokes rotate per-frame
     m.lineWidth = MASK_H * 0.03
+    circ(0.24, 0.45, 0.33, false)
+    circ(0.24, 0.45, 0.02)
     m.beginPath()
     m.moveTo(X(0.19), Y(0))
     m.lineTo(X(0.24), Y(0.45))
@@ -126,11 +111,11 @@ function paintLandmark(m: CanvasRenderingContext2D, seed: string) {
       rect(i * 0.048 + 0.012, 0.14, 0.024, 0.035)
     }
 
-    // St. Olaf's tall spire
+    // St. Olaf's tall spire (flag on top waves per-frame)
     rect(0.26, 0.14, 0.05, 0.3)
     tri(0.245, 0.44, 0.285, 0.78, 0.325, 0.44)
-    rect(0.282, 0.78, 0.006, 0.06)
-    circ(0.285, 0.86, 0.012)
+    rect(0.282, 0.78, 0.006, 0.1)
+    circ(0.285, 0.885, 0.01)
 
     // Dome church towers
     rect(0.55, 0.14, 0.07, 0.22)
@@ -162,134 +147,110 @@ function paintLandmark(m: CanvasRenderingContext2D, seed: string) {
   }
 }
 
-function paintWheel(m: CanvasRenderingContext2D) {
-  const X = (v: number) => v * MASK_W
-  const Y = (v: number) => MASK_H - v * MASK_H
-  m.fillStyle = '#fff'
-  m.strokeStyle = '#fff'
-  m.lineCap = 'round'
-  m.lineWidth = MASK_H * 0.035
-  m.beginPath()
-  m.arc(X(0.24), Y(0.45), 0.33 * MASK_H, 0, Math.PI * 2)
-  m.stroke()
-  for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * Math.PI * 2
-    m.lineWidth = MASK_H * 0.012
-    m.beginPath()
-    m.moveTo(X(0.24), Y(0.45))
-    m.lineTo(X(0.24) + Math.cos(a) * 0.33 * MASK_H, Y(0.45) - Math.sin(a) * 0.33 * MASK_H)
-    m.stroke()
+// rotating spokes of the London Eye, in mask units
+function spokesAlpha(px: number, py: number, t: number): number {
+  const dx = px - WCX
+  const dy = py - WCY
+  const r = Math.hypot(dx, dy)
+  if (r > WHEEL_R - 1 || r < 4) return 0
+  const ang = Math.atan2(dy, dx)
+  const rot = t * WHEEL_SPEED
+  let best = 1
+  for (let k = 0; k < 8; k++) {
+    let d = ang - (rot + (k * Math.PI) / 4)
+    d = ((d + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI
+    const w = 1.6 / r
+    best = Math.min(best, Math.abs(d) / w)
   }
+  return Math.max(0, 1 - best)
 }
 
-function buildDots(w: number, h: number) {
+// waving pennant on St. Olaf's spire, in mask units
+function flagAlpha(px: number, py: number, t: number): number {
+  const fx = 0.285 * MASK_W
+  const fy = MASK_H - 0.945 * MASK_H
+  const LEN = 20
+  if (px < fx + 1 || px > fx + LEN) return 0
+  const u = (px - fx - 1) / LEN
+  const wave = Math.sin(t * 2.6 + u * 5.5) * 3.4 * u
+  const half = (1 - u) * 4.6 + 0.8
+  return Math.abs(py - fy - wave) < half ? 0.9 : 0
+}
+
+function buildGrid(w: number, h: number) {
+  gridCols = Math.max(1, Math.floor(w / 7))
+  gridRows = Math.max(1, Math.floor(h / 7))
+  cellX = (w - gridCols * 7) / 2 + 3.5
+  cellY = (h - gridRows * 7) / 2 + 3.5
+
   const mask = document.createElement('canvas')
-  mask.width = MASK_W
-  mask.height = MASK_H
+  mask.width = gridCols
+  mask.height = gridRows
   const m = mask.getContext('2d')
   if (!m) return
+  m.scale(gridCols / MASK_W, gridRows / MASK_H)
   paintLandmark(m, props.seed)
-  const data = m.getImageData(0, 0, MASK_W, MASK_H).data
-
-  // separate mask for the rotating wheel part (UK only)
-  let wheelData: Uint8ClampedArray | null = null
-  if (props.seed === 'gb') {
-    const wm = document.createElement('canvas')
-    wm.width = MASK_W
-    wm.height = MASK_H
-    const wc = wm.getContext('2d')
-    if (wc) {
-      paintWheel(wc)
-      wheelData = wc.getImageData(0, 0, MASK_W, MASK_H).data
-    }
+  const img = m.getImageData(0, 0, gridCols, gridRows).data
+  staticAlpha = new Float32Array(gridCols * gridRows)
+  for (let i = 0; i < staticAlpha.length; i++) {
+    staticAlpha[i] = img[i * 4 + 3] / 255
   }
 
-  const rand = mulberry32(hashSeed(`${props.seed}:dots`))
-  const step = 7
-  const sx = w / MASK_W
-  const sy = h / MASK_H
-  scaleX = sx
-  scaleY = sy
-  const list: Dot[] = []
-
-  for (let gy = 0; gy < MASK_H; gy += step) {
-    for (let gx = 0; gx < MASK_W; gx += step) {
-      const idx = (gy * MASK_W + gx) * 4 + 3
-      if (data[idx] > 100) {
-        const twinkle = rand() < 0.28
-        const dot: Dot = {
-          x: (gx + step / 2) * sx,
-          y: (gy + step / 2) * sy,
-          r: 1.5 + rand() * 0.7,
-          base: 0.45 + rand() * 0.45,
-          phase: rand() * Math.PI * 2,
-          speed: 0.6 + rand() * 1.4,
-          twinkle,
-          born: (gx / MASK_W) * 1.4 + rand() * 0.25,
-          bornY: 8 + rand() * 10,
-        }
-        if (wheelData && wheelData[idx] > 100) {
-          const mx = gx + step / 2
-          const my = gy + step / 2
-          dot.wheel = { angle: Math.atan2(my - WCY, mx - WCX), rad: Math.hypot(mx - WCX, my - WCY) }
-        }
-        list.push(dot)
-      }
-    }
-  }
-  dots = list
-
-  // rain streaks - 'proliv' brand signature
+  const rand = mulberry32(hashSeed(`${props.seed}:rain`))
   drops = []
-  for (let i = 0; i < 34; i++) {
+  for (let i = 0; i < 30; i++) {
     drops.push({
       x: rand() * w,
       off: rand() * h,
-      len: 10 + rand() * 22,
-      speed: 26 + rand() * 34,
-      a: 0.05 + rand() * 0.1,
+      len: 8 + rand() * 16,
+      speed: 22 + rand() * 30,
+      a: 0.04 + rand() * 0.07,
     })
   }
 }
 
-const FADE = 0.7
-const WHEEL_SPEED = 0.45
+function maskAt(col: number, row: number, t: number): number {
+  let a = staticAlpha[row * gridCols + col]
+  // cell position in mask units
+  const mx = ((col + 0.5) / gridCols) * MASK_W
+  const my = ((row + 0.5) / gridRows) * MASK_H
+  if (props.seed === 'gb') {
+    const s = spokesAlpha(mx, my, t)
+    if (s > a) a = s
+  } else if (props.seed === 'ee') {
+    const f = flagAlpha(mx, my, t)
+    if (f > a) a = f
+  }
+  return Math.min(a, 1)
+}
 
 function draw(ctx: CanvasRenderingContext2D, w: number, h: number, t: number) {
   ctx.clearRect(0, 0, w, h)
-  const time = t / 1000
-  const rot = time * WHEEL_SPEED
-  // slow brightness wave sweeping left to right, like ranteis
-  const wave = (x: number) => 0.72 + 0.28 * Math.sin(time * 1.1 - (x / w) * 5.2)
-  for (const d of dots) {
-    const p = Math.min(Math.max((time - d.born) / FADE, 0), 1)
-    if (p <= 0) continue
-    const ease = 1 - (1 - p) * (1 - p) * (1 - p)
-    const drift = (1 - ease) * d.bornY
-    let x = d.x
-    let y = d.y
-    if (d.wheel) {
-      const mx = WCX + Math.cos(d.wheel.angle + rot) * d.wheel.rad
-      const my = WCY + Math.sin(d.wheel.angle + rot) * d.wheel.rad
-      x = mx * scaleX
-      y = my * scaleY
+  const sweep = ((t * 0.14) % 1.6) - 0.3
+
+  for (let row = 0; row < gridRows; row++) {
+    const n = (row + 0.5) / gridRows
+    for (let col = 0; col < gridCols; col++) {
+      const i = (col + 0.5) / gridCols
+      const o = maskAt(col, row, t)
+      const u = Math.exp(-(((i - sweep) / 0.06) ** 2))
+      const alpha = Math.max(0.05 + u * 0.06 * (1 - n * 0.4), o * (0.74 + u * 0.26))
+      ctx.fillStyle = `rgba(240, 246, 252, ${alpha.toFixed(3)})`
+      ctx.beginPath()
+      ctx.arc(cellX + col * 7, cellY + row * 7, o > 0.55 ? 1.45 : 1 + o * 0.5, 0, Math.PI * 2)
+      ctx.fill()
     }
-    const a = d.twinkle ? d.base * (0.35 + 0.65 * (Math.sin(time * d.speed + d.phase) * 0.5 + 0.5)) : d.base
-    ctx.fillStyle = `rgba(226, 232, 240, ${(a * ease * wave(x)).toFixed(3)})`
-    ctx.beginPath()
-    ctx.arc(x, y + drift, d.r * (0.5 + 0.5 * ease), 0, Math.PI * 2)
-    ctx.fill()
   }
 
-  // falling rain streaks in accent tint
+  // brand rain streaks
   for (const d of drops) {
-    const y = ((d.off + time * d.speed) % (h + d.len * 2)) - d.len
+    const y = ((d.off + t * d.speed) % (h + d.len * 2)) - d.len
     const slant = d.len * 0.18
     const g = ctx.createLinearGradient(d.x, y - d.len, d.x + slant, y)
     g.addColorStop(0, 'rgba(125, 211, 252, 0)')
     g.addColorStop(1, `rgba(125, 211, 252, ${d.a})`)
     ctx.strokeStyle = g
-    ctx.lineWidth = 1.2
+    ctx.lineWidth = 1.1
     ctx.beginPath()
     ctx.moveTo(d.x, y - d.len)
     ctx.lineTo(d.x + slant, y)
@@ -311,8 +272,8 @@ onMounted(() => {
     el.width = Math.max(1, Math.round(rect.width * dpr))
     el.height = Math.max(1, Math.round(rect.height * dpr))
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    buildDots(rect.width, rect.height)
-    if (reduced) draw(ctx, rect.width, rect.height, 10000)
+    buildGrid(rect.width, rect.height)
+    if (reduced) draw(ctx, rect.width, rect.height, 20)
   }
 
   observer = new ResizeObserver(resize)
@@ -320,9 +281,9 @@ onMounted(() => {
   resize()
 
   if (!reduced) {
-    const loop = (t: number) => {
+    const loop = (ts: number) => {
       const rect = el.getBoundingClientRect()
-      draw(ctx, rect.width, rect.height, t)
+      draw(ctx, rect.width, rect.height, ts / 1000)
       raf = requestAnimationFrame(loop)
     }
     raf = requestAnimationFrame(loop)
@@ -345,6 +306,6 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 198px;
   border-radius: 16px;
-  background: linear-gradient(180deg, #0b0d10, #101318);
+  background: #08090b;
 }
 </style>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { TELEGRAM_BOT_URL } from '../../utils/links'
 </script>
 
 <template>
@@ -19,7 +20,7 @@
       <p class="cta-text" data-reveal style="--delay: 0.08s">
         Пробный период подключается через личный кабинет без привязки банковской карты
       </p>
-      <BaseButton class="cta-button" data-reveal style="--delay: 0.16s">
+      <BaseButton class="cta-button" data-reveal style="--delay: 0.16s" :href="TELEGRAM_BOT_URL" target="_blank" rel="noopener">
         Попробовать бесплатно
       </BaseButton>
     </div>

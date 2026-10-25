@@ -2,10 +2,10 @@
 </script>
 
 <template>
-  <button type="button" class="service-status">
+  <NuxtLink to="/status" class="service-status">
     <span class="status-dot" aria-hidden="true"></span>
     <span class="status-text">Всё работает</span>
-  </button>
+  </NuxtLink>
 </template>
 
 <style scoped>
@@ -18,6 +18,7 @@
   border: 1px solid var(--border);
   border-radius: 999px;
   color: var(--text);
+  text-decoration: none;
   transition: border-color 0.18s ease;
 }
 
