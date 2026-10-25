@@ -13,15 +13,31 @@ interface Dot {
   twinkle: boolean
   born: number
   bornY: number
+  // for dots belonging to a rotating part (london eye): polar coords in mask space
+  wheel?: { angle: number; rad: number }
+}
+
+interface Drop {
+  x: number
+  off: number
+  len: number
+  speed: number
+  a: number
 }
 
 const canvas = useTemplateRef<HTMLCanvasElement>('canvas')
 let raf = 0
 let observer: ResizeObserver | null = null
 let dots: Dot[] = []
+let drops: Drop[] = []
+let scaleX = 1
+let scaleY = 1
 
 const MASK_W = 400
 const MASK_H = 170
+// London Eye wheel center in mask coords
+const WCX = 0.24 * MASK_W
+const WCY = MASK_H - 0.45 * MASK_H
 
 function hashSeed(seed: string): number {
   let h = 2166136261
@@ -146,6 +162,26 @@ function paintLandmark(m: CanvasRenderingContext2D, seed: string) {
   }
 }
 
+function paintWheel(m: CanvasRenderingContext2D) {
+  const X = (v: number) => v * MASK_W
+  const Y = (v: number) => MASK_H - v * MASK_H
+  m.fillStyle = '#fff'
+  m.strokeStyle = '#fff'
+  m.lineCap = 'round'
+  m.lineWidth = MASK_H * 0.035
+  m.beginPath()
+  m.arc(X(0.24), Y(0.45), 0.33 * MASK_H, 0, Math.PI * 2)
+  m.stroke()
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2
+    m.lineWidth = MASK_H * 0.012
+    m.beginPath()
+    m.moveTo(X(0.24), Y(0.45))
+    m.lineTo(X(0.24) + Math.cos(a) * 0.33 * MASK_H, Y(0.45) - Math.sin(a) * 0.33 * MASK_H)
+    m.stroke()
+  }
+}
+
 function buildDots(w: number, h: number) {
   const mask = document.createElement('canvas')
   mask.width = MASK_W
@@ -155,17 +191,33 @@ function buildDots(w: number, h: number) {
   paintLandmark(m, props.seed)
   const data = m.getImageData(0, 0, MASK_W, MASK_H).data
 
+  // separate mask for the rotating wheel part (UK only)
+  let wheelData: Uint8ClampedArray | null = null
+  if (props.seed === 'gb') {
+    const wm = document.createElement('canvas')
+    wm.width = MASK_W
+    wm.height = MASK_H
+    const wc = wm.getContext('2d')
+    if (wc) {
+      paintWheel(wc)
+      wheelData = wc.getImageData(0, 0, MASK_W, MASK_H).data
+    }
+  }
+
   const rand = mulberry32(hashSeed(`${props.seed}:dots`))
   const step = 7
   const sx = w / MASK_W
   const sy = h / MASK_H
+  scaleX = sx
+  scaleY = sy
   const list: Dot[] = []
 
   for (let gy = 0; gy < MASK_H; gy += step) {
     for (let gx = 0; gx < MASK_W; gx += step) {
-      if (data[(gy * MASK_W + gx) * 4 + 3] > 100) {
+      const idx = (gy * MASK_W + gx) * 4 + 3
+      if (data[idx] > 100) {
         const twinkle = rand() < 0.28
-        list.push({
+        const dot: Dot = {
           x: (gx + step / 2) * sx,
           y: (gy + step / 2) * sy,
           r: 1.5 + rand() * 0.7,
@@ -175,28 +227,73 @@ function buildDots(w: number, h: number) {
           twinkle,
           born: (gx / MASK_W) * 1.4 + rand() * 0.25,
           bornY: 8 + rand() * 10,
-        })
+        }
+        if (wheelData && wheelData[idx] > 100) {
+          const mx = gx + step / 2
+          const my = gy + step / 2
+          dot.wheel = { angle: Math.atan2(my - WCY, mx - WCX), rad: Math.hypot(mx - WCX, my - WCY) }
+        }
+        list.push(dot)
       }
     }
   }
   dots = list
+
+  // rain streaks - 'proliv' brand signature
+  drops = []
+  for (let i = 0; i < 34; i++) {
+    drops.push({
+      x: rand() * w,
+      off: rand() * h,
+      len: 10 + rand() * 22,
+      speed: 26 + rand() * 34,
+      a: 0.05 + rand() * 0.1,
+    })
+  }
 }
 
 const FADE = 0.7
+const WHEEL_SPEED = 0.45
 
 function draw(ctx: CanvasRenderingContext2D, w: number, h: number, t: number) {
   ctx.clearRect(0, 0, w, h)
   const time = t / 1000
+  const rot = time * WHEEL_SPEED
+  // slow brightness wave sweeping left to right, like ranteis
+  const wave = (x: number) => 0.72 + 0.28 * Math.sin(time * 1.1 - (x / w) * 5.2)
   for (const d of dots) {
     const p = Math.min(Math.max((time - d.born) / FADE, 0), 1)
     if (p <= 0) continue
     const ease = 1 - (1 - p) * (1 - p) * (1 - p)
     const drift = (1 - ease) * d.bornY
+    let x = d.x
+    let y = d.y
+    if (d.wheel) {
+      const mx = WCX + Math.cos(d.wheel.angle + rot) * d.wheel.rad
+      const my = WCY + Math.sin(d.wheel.angle + rot) * d.wheel.rad
+      x = mx * scaleX
+      y = my * scaleY
+    }
     const a = d.twinkle ? d.base * (0.35 + 0.65 * (Math.sin(time * d.speed + d.phase) * 0.5 + 0.5)) : d.base
-    ctx.fillStyle = `rgba(226, 232, 240, ${(a * ease).toFixed(3)})`
+    ctx.fillStyle = `rgba(226, 232, 240, ${(a * ease * wave(x)).toFixed(3)})`
     ctx.beginPath()
-    ctx.arc(d.x, d.y + drift, d.r * (0.5 + 0.5 * ease), 0, Math.PI * 2)
+    ctx.arc(x, y + drift, d.r * (0.5 + 0.5 * ease), 0, Math.PI * 2)
     ctx.fill()
+  }
+
+  // falling rain streaks in accent tint
+  for (const d of drops) {
+    const y = ((d.off + time * d.speed) % (h + d.len * 2)) - d.len
+    const slant = d.len * 0.18
+    const g = ctx.createLinearGradient(d.x, y - d.len, d.x + slant, y)
+    g.addColorStop(0, 'rgba(125, 211, 252, 0)')
+    g.addColorStop(1, `rgba(125, 211, 252, ${d.a})`)
+    ctx.strokeStyle = g
+    ctx.lineWidth = 1.2
+    ctx.beginPath()
+    ctx.moveTo(d.x, y - d.len)
+    ctx.lineTo(d.x + slant, y)
+    ctx.stroke()
   }
 }
 
