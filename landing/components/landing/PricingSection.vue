@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { animate } from 'animejs'
+import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue'
 
 interface Period {
   label: string
@@ -16,6 +17,8 @@ const periods: Period[] = [
 ]
 
 const selected = ref(0)
+const priceShown = ref(periods[0].price)
+const priceProxy = { v: periods[0].price }
 
 const current = computed(() => periods[selected.value])
 const priceNote = computed(() => {
@@ -23,6 +26,43 @@ const priceNote = computed(() => {
   if (period.months === 1) return period.note
   return `${period.note} · ~${Math.round(period.price / period.months)} ₽/мес`
 })
+
+const btns = useTemplateRef<HTMLElement[]>('btns')
+const pillStyle = ref({ transform: 'translateX(0)', width: '0px', opacity: 0 })
+
+function updatePill() {
+  const btn = btns.value?.[selected.value]
+  if (!btn) return
+  pillStyle.value = {
+    transform: `translateX(${btn.offsetLeft}px)`,
+    width: `${btn.offsetWidth}px`,
+    opacity: 1,
+  }
+}
+
+watch(selected, (i) => {
+  animate(priceProxy, {
+    v: periods[i].price,
+    duration: 550,
+    ease: 'outExpo',
+    onUpdate: () => {
+      priceShown.value = Math.round(priceProxy.v)
+    },
+  })
+  updatePill()
+})
+
+let ro: ResizeObserver | null = null
+onMounted(() => {
+  updatePill()
+  const wrap = btns.value?.[0]?.parentElement
+  if (wrap) {
+    ro = new ResizeObserver(updatePill)
+    ro.observe(wrap)
+  }
+})
+
+onBeforeUnmount(() => ro?.disconnect())
 </script>
 
 <template>
@@ -41,9 +81,11 @@ const priceNote = computed(() => {
           <p class="plan-name">Proliv Network</p>
 
           <div class="periods" role="group" aria-label="Срок подписки">
+            <span class="periods-pill" :style="pillStyle" aria-hidden="true" />
             <button
               v-for="(period, index) in periods"
               :key="period.label"
+              ref="btns"
               type="button"
               class="period-pill"
               :aria-pressed="selected === index"
@@ -54,7 +96,7 @@ const priceNote = computed(() => {
           </div>
 
           <div class="price" aria-live="polite">
-            <p class="price-value numeric">{{ current.price }} ₽</p>
+            <p class="price-value numeric">{{ priceShown }} ₽</p>
             <p class="price-note">{{ priceNote }}</p>
           </div>
 
@@ -145,13 +187,32 @@ const priceNote = computed(() => {
 }
 
 .periods {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   margin: 22px 0 30px;
 }
 
+.periods-pill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  border: 1px solid rgba(125, 211, 252, 0.35);
+  transition:
+    transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+    width 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.2s ease;
+  pointer-events: none;
+  z-index: 0;
+}
+
 .period-pill {
+  position: relative;
+  z-index: 1;
   min-height: 44px;
   padding: 0 18px;
   border-radius: 999px;
@@ -161,20 +222,17 @@ const priceNote = computed(() => {
   background: transparent;
   border: 1px solid var(--border);
   transition:
-    color 0.18s ease,
-    background-color 0.18s ease,
-    border-color 0.18s ease;
+    color 0.25s ease,
+    border-color 0.25s ease;
 }
 
 .period-pill:hover {
   color: var(--text);
-  border-color: var(--border-strong);
 }
 
 .period-pill[aria-pressed='true'] {
-  background: var(--accent-soft);
   color: var(--accent);
-  border-color: rgba(125, 211, 252, 0.35);
+  border-color: transparent;
 }
 
 .price-value {
@@ -183,6 +241,7 @@ const priceNote = computed(() => {
   font-size: clamp(40px, 6vw, 64px);
   line-height: 1.05;
   letter-spacing: -0.01em;
+  color: var(--accent);
 }
 
 .price-note {

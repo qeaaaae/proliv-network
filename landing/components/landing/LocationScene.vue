@@ -11,6 +11,8 @@ interface Dot {
   phase: number
   speed: number
   twinkle: boolean
+  born: number
+  bornY: number
 }
 
 const canvas = useTemplateRef<HTMLCanvasElement>('canvas')
@@ -171,6 +173,8 @@ function buildDots(w: number, h: number) {
           phase: rand() * Math.PI * 2,
           speed: 0.6 + rand() * 1.4,
           twinkle,
+          born: (gx / MASK_W) * 1.4 + rand() * 0.25,
+          bornY: 8 + rand() * 10,
         })
       }
     }
@@ -178,14 +182,20 @@ function buildDots(w: number, h: number) {
   dots = list
 }
 
+const FADE = 0.7
+
 function draw(ctx: CanvasRenderingContext2D, w: number, h: number, t: number) {
   ctx.clearRect(0, 0, w, h)
   const time = t / 1000
   for (const d of dots) {
+    const p = Math.min(Math.max((time - d.born) / FADE, 0), 1)
+    if (p <= 0) continue
+    const ease = 1 - (1 - p) * (1 - p) * (1 - p)
+    const drift = (1 - ease) * d.bornY
     const a = d.twinkle ? d.base * (0.35 + 0.65 * (Math.sin(time * d.speed + d.phase) * 0.5 + 0.5)) : d.base
-    ctx.fillStyle = `rgba(226, 232, 240, ${a.toFixed(3)})`
+    ctx.fillStyle = `rgba(226, 232, 240, ${(a * ease).toFixed(3)})`
     ctx.beginPath()
-    ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2)
+    ctx.arc(d.x, d.y + drift, d.r * (0.5 + 0.5 * ease), 0, Math.PI * 2)
     ctx.fill()
   }
 }
@@ -205,7 +215,7 @@ onMounted(() => {
     el.height = Math.max(1, Math.round(rect.height * dpr))
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     buildDots(rect.width, rect.height)
-    if (reduced) draw(ctx, rect.width, rect.height, 0)
+    if (reduced) draw(ctx, rect.width, rect.height, 10000)
   }
 
   observer = new ResizeObserver(resize)
