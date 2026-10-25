@@ -4,21 +4,12 @@
 
 <style scoped>
 .accent-mark {
-  position: relative;
   display: inline-block;
-  color: var(--accent);
+  padding: 0.02em 0.24em 0.08em;
+  margin: 0 0.04em;
+  background: #26292f;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 0.32em;
   white-space: nowrap;
-}
-
-.accent-mark::after {
-  content: '';
-  position: absolute;
-  left: -2%;
-  right: -2%;
-  bottom: -0.08em;
-  height: 0.12em;
-  border-radius: 999px;
-  background: linear-gradient(90deg, transparent, var(--accent) 18%, var(--accent) 82%, transparent);
-  opacity: 0.55;
 }
 </style>

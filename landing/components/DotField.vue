@@ -14,7 +14,7 @@ function draw(ctx: CanvasRenderingContext2D, w: number, h: number, t: number) {
     for (let x = GAP / 2; x < w; x += GAP) {
       const wave = Math.sin(y * 0.018 + t * 0.0011 + x * 0.05) * 0.5 + 0.5
       const alpha = 0.08 + wave * 0.22
-      ctx.fillStyle = `rgba(125, 211, 252, ${alpha.toFixed(3)})`
+      ctx.fillStyle = `rgba(190, 200, 212, ${alpha.toFixed(3)})`
       ctx.beginPath()
       ctx.arc(x, y, R, 0, Math.PI * 2)
       ctx.fill()

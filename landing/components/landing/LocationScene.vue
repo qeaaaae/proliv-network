@@ -3,47 +3,23 @@ import { onBeforeUnmount, onMounted, useTemplateRef } from 'vue'
 
 const props = defineProps<{ seed: string }>()
 
-interface Building {
-  x: number
-  w: number
-  h: number
-  antenna: number
-}
-
-interface Beacon {
+interface Dot {
   x: number
   y: number
+  r: number
+  base: number
   phase: number
-}
-
-interface LitWindow {
-  x: number
-  y: number
-  a: number
-  dim: boolean
-}
-
-interface Drop {
-  x: number
-  y: number
-  len: number
   speed: number
-  alpha: number
-}
-
-interface Scene {
-  back: Building[]
-  front: Building[]
-  windows: LitWindow[]
-  beacons: Beacon[]
-  glowX: number
+  twinkle: boolean
 }
 
 const canvas = useTemplateRef<HTMLCanvasElement>('canvas')
 let raf = 0
 let observer: ResizeObserver | null = null
-let scene: Scene | null = null
-let drops: Drop[] = []
+let dots: Dot[] = []
+
+const MASK_W = 400
+const MASK_H = 170
 
 function hashSeed(seed: string): number {
   let h = 2166136261
@@ -64,115 +40,153 @@ function mulberry32(a: number): () => number {
   }
 }
 
-function makeScene(w: number, h: number): Scene {
-  const rand = mulberry32(hashSeed(props.seed))
-  const back: Building[] = []
-  const front: Building[] = []
-  const windows: LitWindow[] = []
-  const beacons: Beacon[] = []
+// landmarks in normalized coords (x: 0..1 left->right, y: 0..1 bottom->top)
+function paintLandmark(m: CanvasRenderingContext2D, seed: string) {
+  const X = (v: number) => v * MASK_W
+  const Y = (v: number) => MASK_H - v * MASK_H
 
-  let x = -12 - rand() * 24
-  while (x < w + 12) {
-    const bw = 20 + rand() * 28
-    back.push({ x, w: bw, h: h * (0.16 + rand() * 0.3), antenna: 0 })
-    x += bw + 5 + rand() * 12
+  m.fillStyle = '#fff'
+  m.strokeStyle = '#fff'
+  m.lineCap = 'round'
+
+  const rect = (x: number, y: number, w: number, h: number) =>
+    m.fillRect(X(x), Y(y + h), X(x + w) - X(x), Y(y) - Y(y + h))
+  const tri = (x1: number, y1: number, x2: number, y2: number, x3: number, y3: number) => {
+    m.beginPath()
+    m.moveTo(X(x1), Y(y1))
+    m.lineTo(X(x2), Y(y2))
+    m.lineTo(X(x3), Y(y3))
+    m.closePath()
+    m.fill()
+  }
+  const circ = (x: number, y: number, r: number, fill = true) => {
+    m.beginPath()
+    m.arc(X(x), Y(y), r * MASK_H, 0, Math.PI * 2)
+    fill ? m.fill() : m.stroke()
   }
 
-  x = -8 - rand() * 16
-  while (x < w + 10) {
-    const bw = 16 + rand() * 34
-    const bh = h * (0.3 + rand() * 0.42)
-    const antenna = rand() < 0.22 ? 5 + rand() * 9 : 0
-    front.push({ x, w: bw, h: bh, antenna })
-    if (antenna > 6 && rand() < 0.6) {
-      beacons.push({ x: x + bw / 2, y: h - bh - antenna - 1.5, phase: rand() * Math.PI * 2 })
+  if (seed === 'gb') {
+    // London Eye - big wheel on the left
+    m.lineWidth = MASK_H * 0.035
+    circ(0.24, 0.45, 0.33, false)
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2
+      m.lineWidth = MASK_H * 0.012
+      m.beginPath()
+      m.moveTo(X(0.24), Y(0.45))
+      m.lineTo(X(0.24) + Math.cos(a) * 0.33 * MASK_H, Y(0.45) - Math.sin(a) * 0.33 * MASK_H)
+      m.stroke()
     }
-    const cols = Math.floor((bw - 8) / 9)
-    const rows = Math.floor((bh - 10) / 11)
-    for (let c = 0; c < cols; c++) {
-      for (let r = 0; r < rows; r++) {
-        const lit = rand()
-        if (lit < 0.08) {
-          windows.push({ x: x + 5 + c * 9, y: h - bh + 6 + r * 11, a: 0.28 + rand() * 0.5, dim: false })
-        } else if (lit < 0.2) {
-          windows.push({ x: x + 5 + c * 9, y: h - bh + 6 + r * 11, a: 0.04 + rand() * 0.06, dim: true })
-        }
-      }
-    }
-    x += bw + 3 + rand() * 9
-  }
+    m.lineWidth = MASK_H * 0.03
+    m.beginPath()
+    m.moveTo(X(0.19), Y(0))
+    m.lineTo(X(0.24), Y(0.45))
+    m.lineTo(X(0.29), Y(0))
+    m.stroke()
 
-  return { back, front, windows, beacons, glowX: 0.3 + rand() * 0.4 }
+    // Elizabeth Tower
+    rect(0.56, 0, 0.075, 0.62)
+    tri(0.54, 0.62, 0.5975, 0.82, 0.655, 0.62)
+    rect(0.594, 0.82, 0.007, 0.05)
+    circ(0.5975, 0.5, 0.045)
+
+    // Gherkin
+    m.beginPath()
+    m.ellipse(X(0.78), Y(0.34), MASK_W * 0.055, MASK_H * 0.34, 0, 0, Math.PI * 2)
+    m.fill()
+
+    // low skyline
+    rect(0.44, 0, 0.09, 0.3)
+    rect(0.66, 0, 0.08, 0.26)
+    rect(0.87, 0, 0.1, 0.32)
+    rect(0.05, 0, 0.12, 0.22)
+    rect(0, 0, 1, 0.045)
+  } else if (seed === 'ee') {
+    // Tallinn old town: town wall + church spires
+    rect(0, 0, 1, 0.14)
+    for (let i = 0; i < 22; i++) {
+      rect(i * 0.048 + 0.012, 0.14, 0.024, 0.035)
+    }
+
+    // St. Olaf's tall spire
+    rect(0.26, 0.14, 0.05, 0.3)
+    tri(0.245, 0.44, 0.285, 0.78, 0.325, 0.44)
+    rect(0.282, 0.78, 0.006, 0.06)
+    circ(0.285, 0.86, 0.012)
+
+    // Dome church towers
+    rect(0.55, 0.14, 0.07, 0.22)
+    m.beginPath()
+    m.arc(X(0.585), Y(0.36), 0.035 * MASK_W * 0.55, Math.PI, 0)
+    m.fill()
+    tri(0.545, 0.365, 0.585, 0.56, 0.625, 0.365)
+
+    rect(0.72, 0.14, 0.055, 0.28)
+    tri(0.705, 0.42, 0.7475, 0.62, 0.79, 0.42)
+    rect(0.7445, 0.62, 0.006, 0.04)
+
+    // houses
+    tri(0.1, 0.14, 0.16, 0.26, 0.22, 0.14)
+    tri(0.4, 0.14, 0.46, 0.3, 0.52, 0.14)
+    tri(0.84, 0.14, 0.9, 0.25, 0.96, 0.14)
+  } else {
+    // generic skyline
+    const rand = mulberry32(hashSeed(seed))
+    let x = 0.02
+    while (x < 0.98) {
+      const w = 0.05 + rand() * 0.09
+      const h = 0.15 + rand() * 0.4
+      rect(x, 0, w, h)
+      if (rand() < 0.3) rect(x + w / 2 - 0.004, h, 0.008, 0.06)
+      x += w + 0.02 + rand() * 0.05
+    }
+    rect(0, 0, 1, 0.045)
+  }
 }
 
-function makeDrops(): Drop[] {
-  const rand = mulberry32(hashSeed(`${props.seed}:rain`))
-  const list: Drop[] = []
-  for (let i = 0; i < 48; i++) {
-    list.push({
-      x: rand(),
-      y: rand(),
-      len: 0.045 + rand() * 0.05,
-      speed: 0.1 + rand() * 0.14,
-      alpha: 0.05 + rand() * 0.13,
-    })
+function buildDots(w: number, h: number) {
+  const mask = document.createElement('canvas')
+  mask.width = MASK_W
+  mask.height = MASK_H
+  const m = mask.getContext('2d')
+  if (!m) return
+  paintLandmark(m, props.seed)
+  const data = m.getImageData(0, 0, MASK_W, MASK_H).data
+
+  const rand = mulberry32(hashSeed(`${props.seed}:dots`))
+  const step = 7
+  const sx = w / MASK_W
+  const sy = h / MASK_H
+  const list: Dot[] = []
+
+  for (let gy = 0; gy < MASK_H; gy += step) {
+    for (let gx = 0; gx < MASK_W; gx += step) {
+      if (data[(gy * MASK_W + gx) * 4 + 3] > 100) {
+        const twinkle = rand() < 0.28
+        list.push({
+          x: (gx + step / 2) * sx,
+          y: (gy + step / 2) * sy,
+          r: 1.5 + rand() * 0.7,
+          base: 0.45 + rand() * 0.45,
+          phase: rand() * Math.PI * 2,
+          speed: 0.6 + rand() * 1.4,
+          twinkle,
+        })
+      }
+    }
   }
-  return list
+  dots = list
 }
 
 function draw(ctx: CanvasRenderingContext2D, w: number, h: number, t: number) {
   ctx.clearRect(0, 0, w, h)
-
-  const sky = ctx.createLinearGradient(0, 0, 0, h)
-  sky.addColorStop(0, '#111418')
-  sky.addColorStop(1, '#15181d')
-  ctx.fillStyle = sky
-  ctx.fillRect(0, 0, w, h)
-
-  if (!scene) return
   const time = t / 1000
-
-  const glow = ctx.createRadialGradient(w * scene.glowX, h * 1.05, 0, w * scene.glowX, h * 1.05, h * 0.95)
-  glow.addColorStop(0, 'rgba(125, 211, 252, 0.11)')
-  glow.addColorStop(1, 'rgba(125, 211, 252, 0)')
-  ctx.fillStyle = glow
-  ctx.fillRect(0, 0, w, h)
-
-  ctx.fillStyle = '#181e27'
-  for (const b of scene.back) ctx.fillRect(b.x, h - b.h, b.w, b.h)
-
-  ctx.fillStyle = '#202834'
-  for (const b of scene.front) {
-    ctx.fillRect(b.x, h - b.h, b.w, b.h)
-    if (b.antenna > 0) ctx.fillRect(b.x + b.w / 2 - 0.5, h - b.h - b.antenna, 1, b.antenna)
-  }
-
-  for (const win of scene.windows) {
-    ctx.fillStyle = win.dim
-      ? `rgba(206, 222, 238, ${win.a.toFixed(3)})`
-      : `rgba(125, 211, 252, ${win.a.toFixed(3)})`
-    ctx.fillRect(win.x, win.y, 3, 4)
-  }
-
-  for (const bc of scene.beacons) {
-    const a = 0.3 + 0.5 * (Math.sin(time * 1.6 + bc.phase) * 0.5 + 0.5)
-    ctx.fillStyle = `rgba(125, 211, 252, ${a.toFixed(3)})`
+  for (const d of dots) {
+    const a = d.twinkle ? d.base * (0.35 + 0.65 * (Math.sin(time * d.speed + d.phase) * 0.5 + 0.5)) : d.base
+    ctx.fillStyle = `rgba(226, 232, 240, ${a.toFixed(3)})`
     ctx.beginPath()
-    ctx.arc(bc.x, bc.y, 1.3, 0, Math.PI * 2)
+    ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2)
     ctx.fill()
-  }
-
-  ctx.lineWidth = 1
-  ctx.lineCap = 'round'
-  for (const d of drops) {
-    const py = ((d.y + time * d.speed) % 1) * h
-    const px = d.x * w - py * 0.1
-    const len = d.len * h
-    ctx.strokeStyle = `rgba(168, 208, 238, ${d.alpha.toFixed(3)})`
-    ctx.beginPath()
-    ctx.moveTo(px, py)
-    ctx.lineTo(px + len * 0.1, py + len)
-    ctx.stroke()
   }
 }
 
@@ -183,7 +197,6 @@ onMounted(() => {
   if (!ctx) return
 
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches
-  drops = makeDrops()
 
   const resize = () => {
     const rect = el.getBoundingClientRect()
@@ -191,7 +204,7 @@ onMounted(() => {
     el.width = Math.max(1, Math.round(rect.width * dpr))
     el.height = Math.max(1, Math.round(rect.height * dpr))
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    scene = makeScene(rect.width, rect.height)
+    buildDots(rect.width, rect.height)
     if (reduced) draw(ctx, rect.width, rect.height, 0)
   }
 
@@ -225,6 +238,6 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 198px;
   border-radius: 16px;
-  background: linear-gradient(180deg, #111418, #15181d);
+  background: linear-gradient(180deg, #0b0d10, #101318);
 }
 </style>

@@ -52,7 +52,7 @@
   max-width: 700px;
   font-family: var(--font-display);
   font-size: clamp(30px, 5vw, 56px);
-  font-weight: 600;
+  font-weight: 700;
   line-height: 1.12;
   letter-spacing: -0.01em;
   text-wrap: balance;

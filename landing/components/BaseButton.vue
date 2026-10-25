@@ -29,7 +29,7 @@ withDefaults(
   gap: 8px;
   min-height: 52px;
   padding: 0 28px;
-  border-radius: var(--radius-control);
+  border-radius: 999px;
   font-weight: 600;
   font-size: 16px;
   white-space: nowrap;
@@ -45,31 +45,29 @@ withDefaults(
 }
 
 .base-button--primary {
-  background: var(--accent);
-  color: var(--accent-ink);
-  box-shadow: 0 0 0 0 rgba(125, 211, 252, 0);
+  background: #f5f6f8;
+  color: #0b0c0e;
 }
 
 .base-button--primary:hover {
-  background: #a5e2fd;
-  box-shadow: 0 8px 32px -8px rgba(125, 211, 252, 0.45);
+  background: #ffffff;
+  box-shadow: 0 8px 32px -8px rgba(255, 255, 255, 0.35);
 }
 
 .base-button--secondary {
-  background: transparent;
+  background: #23262b;
   color: var(--text);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border);
 }
 
 .base-button--secondary:hover {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(255, 255, 255, 0.2);
+  background: #2c3036;
+  border-color: var(--border-strong);
 }
 
 .base-button--small {
   min-height: 40px;
   padding: 0 18px;
   font-size: 14px;
-  border-radius: 12px;
 }
 </style>
