@@ -6,14 +6,14 @@ import LocationScene from './LocationScene.vue'
   <section class="landing-block" aria-labelledby="locations-title">
     <div class="content-frame">
       <DotField class="dot-field--right" />
-      <header class="block-head" data-reveal data-shown>
+      <header class="block-head" data-reveal >
         <h2 id="locations-title">
           Две локации<br><AccentMark>Порт 10 Гбит/с</AccentMark> на каждой
         </h2>
         <p>Обе локации входят в тариф. Переключайтесь между ними в приложении</p>
       </header>
       <ul class="locations">
-        <li class="location card" data-reveal data-shown style="--delay: 0s">
+        <li class="location card" data-reveal  style="--delay: 0s">
           <LocationScene seed="ee" />
           <div class="location-meta">
             <img class="location-flag" src="/images/flags/ee.svg" width="26" height="18" alt="" />
@@ -21,7 +21,7 @@ import LocationScene from './LocationScene.vue'
             <span class="location-city">Таллин</span>
           </div>
         </li>
-        <li class="location card" data-reveal data-shown style="--delay: 0.08s">
+        <li class="location card" data-reveal  style="--delay: 0.08s">
           <LocationScene seed="gb" />
           <div class="location-meta">
             <img class="location-flag" src="/images/flags/gb.svg" width="26" height="18" alt="" />

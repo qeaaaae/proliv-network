@@ -9,19 +9,19 @@
       </header>
 
       <ul class="routes card">
-        <li class="route" data-reveal data-shown style="--delay: 0s">
+        <li class="route" data-reveal  style="--delay: 0s">
           <span class="route-service">YouTube</span>
           <span class="route-leader" aria-hidden="true" />
           <span class="route-path">через Европу</span>
           <p class="route-note">Видео идёт через выбранную европейскую локацию без рекламы</p>
         </li>
-        <li class="route" data-reveal data-shown style="--delay: 0.1s">
+        <li class="route" data-reveal  style="--delay: 0.1s">
           <span class="route-service">Российские сайты</span>
           <span class="route-leader" aria-hidden="true" />
           <span class="route-path">напрямую</span>
           <p class="route-note">Network остаётся включённым для остальных сервисов</p>
         </li>
-        <li class="route" data-reveal data-shown style="--delay: 0.2s">
+        <li class="route" data-reveal  style="--delay: 0.2s">
           <span class="route-service">Нейросети</span>
           <span class="route-leader" aria-hidden="true" />
           <span class="route-path">через Европу</span>

@@ -95,6 +95,7 @@ services:
       - APP_PORT=3010
       - REMNAWAVE_PANEL_URL=http://remnawave:3000
       - REMNAWAVE_API_TOKEN=${SUBPAGE_API_TOKEN:-change_me}
+      - TRUST_PROXY=1
     ports:
       - 127.0.0.1:3010:3010
     depends_on:

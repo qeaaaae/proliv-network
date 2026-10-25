@@ -36,7 +36,7 @@ const priceNote = computed(() => {
         </h2>
       </header>
 
-      <div class="plan card" data-reveal data-shown>
+      <div class="plan card" data-reveal >
         <div class="plan-main">
           <p class="plan-name">Proliv Network</p>
 

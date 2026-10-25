@@ -9,13 +9,13 @@
           <BaseButton variant="primary" size="small">Кабинет</BaseButton>
         </header>
         <div class="hero-copy">
-          <h1 class="hero-title" data-reveal data-shown>
+          <h1 class="hero-title" data-reveal>
             Proliv Network — быстро и <AccentMark>без сложностей</AccentMark>
           </h1>
-          <p class="hero-lead" data-reveal data-shown style="--delay: 0.08s">
+          <p class="hero-lead" data-reveal style="--delay: 0.08s">
             Быстрая приватная сеть для всех устройств. Российские сервисы работают без отключения
           </p>
-          <div class="hero-actions" data-reveal data-shown style="--delay: 0.16s">
+          <div class="hero-actions" data-reveal style="--delay: 0.16s">
             <BaseButton>Попробовать бесплатно</BaseButton>
             <BaseButton variant="secondary" href="#pricing">Выбрать срок</BaseButton>
           </div>

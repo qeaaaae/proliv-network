@@ -5,13 +5,13 @@
   <section class="final-cta" aria-labelledby="final-cta-title">
     <LightFlare />
     <div class="cta-inner">
-      <h2 id="final-cta-title" class="cta-title" data-reveal data-shown>
+      <h2 id="final-cta-title" class="cta-title" data-reveal >
         Попробуйте Network <AccentMark>3 дня бесплатно</AccentMark>
       </h2>
-      <p class="cta-text" data-reveal data-shown style="--delay: 0.08s">
+      <p class="cta-text" data-reveal  style="--delay: 0.08s">
         Пробный период подключается через личный кабинет без привязки банковской карты
       </p>
-      <BaseButton class="cta-button" data-reveal data-shown style="--delay: 0.16s">
+      <BaseButton class="cta-button" data-reveal  style="--delay: 0.16s">
         Попробовать бесплатно
       </BaseButton>
     </div>
