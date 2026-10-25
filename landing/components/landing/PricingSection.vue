@@ -46,6 +46,7 @@ watch(selected, (i) => {
       <DotField class="dot-field--right" />
 
       <header class="block-head">
+        <p class="block-kicker">03 — Тариф</p>
         <h2 id="pricing-title">
           Один тариф<br /><AccentMark>Меняется только срок</AccentMark>
         </h2>

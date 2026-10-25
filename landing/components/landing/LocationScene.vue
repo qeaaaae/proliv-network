@@ -304,8 +304,6 @@ onBeforeUnmount(() => {
 .location-scene {
   display: block;
   width: 100%;
-  height: 198px;
-  border-radius: 16px;
-  background: #08090b;
+  height: 100%;
 }
 </style>

@@ -7,6 +7,7 @@ import LocationScene from './LocationScene.vue'
     <div class="content-frame">
       <DotField class="dot-field--right" />
       <header class="block-head" data-reveal>
+        <p class="block-kicker">01 — Локации</p>
         <h2 id="locations-title">
           Две локации<br /><AccentMark>Порт 10 Гбит/с</AccentMark> на каждой
         </h2>
@@ -30,6 +31,15 @@ import LocationScene from './LocationScene.vue'
           </div>
         </li>
       </ul>
+      <NuxtLink to="/status" class="status-strip" data-reveal>
+        <span class="strip-dot" aria-hidden="true" />
+        <span class="strip-text">онлайн 2 из 2 узлов</span>
+        <span class="strip-sep" aria-hidden="true">·</span>
+        <span class="strip-muted">канал 10 Гбит/с на каждом</span>
+        <span class="strip-sep" aria-hidden="true">·</span>
+        <span class="strip-muted">обновлено только что</span>
+        <span class="strip-more">Статус →</span>
+      </NuxtLink>
     </div>
   </section>
 </template>
@@ -47,13 +57,13 @@ import LocationScene from './LocationScene.vue'
   align-content: end;
   min-height: 300px;
   padding: 22px;
+  overflow: hidden;
 }
 
 .location :deep(.location-scene) {
   position: absolute;
-  inset: 0;
-  height: 100%;
-  border-radius: 0;
+  inset: 0 0 auto;
+  height: 74%;
 }
 
 .location-meta {
@@ -88,9 +98,58 @@ import LocationScene from './LocationScene.vue'
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
 }
 
+.status-strip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 12px 18px;
+  font-family: ui-monospace, 'Cascadia Mono', Menlo, monospace;
+  font-size: 13px;
+  color: var(--fg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.02);
+  transition:
+    border-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.status-strip:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.strip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #3ddc84;
+  box-shadow: 0 0 8px rgba(61, 220, 132, 0.7);
+}
+
+.strip-text {
+  color: var(--text);
+}
+
+.strip-sep,
+.strip-muted {
+  color: var(--muted);
+}
+
+.strip-more {
+  margin-left: 6px;
+  color: var(--accent);
+}
+
 @media (max-width: 620px) {
   .locations {
     grid-template-columns: 1fr;
+  }
+
+  .status-strip {
+    flex-wrap: wrap;
   }
 }
 </style>

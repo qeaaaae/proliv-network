@@ -143,6 +143,27 @@ section[id] {
   text-align: center;
 }
 
+.block-kicker {
+  margin-bottom: 18px;
+  color: var(--muted);
+  font-family: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Menlo, monospace;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.block-kicker::after {
+  content: '';
+  display: inline-block;
+  width: 42px;
+  height: 1px;
+  margin-left: 14px;
+  vertical-align: middle;
+  background: var(--accent);
+  opacity: 0.6;
+}
+
 .block-head h2 {
   font-family: var(--font-display);
   font-size: clamp(26px, 4vw, 44px);
@@ -165,7 +186,7 @@ section[id] {
   bottom: 0;
   width: 63px;
   pointer-events: none;
-  opacity: 0.55;
+  opacity: 0.9;
 }
 
 .dot-field--left {

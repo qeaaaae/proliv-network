@@ -56,9 +56,10 @@ const documents = [
         <span>ИП — реквизиты появятся после регистрации</span>
         <span>© 2026 Proliv Network</span>
       </div>
-      <ul class="payment-marks">
-        <li>ЮKassa</li>
-        <li>CryptoBot</li>
+      <ul class="payment-marks" aria-label="Способы оплаты">
+        <li><img src="/images/payments/yookassa.svg" alt="ЮKassa" width="92" height="22" loading="lazy"></li>
+        <li><img src="/images/payments/heleket.svg" alt="Heleket" width="26" height="26" loading="lazy"></li>
+        <li><img src="/images/payments/cryptobot.svg" alt="CryptoBot" width="35" height="19" loading="lazy"></li>
         <li>Карта МИР</li>
       </ul>
     </div>
@@ -131,15 +132,25 @@ const documents = [
 .payment-marks {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 
 .payment-marks li {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
   padding: 6px 14px;
   border: 1px solid var(--border-strong);
   border-radius: 999px;
   color: var(--muted);
   font-size: 13px;
+}
+
+.payment-marks img {
+  display: block;
+  filter: grayscale(1) brightness(1.6);
+  opacity: 0.85;
 }
 
 @media (max-width: 720px) {

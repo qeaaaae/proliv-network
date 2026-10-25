@@ -4,6 +4,7 @@
       <DotField class="dot-field--left" />
 
       <header class="block-head" data-reveal>
+        <p class="block-kicker">02 — Маршруты</p>
         <h2 id="routes-title">Как Network <AccentMark>направляет трафик</AccentMark></h2>
         <p>Маршрут выбирается сам. Менять настройки не нужно.</p>
       </header>

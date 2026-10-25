@@ -26,6 +26,12 @@ export default defineNuxtConfig({
         },
       ],
       link: [{ rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
+      script: [
+        {
+          innerHTML:
+            "if(matchMedia('(prefers-reduced-motion: no-preference)').matches&&'IntersectionObserver'in window){const r=document.documentElement;r.classList.add('motion');setTimeout(()=>{if(!('reveal'in r.dataset))r.classList.remove('motion')},4000)}",
+        },
+      ],
     },
   },
   css: [
