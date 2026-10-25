@@ -11,22 +11,28 @@
 
       <ul class="routes card">
         <li class="route" data-reveal style="--delay: 0s">
-          <span class="route-service">YouTube</span>
+          <div class="route-service">
+            <span class="route-name">YouTube</span>
+            <p class="route-note">Видео идёт через выбранную европейскую локацию без рекламы</p>
+          </div>
           <span class="route-leader" aria-hidden="true" />
           <span class="route-path">через Европу</span>
-          <p class="route-note">Видео идёт через выбранную европейскую локацию без рекламы</p>
         </li>
         <li class="route" data-reveal style="--delay: 0.1s">
-          <span class="route-service">Российские сайты</span>
+          <div class="route-service">
+            <span class="route-name">Российские сайты</span>
+            <p class="route-note">Network остаётся включённым для остальных сервисов</p>
+          </div>
           <span class="route-leader" aria-hidden="true" />
           <span class="route-path">напрямую</span>
-          <p class="route-note">Network остаётся включённым для остальных сервисов</p>
         </li>
         <li class="route" data-reveal style="--delay: 0.2s">
-          <span class="route-service">Нейросети</span>
+          <div class="route-service">
+            <span class="route-name">Нейросети</span>
+            <p class="route-note">Соединение идёт через выбранную европейскую локацию</p>
+          </div>
           <span class="route-leader" aria-hidden="true" />
           <span class="route-path">через Европу</span>
-          <p class="route-note">Соединение идёт через выбранную европейскую локацию</p>
         </li>
       </ul>
     </div>
@@ -40,28 +46,42 @@
 
 .route {
   display: grid;
-  grid-template-columns: auto minmax(40px, 1fr) auto;
+  grid-template-columns: minmax(0, 1.15fr) minmax(80px, 0.7fr) auto;
   align-items: center;
-  gap: 12px clamp(16px, 2vw, 28px);
-  padding-block: clamp(28px, 3.4vw, 44px);
+  gap: 14px clamp(16px, 2.6vw, 36px);
+  padding-block: clamp(26px, 3vw, 40px);
 }
 
 .route + .route {
   border-top: 1px solid var(--line);
 }
 
-.route-service,
+.route-name,
 .route-path {
   font-family: var(--font-display);
   font-weight: 600;
-  font-size: clamp(24px, 3.4vw, 48px);
+  font-size: clamp(22px, 3vw, 40px);
   line-height: 1;
   letter-spacing: -0.04em;
   white-space: nowrap;
 }
 
+.route-name {
+  display: block;
+}
+
 .route-path {
   color: var(--accent);
+  text-align: right;
+}
+
+.route-note {
+  margin-top: 10px;
+  max-width: 44ch;
+  color: var(--fg-secondary);
+  font-size: 14px;
+  line-height: 1.45;
+  text-wrap: pretty;
 }
 
 .route-leader {
@@ -103,16 +123,6 @@
   transform: scaleX(0);
 }
 
-.route-note {
-  grid-column: 2;
-  justify-self: center;
-  max-width: 52ch;
-  color: var(--fg-secondary);
-  text-align: center;
-  text-wrap: balance;
-  font-size: 16px;
-}
-
 @keyframes route-flow {
   to {
     -webkit-mask-position: 145% 0;
@@ -138,25 +148,30 @@
   }
 
   .route {
-    grid-template-columns: auto minmax(16px, 1fr) auto;
-    gap: 10px 12px;
-    padding-block: 24px;
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding-block: 22px;
   }
 
-  .route-service,
+  .route-name,
   .route-path {
     letter-spacing: -0.03em;
-    font-size: clamp(15px, 4.6vw, 24px);
+    font-size: 22px;
+    white-space: normal;
+  }
+
+  .route-path {
+    text-align: left;
+  }
+
+  .route-leader {
+    order: 3;
+    width: 100%;
   }
 
   .route-leader,
   .route-leader::after {
     background-size: 10px 10px;
-  }
-
-  .route-note {
-    grid-column: 1 / -1;
-    font-size: 14px;
   }
 }
 </style>

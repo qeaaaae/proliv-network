@@ -14,7 +14,7 @@ import { CABINET_URL, TELEGRAM_BOT_URL } from '../../utils/links'
         </header>
         <div class="hero-copy">
           <h1 class="hero-title" data-reveal>
-            Proliv Network — быстро и <AccentMark>без сложностей</AccentMark>
+            Proliv Network<br />быстро и <AccentMark>без сложностей</AccentMark>
           </h1>
           <p class="hero-lead" data-reveal style="--delay: 0.08s">
             Быстрая приватная сеть для всех устройств. Российские сервисы работают без отключения
