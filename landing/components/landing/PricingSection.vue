@@ -2,6 +2,7 @@
 import { animate } from 'animejs'
 import { computed, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from 'vue'
 import { TELEGRAM_BOT_URL } from '../../utils/links'
+import PacketFlow from './PacketFlow.vue'
 
 interface Period {
   label: string
@@ -49,6 +50,8 @@ watch(selected, (i) => {
           Один тариф<br /><AccentMark>Меняется только срок</AccentMark>
         </h2>
       </header>
+
+      <PacketFlow data-reveal />
 
       <div class="plan card" data-reveal >
         <div class="plan-main">
