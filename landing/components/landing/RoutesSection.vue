@@ -91,45 +91,76 @@
   transition: transform 1.4s var(--ease-out) 0.25s;
 }
 
+/* a "packet": bright head dot + fading dot trail, riding the leader */
+.route-leader::before,
 .route-leader::after {
   content: '';
   position: absolute;
-  inset: 0;
-  background: radial-gradient(circle, var(--accent) 1.8px, transparent 2.3px) 0 50% / 14px 10px
-    repeat-x;
-  filter: drop-shadow(0 0 4px rgba(125, 211, 252, 0.6));
-  -webkit-mask-image: linear-gradient(90deg, transparent, #000 45% 55%, transparent);
-  mask-image: linear-gradient(90deg, transparent, #000 45% 55%, transparent);
-  -webkit-mask-position: -45% 0;
-  mask-position: -45% 0;
-  -webkit-mask-size: 28% 100%;
-  mask-size: 28% 100%;
-  -webkit-mask-repeat: no-repeat;
-  mask-repeat: no-repeat;
-  animation: route-flow 2.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 54px;
+  background:
+    radial-gradient(circle, #fff 2.4px, transparent 3px) 50px 0 / 54px 10px no-repeat,
+    radial-gradient(circle, var(--accent) 2.1px, transparent 2.7px) 34px 0 / 54px 10px no-repeat,
+    radial-gradient(circle, rgba(125, 211, 252, 0.7) 1.8px, transparent 2.4px) 20px 0 / 54px 10px no-repeat,
+    radial-gradient(circle, rgba(125, 211, 252, 0.45) 1.5px, transparent 2.1px) 8px 0 / 54px 10px
+      no-repeat;
+  filter: drop-shadow(0 0 5px rgba(125, 211, 252, 0.7));
+  animation: route-packet 2.8s linear infinite;
+}
+
+.route-leader::after {
+  /* second packet, wider gap so it reads as a stream */
+  animation: route-packet 4.4s linear infinite;
+  animation-delay: 1.9s;
+  filter: none;
+  opacity: 0.55;
+}
+
+.route:nth-child(2) .route-leader::before {
+  animation-delay: 0.9s;
 }
 
 .route:nth-child(2) .route-leader::after {
-  animation-delay: 0.7s;
+  animation-delay: 2.6s;
+}
+
+.route:nth-child(3) .route-leader::before {
+  animation-delay: 1.7s;
 }
 
 .route:nth-child(3) .route-leader::after {
-  animation-delay: 1.4s;
+  animation-delay: 3.3s;
 }
 
 .route:not([data-shown]) .route-leader {
   transform: scaleX(0);
 }
 
-@keyframes route-flow {
-  to {
-    -webkit-mask-position: 145% 0;
-    mask-position: 145% 0;
+@keyframes route-packet {
+  0% {
+    left: -54px;
+    opacity: 0;
+  }
+
+  8% {
+    opacity: 1;
+  }
+
+  92% {
+    opacity: 1;
+  }
+
+  100% {
+    left: 100%;
+    opacity: 0;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .route-leader,
+  .route-leader::before,
   .route-leader::after {
     transition: none;
     animation: none;
