@@ -1,0 +1,575 @@
+import logging
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from bot.infra.grants import GrantContext, resolve_effective_grant
+from bot.services.panel_activity import record_subscription_panel_activity
+from bot.services.payment_promo import consume_payment_promo, load_payment_promo_effects
+from bot.services.subscription_order_terms import gift_tariff
+from bot.services.tariff_worker_shared import resolve_flexible_limit_baseline
+from config.tariffs_config import Tariff
+from db.dal import payment_dal, subscription_dal, tariff_dal, user_dal
+from db.models import Subscription
+
+from ._typing import SubscriptionServiceMixinContract
+from .entitlement_helpers import immutable_subscription_start, panel_user_create_options
+from .hwid_limits import HwidDeviceLimits, resolve_hwid_base_limit
+
+logger = logging.getLogger(__name__)
+
+
+async def resolve_main_traffic_baseline(
+    session: AsyncSession,
+    sub: Subscription,
+    tariff: Tariff | None,
+    *,
+    at: datetime | None = None,
+) -> int:
+    """Resolve the tariff-owned base without discarding flexible purchases."""
+    stored_baseline = getattr(sub, "tier_baseline_bytes", None)
+    if tariff is None:
+        return max(0, int(stored_baseline or 0))
+
+    now = at or datetime.now(UTC)
+    flexible_limits = await tariff_dal.get_active_flexible_traffic_limits(
+        session,
+        subscription_id=sub.subscription_id,
+        at=now,
+    )
+    return await resolve_flexible_limit_baseline(
+        session,
+        subscription_id=sub.subscription_id,
+        kind="traffic",
+        at=now,
+        active_baseline=flexible_limits.get("traffic"),
+        stored_baseline=stored_baseline,
+        default_baseline=int(tariff.monthly_bytes or 0),
+        preserve_without_history=False,
+    )
+
+
+class TrafficMixin(SubscriptionServiceMixinContract):
+    async def _resolve_hwid_device_limits(
+        self,
+        session: AsyncSession,
+        sub: Subscription,
+        tariff: Tariff | None,
+    ) -> HwidDeviceLimits:
+        base = resolve_hwid_base_limit(
+            sub.hwid_device_limit,
+            self._base_hwid_limit_for_tariff(tariff),
+            is_override=bool(getattr(sub, "hwid_device_limit_is_override", False)),
+        )
+        extra = await self._active_hwid_extra_devices_for_sub(session, sub)
+        effective = self._effective_hwid_limit(base, extra)
+        return HwidDeviceLimits(base=base, extra=extra, effective=effective)
+
+    async def _activate_traffic_package(
+        self,
+        session: AsyncSession,
+        user_id: int,
+        traffic_gb: float,
+        payment_amount: float,
+        payment_db_id: int,
+        provider: str = "yookassa",
+        tariff_key: str | None = None,
+        sale_mode: str = "traffic",
+        promo_code_id_from_payment: int | None = None,
+    ) -> dict[str, Any] | None:
+        """Activate or extend a traffic-based package instead of a time-based subscription."""
+        tariff = self._resolve_tariff(tariff_key, "traffic") if self._tariffs_config() else None
+        charged_gb = float(traffic_gb)
+        granted_gb = charged_gb
+        if promo_code_id_from_payment:
+            payment = await payment_dal.get_payment_by_db_id(session, payment_db_id)
+            promo_model, promo_effects = await load_payment_promo_effects(
+                session,
+                payment or promo_code_id_from_payment,
+            )
+            if promo_model is not None and promo_effects is not None:
+                grant = resolve_effective_grant(
+                    GrantContext(
+                        sale_mode_base=sale_mode,
+                        tariff_key=tariff.key if tariff else tariff_key,
+                        base_period_days=0,
+                        months=None,
+                        charged_gb=charged_gb,
+                        scope="regular",
+                        promo=promo_effects,
+                    )
+                )
+                quoted_granted_gb = charged_gb * grant.traffic_multiplier
+                consumed = await consume_payment_promo(
+                    session=session,
+                    user_id=user_id,
+                    promo_model=promo_model,
+                    effects=promo_effects,
+                    payment_id=payment_db_id,
+                    payment=payment,
+                    sale_mode_base=sale_mode,
+                    months=None,
+                    traffic_gb=charged_gb,
+                    granted_gb=quoted_granted_gb,
+                )
+                if consumed:
+                    granted_gb = quoted_granted_gb
+
+        await self._record_payment_context(
+            session,
+            payment_db_id,
+            sale_mode=sale_mode,
+            tariff_key=tariff.key if tariff else tariff_key,
+            purchased_gb=float(granted_gb),
+        )
+        db_user = await user_dal.get_user_by_id(session, user_id)
+        if not db_user:
+            logger.error("User %s not found for traffic package activation", user_id)
+            return None
+
+        previous_panel_user_uuid = getattr(db_user, "panel_user_uuid", None)
+        active_sub = await subscription_dal.get_active_subscription_by_user_id(session, user_id)
+        existing_panel_user_uuid = previous_panel_user_uuid or getattr(
+            active_sub, "panel_user_uuid", None
+        )
+        panel_user_data = (
+            await self.panel_service.get_user_by_uuid(existing_panel_user_uuid) or {}
+            if existing_panel_user_uuid
+            else {}
+        )
+        current_used, current_limit, _ = self._extract_panel_traffic_details(panel_user_data)
+        if active_sub and panel_user_data:
+            await record_subscription_panel_activity(session, active_sub, panel_user_data)
+        if current_limit is None and active_sub:
+            current_limit = active_sub.traffic_limit_bytes
+        if current_used is None and active_sub:
+            current_used = active_sub.traffic_used_bytes
+
+        purchase_bytes = self.gb_to_bytes(granted_gb)
+        carryover_balance = self._traffic_package_carryover_bytes(
+            active_sub,
+            limit_bytes=current_limit,
+            used_bytes=current_used,
+        )
+        current_billing_model = self._subscription_billing_model(active_sub)
+        if current_billing_model != "traffic":
+            carryover_balance += self._nonnegative_bytes(
+                getattr(active_sub, "regular_bonus_bytes", 0)
+            )
+        regular_unlimited_override = bool(getattr(active_sub, "regular_unlimited_override", False))
+        extra_hwid_devices = (
+            await self._active_hwid_extra_devices_for_sub(session, active_sub) if active_sub else 0
+        )
+        base_hwid_limit = self._base_hwid_limit_for_tariff(tariff)
+        effective_hwid_limit = self._effective_hwid_limit(base_hwid_limit, extra_hwid_devices)
+        new_balance = carryover_balance + purchase_bytes
+        new_limit = self._traffic_limit_for_balance(
+            used_bytes=current_used,
+            balance_bytes=new_balance,
+            unlimited_override=regular_unlimited_override,
+        )
+
+        activation_at = datetime.now(UTC)
+        start_date = immutable_subscription_start(
+            active_sub if current_billing_model == "traffic" else None,
+            now=activation_at,
+        )
+        # Set a far-future expiry to satisfy panel requirements; keep the latest known expiry if it's further.  # noqa: E501
+        far_future = self._far_future()
+        final_end_date = far_future
+        if active_sub and active_sub.end_date and active_sub.end_date > final_end_date:
+            final_end_date = active_sub.end_date
+
+        managed_squads = self._panel_squads_for_tariff(tariff)
+        (
+            panel_user_uuid,
+            panel_sub_link_id,
+            panel_short_uuid,
+            panel_user_created_now,
+        ) = await self._get_or_create_panel_user_link_details(
+            session,
+            user_id,
+            db_user,
+            create_options=panel_user_create_options(
+                final_end_date,
+                new_limit,
+                "NO_RESET",
+                effective_hwid_limit,
+                managed_squads,
+                self.settings.parsed_user_external_squad_uuid,
+                tariff.key if tariff else None,
+            ),
+        )
+        if not panel_user_uuid or not panel_sub_link_id:
+            logger.error(
+                "Failed to ensure panel linkage for user %s during traffic activation", user_id
+            )
+            return None
+
+        if existing_panel_user_uuid and panel_user_uuid != existing_panel_user_uuid:
+            # The carryover math above was read from a stale local link;
+            # re-read usage from the panel user the link actually resolved to
+            # before persisting the recomputed limits.
+            logger.warning(
+                "Panel link for user %s resolved to %s while traffic metrics were read "
+                "from %s; recomputing carryover from the linked panel user.",
+                user_id,
+                panel_user_uuid,
+                existing_panel_user_uuid,
+            )
+            panel_user_data = await self.panel_service.get_user_by_uuid(panel_user_uuid) or {}
+            current_used, current_limit, _ = self._extract_panel_traffic_details(panel_user_data)
+            if current_limit is None and active_sub:
+                current_limit = active_sub.traffic_limit_bytes
+            if current_used is None and active_sub:
+                current_used = active_sub.traffic_used_bytes
+            carryover_balance = self._traffic_package_carryover_bytes(
+                active_sub,
+                limit_bytes=current_limit,
+                used_bytes=current_used,
+            )
+            if current_billing_model != "traffic":
+                carryover_balance += self._nonnegative_bytes(
+                    getattr(active_sub, "regular_bonus_bytes", 0)
+                )
+            new_balance = carryover_balance + purchase_bytes
+            new_limit = self._traffic_limit_for_balance(
+                used_bytes=current_used,
+                balance_bytes=new_balance,
+                unlimited_override=regular_unlimited_override,
+            )
+
+        await subscription_dal.deactivate_other_active_subscriptions(
+            session, panel_user_uuid, panel_sub_link_id
+        )
+
+        sub_payload = {
+            "user_id": user_id,
+            "panel_user_uuid": panel_user_uuid,
+            "panel_subscription_uuid": panel_sub_link_id,
+            "start_date": start_date,
+            "end_date": final_end_date,
+            "duration_months": 0,
+            "duration_days": None,
+            "period_semantics": None,
+            "is_active": True,
+            "status_from_panel": "ACTIVE",
+            "traffic_limit_bytes": new_limit,
+            "traffic_used_bytes": current_used,
+            "provider": provider,
+            "skip_notifications": True,
+            "auto_renew_enabled": False,
+            "tariff_key": tariff.key if tariff else None,
+            "tier_baseline_bytes": 0,
+            "topup_balance_bytes": new_balance,
+            "regular_bonus_bytes": 0,
+            "regular_unlimited_override": regular_unlimited_override,
+            "premium_baseline_bytes": self._premium_limit_for_tariff(tariff, 0),
+            "premium_topup_balance_bytes": 0,
+            "premium_topup_used_bytes": 0,
+            "premium_used_bytes": 0,
+            "premium_is_limited": False,
+            "premium_period_start_at": None,
+            "period_start_at": None,
+            "is_throttled": False,
+            "effective_monthly_price_rub": None,
+            "hwid_device_limit": base_hwid_limit,
+            "extra_hwid_devices": extra_hwid_devices,
+        }
+
+        try:
+            new_or_updated_sub = await subscription_dal.upsert_subscription(session, sub_payload)
+        except Exception as exc:
+            logger.exception("Failed to upsert traffic subscription for user %s: %s", user_id, exc)
+            await self._compensate_failed_panel_user_creation(
+                session,
+                user_id=user_id,
+                panel_user_uuid=panel_user_uuid,
+                previous_panel_user_uuid=previous_panel_user_uuid,
+                panel_user_created_now=panel_user_created_now,
+                source="traffic subscription DB write",
+            )
+            return None
+
+        await tariff_dal.create_traffic_topup(
+            session,
+            subscription_id=new_or_updated_sub.subscription_id,
+            payment_id=payment_db_id,
+            purchased_bytes=purchase_bytes,
+            kind="traffic_package",
+        )
+
+        panel_update_payload = self._build_panel_update_payload(
+            panel_user_uuid=panel_user_uuid,
+            expire_at=final_end_date,
+            status="ACTIVE",
+            traffic_limit_bytes=new_limit,
+            traffic_limit_strategy="NO_RESET",
+            hwid_device_limit=effective_hwid_limit,
+            include_default_squads=False,
+        )
+        panel_update_payload.update(
+            await self.build_effective_panel_squad_fields(
+                session,
+                user_id=user_id,
+                panel_user_uuid=panel_user_uuid,
+                managed_internal_squads=managed_squads,
+                include_internal_squads=bool(tariff or managed_squads),
+                source="traffic_package",
+            )
+        )
+
+        panel_update_payload.update(self._panel_identity_payload_for_user(db_user))
+        panel_user_for_tag = self._take_panel_user_link_snapshot(panel_user_uuid)
+        tariff_tag_plan = (
+            self._plan_panel_tariff_tag(
+                db_user,
+                panel_user_for_tag,
+                tariff.key if tariff else None,
+                source="traffic_package",
+            )
+            if panel_user_for_tag is not None
+            else None
+        )
+        if tariff_tag_plan is not None:
+            panel_update_payload.update(tariff_tag_plan.verification_payload)
+
+        if panel_user_created_now and previous_panel_user_uuid is None and not active_sub:
+            # CREATE already requested the exact entitlement. Verify it with an
+            # uncached GET instead of fabricating a successful PATCH response.
+            panel_update_result = None
+        else:
+            panel_update_result = await self.panel_service.update_user_details_on_panel(
+                panel_user_uuid, panel_update_payload
+            )
+        updated_panel_user = await self._confirmed_panel_entitlement(
+            panel_user_uuid,
+            panel_update_result,
+            panel_update_payload,
+            source="traffic_package",
+        )
+        if updated_panel_user is None:
+            logger.warning(
+                "Panel entitlement verification FAILED for traffic package user %s. Response: %s",
+                panel_user_uuid,
+                panel_update_result,
+            )
+            await self._compensate_failed_panel_user_creation(
+                session,
+                user_id=user_id,
+                panel_user_uuid=panel_user_uuid,
+                previous_panel_user_uuid=previous_panel_user_uuid,
+                panel_user_created_now=panel_user_created_now,
+                source="traffic entitlement verification",
+            )
+            return None
+        if tariff_tag_plan is not None:
+            self._remember_confirmed_panel_tariff_tag(
+                db_user,
+                tariff_tag_plan,
+                updated_panel_user,
+            )
+
+        final_subscription_url = updated_panel_user.get("subscriptionUrl")
+        final_panel_short_uuid = updated_panel_user.get("shortUuid", panel_short_uuid)
+        await self._send_payment_success_email(
+            db_user=db_user,
+            sale_mode="traffic",
+            months=0,
+            traffic_gb=float(granted_gb),
+            payment_amount=payment_amount,
+            end_date=None,
+            provider=provider,
+        )
+
+        return {
+            "subscription_id": new_or_updated_sub.subscription_id,
+            "end_date": final_end_date,
+            "is_active": True,
+            "panel_user_uuid": panel_user_uuid,
+            "panel_short_uuid": final_panel_short_uuid,
+            "subscription_url": final_subscription_url,
+            "applied_promo_bonus_days": 0,
+            "traffic_gb": float(granted_gb),
+            "traffic_limit_bytes": new_limit,
+            "tariff_key": tariff.key if tariff else None,
+        }
+
+    async def sync_premium_squad_access_to_panel(
+        self,
+        session: AsyncSession,
+        user_id: int,
+    ) -> bool:
+        """Recompute premium quota flags from DB and push internal squads to Remnawave.
+
+        Used when admin overrides change without going through the traffic worker
+        (Telegram/Web admin premium bonus / unlimited).
+        """
+        db_user = await user_dal.get_user_by_id(session, user_id)
+        if not db_user or not db_user.panel_user_uuid:
+            return False
+        sub = await subscription_dal.get_active_subscription_by_user_id(
+            session, user_id, db_user.panel_user_uuid
+        )
+        if not sub:
+            return False
+        tariff = (
+            (gift_tariff(sub) or self._resolve_tariff(sub.tariff_key)) if sub.tariff_key else None
+        )
+        if not tariff or not getattr(tariff, "premium_squad_uuids", None):
+            return False
+
+        premium_baseline = int(tariff.premium_monthly_bytes or sub.premium_baseline_bytes or 0)
+        premium_bonus = max(0, int(getattr(sub, "premium_bonus_bytes", 0) or 0))
+        premium_topup_balance = int(sub.premium_topup_balance_bytes or 0)
+        premium_topup_used = int(getattr(sub, "premium_topup_used_bytes", 0) or 0)
+        premium_used = int(sub.premium_used_bytes or 0)
+        premium_limit = self._premium_effective_limit_bytes(
+            premium_baseline,
+            premium_topup_balance,
+            premium_topup_used,
+            premium_bonus,
+        )
+        premium_unlimited_override = bool(getattr(sub, "premium_unlimited_override", False))
+        premium_is_limited = self._premium_access_should_be_limited(
+            tariff,
+            premium_limit_bytes=premium_limit,
+            premium_used_bytes=premium_used,
+            premium_unlimited_override=premium_unlimited_override,
+        )
+
+        if bool(getattr(sub, "premium_is_limited", False)) != premium_is_limited:
+            await subscription_dal.update_subscription(
+                session,
+                sub.subscription_id,
+                {"premium_is_limited": premium_is_limited},
+            )
+
+        squads = self._panel_squads_for_tariff(tariff, include_premium=not premium_is_limited)
+        try:
+            panel_updated = await self._sync_panel_squads_if_needed(
+                db_user.panel_user_uuid,
+                squads,
+                user_id=user_id,
+                source="admin_premium_override",
+                session=session,
+            )
+            if not panel_updated:
+                logger.warning(
+                    "sync_premium_squad_access_to_panel: panel update failed for user %s",
+                    user_id,
+                )
+                return False
+        except Exception:
+            logger.exception(
+                "sync_premium_squad_access_to_panel: failed to push squads for user %s", user_id
+            )
+            return False
+        return True
+
+    async def sync_main_traffic_limit_to_panel(
+        self,
+        session: AsyncSession,
+        user_id: int,
+    ) -> bool:
+        """Recompute main traffic limit from tier + topups + regular_bonus_bytes and push to panel."""  # noqa: E501
+        db_user = await user_dal.get_user_by_id(session, user_id)
+        if not db_user or not db_user.panel_user_uuid:
+            return False
+        sub = await subscription_dal.get_active_subscription_by_user_id(
+            session, user_id, db_user.panel_user_uuid
+        )
+        if not sub:
+            return False
+        tariff = (
+            (gift_tariff(sub) or self._resolve_tariff(sub.tariff_key)) if sub.tariff_key else None
+        )
+        baseline = await resolve_main_traffic_baseline(session, sub, tariff)
+        sub.tier_baseline_bytes = baseline
+        rb = int(getattr(sub, "regular_bonus_bytes", 0) or 0)
+        runl = bool(getattr(sub, "regular_unlimited_override", False))
+        used_now = int(getattr(sub, "traffic_used_bytes", 0) or 0)
+        hwid_limits = await self._resolve_hwid_device_limits(session, sub, tariff)
+        new_limit = self._compute_main_traffic_limit_bytes(
+            tier_baseline_bytes=baseline,
+            topup_balance_bytes=int(sub.topup_balance_bytes or 0),
+            regular_bonus_bytes=rb,
+            regular_unlimited_override=runl,
+            traffic_used_bytes=used_now,
+            hwid_device_bonus_bytes=await self._hwid_device_traffic_bonus_bytes_for_sub(
+                session, sub, active_devices=hwid_limits.extra
+            ),
+        )
+        sub.traffic_limit_bytes = new_limit
+        if runl:
+            sub.is_throttled = False
+        extra_hwid_devices = hwid_limits.extra
+        sub.extra_hwid_devices = extra_hwid_devices
+        effective_hwid_limit = hwid_limits.effective
+        panel_user_for_tag = await self._get_panel_user_for_entitlement_verification(
+            db_user.panel_user_uuid
+        )
+        tariff_tag_plan = (
+            self._plan_panel_tariff_tag(
+                db_user,
+                panel_user_for_tag,
+                tariff.key if tariff else None,
+                source="sync_main_traffic_limit",
+            )
+            if panel_user_for_tag is not None
+            else None
+        )
+        panel_payload = self._build_panel_update_payload(
+            panel_user_uuid=db_user.panel_user_uuid,
+            expire_at=sub.end_date,
+            status="ACTIVE",
+            traffic_limit_bytes=new_limit,
+            hwid_device_limit=effective_hwid_limit,
+            include_default_squads=False,
+        )
+        if tariff is not None:
+            managed_squads = self._panel_squads_for_tariff(
+                tariff,
+                include_premium=not bool(getattr(sub, "premium_is_limited", False)),
+            )
+            panel_payload.update(
+                await self.build_effective_panel_squad_fields(
+                    session,
+                    user_id=user_id,
+                    panel_user_uuid=db_user.panel_user_uuid,
+                    managed_internal_squads=managed_squads,
+                    include_internal_squads=True,
+                    source="sync_main_traffic_limit",
+                )
+            )
+        panel_payload.update(self._panel_identity_payload_for_user(db_user))
+        if tariff_tag_plan is not None:
+            panel_payload.update(tariff_tag_plan.verification_payload)
+        try:
+            updated_panel = await self.panel_service.update_user_details_on_panel(
+                db_user.panel_user_uuid, panel_payload
+            )
+        except Exception:
+            logger.exception("sync_main_traffic_limit_to_panel failed for user %s", user_id)
+            return False
+        confirmed_panel_user = await self._confirmed_panel_entitlement(
+            db_user.panel_user_uuid,
+            updated_panel,
+            panel_payload,
+            source="sync_main_traffic_limit",
+        )
+        if confirmed_panel_user is None:
+            logger.warning(
+                "sync_main_traffic_limit_to_panel verification failed for user %s. Response: %s",
+                user_id,
+                updated_panel,
+            )
+            return False
+        if tariff_tag_plan is not None:
+            self._remember_confirmed_panel_tariff_tag(
+                db_user,
+                tariff_tag_plan,
+                confirmed_panel_user,
+            )
+        return True

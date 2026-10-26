@@ -1,0 +1,406 @@
+import {
+  Blocks,
+  Coins,
+  CreditCard,
+  Gift,
+  Database,
+  FileText,
+  Languages,
+  LayoutDashboard,
+  LifeBuoy,
+  Megaphone,
+  Paintbrush,
+  Sliders,
+  Sparkles,
+  Tag,
+  UsersRound,
+  WalletCards,
+} from "$components/ui/icons.js";
+import {
+  ADMIN_SECTION_EXTENSIONS,
+  ADMIN_SECTION_GROUP_EXTENSIONS,
+  ADMIN_SECTION_TABS,
+} from "./extensionRegistry";
+import {
+  isFeatureBoundDescriptorVisible,
+  requiredFeatureForDescriptor,
+  type AdminSectionDescriptor,
+  type AdminSectionGroupDescriptor,
+  type AdminSectionTabDescriptor,
+} from "./extensionTypes";
+
+export type {
+  AdminSectionDescriptor,
+  AdminSectionGroupDescriptor,
+  AdminSectionTabDescriptor,
+} from "./extensionTypes";
+
+/**
+ * Tabs an extension registered for one section, in render order. A locked tab
+ * stays listed when it opts into `visibleWhenLocked`, exactly like a section,
+ * so it can explain the lock instead of vanishing.
+ */
+export function adminSectionTabsFor(
+  sectionId: string,
+  availableFeatures: ReadonlySet<string>
+): AdminSectionTabDescriptor[] {
+  return ADMIN_SECTION_TABS.filter(
+    (tab) => tab.sectionId === sectionId && isFeatureBoundDescriptorVisible(tab, availableFeatures)
+  );
+}
+
+export function requiredFeatureForAdminSection(section: AdminSectionDescriptor): string {
+  return requiredFeatureForDescriptor(section);
+}
+
+export function isAdminSectionVisible(
+  section: AdminSectionDescriptor,
+  availableFeatures: ReadonlySet<string>
+): boolean {
+  return isFeatureBoundDescriptorVisible(section, availableFeatures);
+}
+
+export function defaultQueryForAdminSection(
+  section: AdminSectionDescriptor | undefined,
+  availableFeatures: ReadonlySet<string>
+): Readonly<Record<string, string>> {
+  for (const routeDefault of section?.routeDefaults || []) {
+    const requiredFeature = String(routeDefault.requiredFeature || "").trim();
+    if (requiredFeature && !availableFeatures.has(requiredFeature)) continue;
+    return routeDefault.query;
+  }
+  return {};
+}
+
+const CORE_ADMIN_SECTION_GROUPS: AdminSectionGroupDescriptor[] = [
+  { id: "overview", order: 10, i18nKey: "nav_overview", fallbackLabel: "Overview" },
+  { id: "operations", order: 20, i18nKey: "nav_operations", fallbackLabel: "Operations" },
+  { id: "marketing", order: 30, i18nKey: "nav_marketing", fallbackLabel: "Marketing" },
+  { id: "support", order: 40, i18nKey: "nav_support", fallbackLabel: "Support" },
+  { id: "system", order: 50, i18nKey: "nav_system", fallbackLabel: "System" },
+  {
+    // Kept for at least one release cycle so external extensions that still
+    // register sections into the legacy group keep a visible home; the group
+    // stays hidden while it has no items.
+    id: "communication",
+    order: 60,
+    i18nKey: "nav_communication",
+    fallbackLabel: "Communication",
+  },
+];
+
+export function mergeAdminSectionGroups(
+  coreGroups: readonly AdminSectionGroupDescriptor[],
+  extensionGroups: readonly AdminSectionGroupDescriptor[]
+): AdminSectionGroupDescriptor[] {
+  const groups = new Map<string, AdminSectionGroupDescriptor>();
+  for (const group of [...coreGroups, ...extensionGroups]) {
+    const id = String(group?.id || "").trim();
+    if (!id || groups.has(id)) continue;
+    groups.set(id, { ...group, id });
+  }
+  return [...groups.values()].sort(
+    (left, right) => left.order - right.order || left.id.localeCompare(right.id)
+  );
+}
+
+export const ADMIN_SECTION_GROUPS = mergeAdminSectionGroups(
+  CORE_ADMIN_SECTION_GROUPS,
+  ADMIN_SECTION_GROUP_EXTENSIONS
+);
+
+const CORE_ADMIN_SECTIONS: AdminSectionDescriptor[] = [
+  {
+    id: "stats",
+    group: "overview",
+    order: 10,
+    i18nKey: "nav_dashboard",
+    fallbackLabel: "Dashboard",
+    titleI18nKey: "section_stats_title",
+    fallbackTitle: "Dashboard",
+    subtitleI18nKey: "section_stats_subtitle",
+    fallbackSubtitle: "Audience, revenue, Remnawave panel, and recent payments",
+    icon: LayoutDashboard,
+    loadComponent: () => import("./StatsSection.svelte").then((module) => module.default),
+  },
+  {
+    id: "users",
+    group: "operations",
+    order: 10,
+    i18nKey: "nav_users",
+    fallbackLabel: "Users",
+    titleI18nKey: "section_users_title",
+    fallbackTitle: "Users",
+    subtitleI18nKey: "section_users_subtitle",
+    fallbackSubtitle: "Search, bans, and account actions",
+    icon: UsersRound,
+    loadComponent: () => import("./UsersSection.svelte").then((module) => module.default),
+  },
+  {
+    id: "payments",
+    group: "operations",
+    order: 20,
+    i18nKey: "nav_payments",
+    fallbackLabel: "Payments",
+    titleI18nKey: "section_payments_title",
+    fallbackTitle: "Payments",
+    subtitleI18nKey: "section_payments_subtitle",
+    fallbackSubtitle: "Transaction history and export",
+    icon: CreditCard,
+    loadComponent: () => import("./PaymentsSection.svelte").then((module) => module.default),
+  },
+  {
+    id: "promos",
+    group: "marketing",
+    order: 20,
+    i18nKey: "nav_promos",
+    fallbackLabel: "Promos",
+    titleI18nKey: "section_promos_title",
+    fallbackTitle: "Promos",
+    subtitleI18nKey: "section_promos_subtitle",
+    fallbackSubtitle: "Create and manage promo codes",
+    icon: Tag,
+    loadComponent: () => import("./PromosSection.svelte").then((module) => module.default),
+  },
+  {
+    id: "gifts",
+    group: "operations",
+    order: 25,
+    i18nKey: "nav_gifts",
+    fallbackLabel: "Gifts",
+    titleI18nKey: "section_gifts_title",
+    fallbackTitle: "Subscription gifts",
+    subtitleI18nKey: "section_gifts_subtitle",
+    fallbackSubtitle: "Purchases, delivery and activation",
+    icon: Gift,
+    loadComponent: () => import("./GiftsSection.svelte").then((module) => module.default),
+  },
+  {
+    id: "partners",
+    group: "marketing",
+    order: 15,
+    i18nKey: "nav_partners",
+    fallbackLabel: "Partner program",
+    titleI18nKey: "section_partners_title",
+    fallbackTitle: "Partner program",
+    subtitleI18nKey: "section_partners_subtitle",
+    fallbackSubtitle: "Applications, partners, commissions, balances, and withdrawals",
+    icon: WalletCards,
+    loadComponent: () => import("./PartnersSection.svelte").then((module) => module.default),
+  },
+  {
+    id: "ads",
+    group: "marketing",
+    order: 30,
+    i18nKey: "nav_ads",
+    fallbackLabel: "Ads",
+    titleI18nKey: "section_ads_title",
+    fallbackTitle: "Ad Campaigns",
+    subtitleI18nKey: "section_ads_subtitle",
+    fallbackSubtitle: "UTM sources and attribution",
+    icon: Sparkles,
+    loadComponent: () => import("./AdsSection.svelte").then((module) => module.default),
+  },
+  {
+    id: "broadcast",
+    group: "marketing",
+    order: 10,
+    i18nKey: "nav_broadcast",
+    fallbackLabel: "Broadcast",
+    titleI18nKey: "section_broadcast_title",
+    fallbackTitle: "Broadcast",
+    subtitleI18nKey: "section_broadcast_subtitle",
+    fallbackSubtitle: "Mass messaging in Telegram",
+    icon: Megaphone,
+    loadComponent: () => import("./BroadcastSection.svelte").then((module) => module.default),
+  },
+  {
+    id: "logs",
+    group: "support",
+    order: 20,
+    i18nKey: "nav_logs",
+    fallbackLabel: "Logs",
+    titleI18nKey: "section_logs_title",
+    fallbackTitle: "Activity Logs",
+    subtitleI18nKey: "section_logs_subtitle",
+    fallbackSubtitle: "User events and admin actions",
+    icon: FileText,
+    loadComponent: () => import("./LogsSection.svelte").then((module) => module.default),
+  },
+  {
+    id: "support",
+    group: "support",
+    order: 10,
+    i18nKey: "nav_support",
+    fallbackLabel: "Support",
+    titleI18nKey: "section_support_title",
+    fallbackTitle: "Support",
+    subtitleI18nKey: "section_support_subtitle",
+    fallbackSubtitle: "Ticket inbox and user replies",
+    icon: LifeBuoy,
+    loadComponent: () => import("./SupportSection.svelte").then((module) => module.default),
+  },
+  {
+    id: "tariffs",
+    group: "system",
+    order: 10,
+    i18nKey: "nav_tariffs",
+    fallbackLabel: "Tariffs",
+    titleI18nKey: "section_tariffs_title",
+    fallbackTitle: "Tariffs",
+    subtitleI18nKey: "section_tariffs_subtitle",
+    fallbackSubtitle: "Sales catalog, periods, packages, and limits",
+    icon: Coins,
+    loadComponent: () => import("./TariffsSection.svelte").then((module) => module.default),
+  },
+  {
+    id: "appearance",
+    group: "system",
+    order: 20,
+    i18nKey: "nav_appearance",
+    fallbackLabel: "Appearance",
+    titleI18nKey: "section_appearance_title",
+    fallbackTitle: "Appearance",
+    subtitleI18nKey: "section_appearance_subtitle",
+    fallbackSubtitle: "Logo, themes, and Mini App accent colors",
+    icon: Paintbrush,
+    loadComponent: () => import("./AppearanceSection.svelte").then((module) => module.default),
+  },
+  {
+    id: "translations",
+    group: "system",
+    order: 30,
+    i18nKey: "nav_translations",
+    fallbackLabel: "Translations",
+    titleI18nKey: "section_translations_title",
+    fallbackTitle: "Translations",
+    subtitleI18nKey: "section_translations_subtitle",
+    fallbackSubtitle:
+      "Runtime localization string overrides from DB and data/locales-overrides.json",
+    icon: Languages,
+    loadComponent: () => import("./TranslationsSection.svelte").then((module) => module.default),
+  },
+  {
+    id: "backups",
+    group: "system",
+    order: 40,
+    i18nKey: "nav_backups",
+    fallbackLabel: "Backups",
+    titleI18nKey: "section_backups_title",
+    fallbackTitle: "Backups",
+    subtitleI18nKey: "section_backups_subtitle",
+    fallbackSubtitle: "Archives, uploads, and database/compose restore",
+    icon: Database,
+    loadComponent: () => import("./BackupsSection.svelte").then((module) => module.default),
+  },
+  {
+    id: "documents",
+    group: "system",
+    order: 45,
+    i18nKey: "nav_documents",
+    fallbackLabel: "Documents",
+    titleI18nKey: "section_documents_title",
+    fallbackTitle: "Documents",
+    subtitleI18nKey: "section_documents_subtitle",
+    fallbackSubtitle: "Public Markdown pages, visibility, and legal roles",
+    icon: FileText,
+    loadComponent: () => import("./DocumentsSection.svelte").then((module) => module.default),
+  },
+  {
+    id: "plugins",
+    group: "system",
+    order: 46,
+    i18nKey: "nav_plugins",
+    fallbackLabel: "Plugins",
+    titleI18nKey: "section_plugins_title",
+    fallbackTitle: "Plugins",
+    subtitleI18nKey: "section_plugins_subtitle",
+    fallbackSubtitle: "Install and manage verified extensions",
+    icon: Blocks,
+    loadComponent: () => import("./PluginsSection.svelte").then((module) => module.default),
+  },
+  {
+    id: "settings",
+    group: "system",
+    order: 50,
+    i18nKey: "nav_settings",
+    fallbackLabel: "Settings",
+    titleI18nKey: "section_settings_title",
+    fallbackTitle: "App Settings",
+    subtitleI18nKey: "section_settings_subtitle",
+    fallbackSubtitle: "Overrides for .env, applied instantly",
+    icon: Sliders,
+    loadComponent: () => import("./SettingsSection.svelte").then((module) => module.default),
+  },
+];
+
+export const ADMIN_SECTIONS = [...CORE_ADMIN_SECTIONS, ...ADMIN_SECTION_EXTENSIONS]
+  .filter((section) => section?.id && (section?.component || section?.loadComponent))
+  .sort((a, b) => a.group.localeCompare(b.group) || a.order - b.order || a.id.localeCompare(b.id));
+
+export function buildAdminSectionRouteAliases(
+  sections: readonly AdminSectionDescriptor[]
+): Map<string, string> {
+  const ids = new Set(sections.map((section) => section.id));
+  const aliases = new Map<string, string>();
+  for (const section of sections) {
+    for (const rawAlias of section.routeAliases || []) {
+      const alias = String(rawAlias || "")
+        .trim()
+        .toLowerCase();
+      // An alias may never shadow a registered section id or an earlier alias.
+      if (!alias || ids.has(alias) || aliases.has(alias)) continue;
+      aliases.set(alias, section.id);
+    }
+  }
+  return aliases;
+}
+
+export const ADMIN_SECTION_ROUTE_ALIASES: ReadonlyMap<string, string> =
+  buildAdminSectionRouteAliases(ADMIN_SECTIONS);
+
+const ADMIN_SECTION_IDS: ReadonlySet<string> = new Set(ADMIN_SECTIONS.map((section) => section.id));
+
+/** Install signed runtime descriptors before the admin component mounts. */
+export function addRuntimeAdminSections(sections: readonly AdminSectionDescriptor[]): void {
+  const ids = ADMIN_SECTION_IDS as Set<string>;
+  const aliases = ADMIN_SECTION_ROUTE_ALIASES as Map<string, string>;
+  for (const section of sections) {
+    if (ids.has(section.id)) continue;
+    ids.add(section.id);
+    ADMIN_SECTIONS.push(section);
+  }
+  ADMIN_SECTIONS.sort(
+    (a, b) => a.group.localeCompare(b.group) || a.order - b.order || a.id.localeCompare(b.id)
+  );
+  aliases.clear();
+  for (const [alias, id] of buildAdminSectionRouteAliases(ADMIN_SECTIONS)) aliases.set(alias, id);
+}
+
+/** Remove only descriptors owned by the previous runtime generation. */
+export function removeRuntimeAdminSections(sections: readonly AdminSectionDescriptor[]): void {
+  const previous = new Set(sections);
+  for (let i = ADMIN_SECTIONS.length - 1; i >= 0; i--)
+    if (previous.has(ADMIN_SECTIONS[i])) ADMIN_SECTIONS.splice(i, 1);
+  const ids = ADMIN_SECTION_IDS as Set<string>;
+  ids.clear();
+  ADMIN_SECTIONS.forEach((section) => ids.add(section.id));
+  const aliases = ADMIN_SECTION_ROUTE_ALIASES as Map<string, string>;
+  aliases.clear();
+  for (const [alias, id] of buildAdminSectionRouteAliases(ADMIN_SECTIONS)) aliases.set(alias, id);
+}
+
+/**
+ * Resolve a requested admin route slug against the full section registry,
+ * including extension sections and their registered route aliases. Returns
+ * the canonical section id, or an empty string when the slug is unknown to
+ * the registry (the caller decides the fallback).
+ */
+export function resolveAdminSectionId(value: unknown): string {
+  const slug = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (!slug) return "";
+  if (ADMIN_SECTION_IDS.has(slug)) return slug;
+  return ADMIN_SECTION_ROUTE_ALIASES.get(slug) || "";
+}

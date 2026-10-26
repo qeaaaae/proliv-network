@@ -1,0 +1,437 @@
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from aiohttp import web
+from sqlalchemy.orm import sessionmaker
+
+from bot.app.web.context import (
+    get_bot_username,
+    get_session_factory,
+    get_settings,
+)
+from bot.app.web.request_parsing import parse_body_or_400
+from bot.app.web.route_contracts import (
+    RouteContract,
+    ok_envelope_for,
+    register_contract,
+    schema_ref,
+)
+from bot.services.promo_code_service import PromoCodeService
+from bot.services.promo_effects import PromoEffects, validate_effects
+from db.dal import promo_code_dal, user_reads_dal
+
+from .auth import (
+    _require_admin_user_id,
+)
+from .common import (
+    _build_admin_promo_bot_link,
+    _build_admin_promo_webapp_link,
+    _error,
+    _ok,
+)
+from .schemas import (
+    PromoActivationOut,
+    PromoCreateBody,
+    PromoOptionOut,
+    PromoOut,
+    PromoRevenueCurrencyOut,
+    PromoRevenueSummaryOut,
+    PromoUpdateBody,
+)
+
+_PROMO_PICKER_GROUP_LIMIT = 50
+_PROMO_PICKER_SEARCH_LIMIT = 100
+
+register_contract(
+    "admin_promos_list_route",
+    RouteContract(
+        response_schema=ok_envelope_for(
+            PromoOut,
+            key="promos",
+            many=True,
+            extra={
+                "page": {"type": "integer", "minimum": 0},
+                "page_size": {"type": "integer", "minimum": 1, "maximum": 100},
+                "total": {"type": "integer", "minimum": 0},
+                "owned_total": {"type": "integer", "minimum": 0},
+            },
+        ),
+        models=(PromoOut,),
+    ),
+)
+register_contract(
+    "admin_promo_options_route",
+    RouteContract(
+        response_schema=ok_envelope_for(PromoOptionOut, key="promos", many=True),
+        models=(PromoOptionOut,),
+    ),
+)
+register_contract(
+    "admin_promo_create_route",
+    RouteContract(
+        request_model=PromoCreateBody,
+        response_schema=ok_envelope_for(PromoOut, key="promo"),
+        models=(PromoCreateBody, PromoOut),
+    ),
+)
+register_contract(
+    "admin_promo_update_route",
+    RouteContract(
+        request_model=PromoUpdateBody,
+        response_schema=ok_envelope_for(PromoOut, key="promo"),
+        models=(PromoUpdateBody, PromoOut),
+    ),
+)
+register_contract(
+    "admin_promo_detail_route",
+    RouteContract(
+        response_schema=ok_envelope_for(PromoOut, key="promo"),
+        models=(PromoOut,),
+    ),
+)
+register_contract(
+    "admin_promo_activations_route",
+    RouteContract(
+        response_schema=ok_envelope_for(
+            PromoActivationOut,
+            key="activations",
+            many=True,
+            extra={
+                "page": {"type": "integer", "minimum": 0},
+                "page_size": {"type": "integer", "minimum": 1, "maximum": 100},
+                "total": {"type": "integer", "minimum": 0},
+                "revenue_summary": schema_ref(PromoRevenueSummaryOut),
+            },
+        ),
+        models=(PromoActivationOut, PromoRevenueCurrencyOut, PromoRevenueSummaryOut),
+    ),
+)
+register_contract(
+    "admin_promo_delete_route",
+    RouteContract(response_schema=ok_envelope_for()),
+)
+
+
+def _serialize_promo_for_request(
+    request: web.Request,
+    promo: Any,
+    owners: dict[int, tuple[str | None, str | None]] | None = None,
+) -> dict[str, Any]:
+    settings = get_settings(request)
+    code = str(getattr(promo, "code", "") or "")
+    owner_id = getattr(promo, "user_id", None)
+    return PromoOut.from_orm_promo(
+        promo,
+        bot_link=_build_admin_promo_bot_link(get_bot_username(request), code),
+        webapp_link=_build_admin_promo_webapp_link(
+            settings.SUBSCRIPTION_MINI_APP_URL,
+            code,
+        ),
+        owner=(owners or {}).get(int(owner_id)) if owner_id else None,
+    ).model_dump(mode="json")
+
+
+async def _owner_labels_for(session: Any, promo: Any) -> dict[int, tuple[str | None, str | None]]:
+    """Owner label for one promo, so a single-promo response reads like a row."""
+
+    owner_id = getattr(promo, "user_id", None)
+    if not owner_id:
+        return {}
+    return await user_reads_dal.get_user_labels(session, [int(owner_id)])
+
+
+def _requested_owner_filter(request: web.Request) -> bool | None:
+    """Read the personal/shared tab selection; anything else lists everything."""
+
+    kind = str(request.query.get("kind", "") or "").strip().lower()
+    if kind == "personal":
+        return True
+    if kind == "shared":
+        return False
+    return None
+
+
+async def admin_promos_list_route(request: web.Request) -> web.Response:
+    _require_admin_user_id(request)
+    async_session_factory: sessionmaker = get_session_factory(request)
+    page = max(0, int(request.query.get("page", 0) or 0))
+    page_size = min(100, max(1, int(request.query.get("page_size", 25) or 25)))
+    personal = _requested_owner_filter(request)
+    sort = str(request.query.get("sort") or "created_desc").lower()
+    search = str(request.query.get("search") or "").strip()[:100]
+    status = str(request.query.get("status") or "").strip().lower()
+    scope = str(request.query.get("scope") or "").strip().lower()
+    async with async_session_factory() as session:
+        promos = await promo_code_dal.get_all_promo_codes_with_details(
+            session,
+            limit=page_size,
+            offset=page * page_size,
+            personal=personal,
+            sort=sort,
+            search=search,
+            status=status,
+            scope=scope,
+        )
+        total = await promo_code_dal.get_promo_codes_count(
+            session,
+            personal=personal,
+            search=search,
+            status=status,
+            scope=scope,
+        )
+        # An install where nothing issues codes for a named customer reports
+        # zero here, so the UI can leave the whole distinction out of sight.
+        owned_total = await promo_code_dal.get_promo_codes_count(session, personal=True)
+        owners = await user_reads_dal.get_user_labels(
+            session, [int(p.user_id) for p in promos if getattr(p, "user_id", None)]
+        )
+    return _ok(
+        {
+            "promos": [_serialize_promo_for_request(request, p, owners) for p in promos],
+            "page": page,
+            "page_size": page_size,
+            "total": int(total or 0),
+            "owned_total": int(owned_total or 0),
+        }
+    )
+
+
+async def admin_promo_detail_route(request: web.Request) -> web.Response:
+    _require_admin_user_id(request)
+    promo_id = int(request.match_info["promo_id"])
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        promo = await promo_code_dal.get_promo_code_by_id(session, promo_id)
+        if promo is None:
+            return _error(404, "not_found")
+        owners = await _owner_labels_for(session, promo)
+        payload = _serialize_promo_for_request(request, promo, owners)
+    return _ok({"promo": payload})
+
+
+async def admin_promo_options_route(request: web.Request) -> web.Response:
+    """Return bounded, searchable promo suggestions for message buttons."""
+
+    _require_admin_user_id(request)
+    search = str(request.query.get("query", "") or "").strip()[:58]
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        if search:
+            promos = await promo_code_dal.get_usable_promo_codes_for_picker(
+                session,
+                search=search,
+                personal=None,
+                limit=_PROMO_PICKER_SEARCH_LIMIT,
+            )
+        else:
+            # Two bounded queries prevent a large run of personal codes from
+            # consuming every initial option before shared codes are seen.
+            shared = await promo_code_dal.get_usable_promo_codes_for_picker(
+                session,
+                personal=False,
+                limit=_PROMO_PICKER_GROUP_LIMIT,
+            )
+            personal = await promo_code_dal.get_usable_promo_codes_for_picker(
+                session,
+                personal=True,
+                limit=_PROMO_PICKER_GROUP_LIMIT,
+            )
+            promos = [*shared, *personal]
+    return _ok(
+        {
+            "promos": [
+                PromoOptionOut.from_orm_promo(promo).model_dump(mode="json") for promo in promos
+            ]
+        }
+    )
+
+
+async def admin_promo_create_route(request: web.Request) -> web.Response:
+    actor_id = _require_admin_user_id(request)
+    body = await parse_body_or_400(request, PromoCreateBody)
+    max_activations = body.max_activations
+
+    valid_until = None
+    if body.valid_days:
+        try:
+            valid_until = datetime.now(UTC) + timedelta(days=int(body.valid_days))
+        except (TypeError, ValueError):
+            return _error(400, "invalid_valid_days")
+
+    settings = get_settings(request)
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        try:
+            promo = await PromoCodeService.issue_code(
+                session,
+                effects=body.to_effects(),
+                code=body.code,
+                max_activations=max_activations,
+                valid_until=valid_until,
+                origin=body.origin,
+                created_by_admin_id=actor_id,
+                max_duration_multiplier=float(settings.PROMO_DURATION_MULTIPLIER_MAX),
+                max_traffic_multiplier=float(settings.PROMO_TRAFFIC_MULTIPLIER_MAX),
+            )
+        except ValueError as exc:
+            if str(exc) == "duplicate_code":
+                return _error(409, "duplicate_code")
+            return _error(400, str(exc) or "invalid_effects")
+        await session.commit()
+        owners = await _owner_labels_for(session, promo)
+    return _ok({"promo": _serialize_promo_for_request(request, promo, owners)})
+
+
+async def admin_promo_update_route(request: web.Request) -> web.Response:
+    _require_admin_user_id(request)
+    promo_id = int(request.match_info["promo_id"])
+    body = await parse_body_or_400(request, PromoUpdateBody)
+    update_data: dict[str, Any] = {}
+    fields_set = body.model_fields_set
+    if "is_active" in fields_set:
+        update_data["is_active"] = bool(body.is_active)
+    if "bonus_days" in fields_set and body.bonus_days is not None:
+        update_data["bonus_days"] = int(body.bonus_days)
+    for field in ("regular_traffic_gb", "premium_traffic_gb"):
+        if field in fields_set:
+            update_data[field] = getattr(body, field)
+    if "bonus_requires_payment" in fields_set:
+        update_data["bonus_requires_payment"] = bool(body.bonus_requires_payment)
+    for field in (
+        "discount_percent",
+        "duration_multiplier",
+        "traffic_multiplier",
+        "applies_to",
+        "min_subscription_months",
+        "min_subscription_days",
+        "min_traffic_gb",
+        "origin",
+    ):
+        if field in fields_set:
+            update_data[field] = getattr(body, field)
+    if "max_activations" in fields_set and body.max_activations is not None:
+        update_data["max_activations"] = int(body.max_activations)
+    if "clear_valid_until" in fields_set and bool(body.clear_valid_until):
+        update_data["valid_until"] = None
+    elif "valid_until" in fields_set:
+        update_data["valid_until"] = body.valid_until
+
+    if "min_subscription_days" in update_data:
+        update_data["min_subscription_months"] = None
+    elif "min_subscription_months" in update_data:
+        update_data["min_subscription_days"] = None
+    if not update_data:
+        return _error(400, "no_changes")
+
+    settings = get_settings(request)
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        current = await promo_code_dal.get_promo_code_by_id(session, promo_id)
+        if not current:
+            return _error(404, "not_found")
+        if "max_activations" in update_data and int(update_data["max_activations"]) < int(
+            current.current_activations or 0
+        ):
+            return _error(400, "max_activations_below_current")
+        effect_fields = {
+            "bonus_days",
+            "regular_traffic_gb",
+            "premium_traffic_gb",
+            "discount_percent",
+            "duration_multiplier",
+            "traffic_multiplier",
+            "bonus_requires_payment",
+            "applies_to",
+            "min_subscription_months",
+            "min_subscription_days",
+            "min_traffic_gb",
+        }
+        should_validate_effects = bool(effect_fields & update_data.keys()) or (
+            update_data.get("is_active") is True
+        )
+        if should_validate_effects:
+            merged = {
+                "bonus_days": getattr(current, "bonus_days", 0),
+                "regular_traffic_gb": getattr(current, "regular_traffic_gb", None),
+                "premium_traffic_gb": getattr(current, "premium_traffic_gb", None),
+                "discount_percent": getattr(current, "discount_percent", None),
+                "duration_multiplier": getattr(current, "duration_multiplier", None),
+                "traffic_multiplier": getattr(current, "traffic_multiplier", None),
+                "bonus_requires_payment": getattr(current, "bonus_requires_payment", False),
+                "applies_to": getattr(current, "applies_to", "all"),
+                "min_subscription_months": getattr(current, "min_subscription_months", None),
+                "min_subscription_days": getattr(current, "min_subscription_days", None),
+                "min_traffic_gb": getattr(current, "min_traffic_gb", None),
+            }
+            merged.update({key: value for key, value in update_data.items() if key in merged})
+            try:
+                validate_effects(
+                    PromoEffects.from_payload(merged),
+                    max_duration_multiplier=float(settings.PROMO_DURATION_MULTIPLIER_MAX),
+                    max_traffic_multiplier=float(settings.PROMO_TRAFFIC_MULTIPLIER_MAX),
+                )
+            except ValueError as exc:
+                return _error(400, str(exc) or "invalid_effects")
+        promo = await promo_code_dal.update_promo_code(session, promo_id, update_data)
+        await session.commit()
+        await session.refresh(promo)
+        owners = await _owner_labels_for(session, promo)
+    return _ok({"promo": _serialize_promo_for_request(request, promo, owners)})
+
+
+async def admin_promo_activations_route(request: web.Request) -> web.Response:
+    _require_admin_user_id(request)
+    promo_id = int(request.match_info["promo_id"])
+    page = max(0, int(request.query.get("page", 0) or 0))
+    page_size = min(100, max(1, int(request.query.get("page_size", 25) or 25)))
+    sort = str(request.query.get("sort") or "date_desc").lower()
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        promo = await promo_code_dal.get_promo_code_by_id(session, promo_id)
+        if not promo:
+            return _error(404, "not_found")
+        activations = await promo_code_dal.get_promo_activations_by_code_id(
+            session,
+            promo_id,
+            limit=page_size,
+            offset=page * page_size,
+            sort=sort,
+        )
+        total = await promo_code_dal.count_promo_activations_by_code_id(session, promo_id)
+        revenue = await promo_code_dal.get_promo_revenue_summary(session, promo_id)
+        rows = [
+            PromoActivationOut.from_orm_activation(activation).model_dump(mode="json")
+            for activation in activations
+        ]
+    return _ok(
+        {
+            "activations": rows,
+            "page": page,
+            "page_size": page_size,
+            "total": int(total or 0),
+            "revenue_summary": PromoRevenueSummaryOut(
+                payments_total=revenue.payments_total,
+                revenue_payments=revenue.revenue_payments,
+                currencies=[
+                    PromoRevenueCurrencyOut(
+                        currency=row.currency,
+                        amount=row.amount,
+                        payments=row.payments,
+                    )
+                    for row in revenue.currencies
+                ],
+            ).model_dump(mode="json"),
+        }
+    )
+
+
+async def admin_promo_delete_route(request: web.Request) -> web.Response:
+    _require_admin_user_id(request)
+    promo_id = int(request.match_info["promo_id"])
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        promo = await promo_code_dal.delete_promo_code(session, promo_id)
+        if not promo:
+            return _error(404, "not_found")
+        await session.commit()
+    return _ok({})

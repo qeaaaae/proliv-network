@@ -1,0 +1,427 @@
+<script lang="ts">
+  import { getTariffsStore } from "$lib/admin/context";
+  import { Checkbox, Input, Sortable } from "$components/ui/index.js";
+  import { Tabs, Switch } from "$components/ui/primitives.js";
+  import {
+    AdminButton,
+    AdminSelect,
+    AdminSettingCard,
+    AdminSettingsGroup,
+  } from "$components/patterns/admin/index.js";
+  import { Plus, Trash2, X } from "$components/ui/icons.js";
+  import { normalizeUuidList } from "$lib/admin/tariffDraft";
+  import { trafficStrategyOptions as buildTrafficStrategyOptions } from "$lib/admin/tariffSettings";
+  import type { PanelSquad, TariffDraft, TariffsCatalog } from "$lib/admin/stores/tariffsStore";
+  import {
+    addDraftSquad,
+    currencyPriceAriaLabel as formatCurrencyPriceAriaLabel,
+    currencyPriceColumnLabel as formatCurrencyPriceColumnLabel,
+    defaultCurrencyCode as getDefaultCurrencyCode,
+    draftInputHandler,
+    draftRowInputHandler,
+    draftRowKey,
+    moveDraftRowHandler,
+    tributeSectionVisible as isTributeSectionVisible,
+    panelSquadOptions as toPanelSquadOptions,
+    type DraftRow,
+    type ReorderHandler,
+    type SelectOption,
+    type TranslateFn,
+  } from "./tariffEditorTabUtils.js";
+  import TributeCatalogButton from "./TributeCatalogButton.svelte";
+  import TributeCatalogIssues from "./TributeCatalogIssues.svelte";
+  import TributeProductField from "./TributeProductField.svelte";
+  import type { TributeDraftRow } from "$lib/admin/tributeCatalog";
+  import TariffFlexibleLimitPackages from "./TariffFlexibleLimitPackages.svelte";
+
+  let { at }: { at: TranslateFn } = $props();
+
+  const tariffsStore = getTariffsStore();
+  const tariffsState = $derived(tariffsStore);
+  const tariffDraft: TariffDraft = $derived(tariffsState.tariffDraft);
+  const panelSquads: PanelSquad[] = $derived(tariffsState.panelSquads || []);
+  const tariffsCatalog: TariffsCatalog = $derived(tariffsState.tariffsCatalog);
+  const panelSquadOptions: SelectOption[] = $derived(toPanelSquadOptions(panelSquads));
+  const premiumTrafficStrategyOptions: SelectOption[] = $derived([
+    {
+      value: "",
+      label: at("tariff_premium_traffic_strategy_inherit", {}, "Inherit regular traffic strategy"),
+    },
+    ...buildTrafficStrategyOptions(at),
+  ]);
+  const defaultCurrencyCode = $derived(getDefaultCurrencyCode(tariffsCatalog));
+  const currencyPriceColumnLabel = $derived(
+    formatCurrencyPriceColumnLabel(at, defaultCurrencyCode)
+  );
+  const currencyPriceAriaLabel = $derived(formatCurrencyPriceAriaLabel(at, defaultCurrencyCode));
+  // Tribute mapping is provider configuration, so it stays out of the editor
+  // until the provider is switched on — unless this tariff still carries a
+  // mapping, which has to stay reachable to be cleared.
+  const showTribute = $derived(isTributeSectionVisible(tariffsState, tariffDraft));
+  const movePremiumTopupRow: ReorderHandler = moveDraftRowHandler(tariffsStore, "premiumTopupRows");
+
+  function addPremiumSquad(value: string): void {
+    addDraftSquad(tariffsStore, "premiumSquadUuids", value);
+  }
+
+  const premiumProductRows = $derived(tariffDraft.premiumTopupRows as TributeDraftRow[]);
+
+  function addPremiumTopupRow(): void {
+    tariffsStore.addDraftRow("premiumTopupRows", {
+      gb: 10,
+      price: "",
+      stars: "",
+      tribute_product_id: "",
+      tribute_product_link: "",
+    });
+  }
+</script>
+
+<Tabs.Content value="premium" class="admin-tabs-content">
+  <AdminSettingsGroup
+    title={at("tariff_premium_head", {}, "Premium access and a separate traffic counter")}
+    description={at(
+      "tariff_premium_subhead",
+      {},
+      "Premium squads give the user access to faster/premium nodes; their traffic is counted separately from main traffic so it can be limited or sold separately"
+    )}
+  >
+    <AdminSettingCard
+      title={at("tariff_label_premium_name_ru", {}, "Premium section name, RU")}
+      description={at(
+        "tariff_hint_premium_name_ru",
+        {},
+        'This text replaces "Premium servers" in the account, top-ups, and limit cards.'
+      )}
+    >
+      <Input
+        class="input"
+        type="text"
+        placeholder={at("tariff_placeholder_premium_name_ru", {}, "Premium servers")}
+        value={tariffDraft.premiumNameRu}
+        oninput={draftInputHandler(tariffsStore, "premiumNameRu")}
+      />
+    </AdminSettingCard>
+    <AdminSettingCard
+      title={at("tariff_label_premium_name_en", {}, "Premium section name, EN")}
+      description={at("tariff_hint_premium_name_en", {}, "Optional for the English interface.")}
+    >
+      <Input
+        class="input"
+        type="text"
+        placeholder={at("tariff_placeholder_premium_name_en", {}, "Premium servers")}
+        value={tariffDraft.premiumNameEn}
+        oninput={draftInputHandler(tariffsStore, "premiumNameEn")}
+      />
+    </AdminSettingCard>
+    <AdminSettingCard
+      title={at("tariff_label_premium_squads", {}, "Premium Internal Squads")}
+      description={at(
+        "tariff_hint_premium_squads",
+        {},
+        "Remnawave squads available only to owners of this tariff. Traffic is counted by their accessible nodes"
+      )}
+      alignStart
+    >
+      <div class="tariff-setting-control-stack">
+        <AdminSelect
+          bind:value={tariffsStore.selectedPremiumSquad}
+          items={panelSquadOptions}
+          placeholder={at("btn_add_premium_squad", {}, "Add premium squad")}
+          ariaLabel={at("btn_add_premium_squad", {}, "Add premium squad")}
+          onValueChange={addPremiumSquad}
+        />
+        <div class="admin-chip-list">
+          {#each normalizeUuidList(tariffDraft.premiumSquadUuids) as uuid}
+            <button
+              type="button"
+              class="admin-chip"
+              onclick={() => tariffsStore.removeSquadFromDraft("premiumSquadUuids", uuid)}
+            >
+              {tariffsStore.squadLabel(uuid)}
+              <X size={12} />
+            </button>
+          {/each}
+        </div>
+      </div>
+    </AdminSettingCard>
+    <AdminSettingCard
+      title={at("tariff_label_premium_traffic_limit", {}, "Premium traffic limit per period, GB")}
+      description={at(
+        "tariff_hint_premium_traffic_limit",
+        {},
+        "How many GB through premium squads are included in one premium period. 0 means premium access starts only after a top-up"
+      )}
+    >
+      <div class="tariff-setting-control-stack">
+        <div class="premium-limit-input-row">
+          <Input
+            class="input"
+            type="number"
+            min="0"
+            step="0.1"
+            placeholder="50"
+            value={tariffDraft.premium_monthly_gb}
+            disabled={Boolean(tariffDraft.premium_unlimited)}
+            aria-label={at(
+              "tariff_label_premium_traffic_limit",
+              {},
+              "Premium traffic limit per period, GB"
+            )}
+            oninput={draftInputHandler(tariffsStore, "premium_monthly_gb")}
+          />
+          <label class="premium-limit-unlimited-option">
+            <Checkbox
+              checked={Boolean(tariffDraft.premium_unlimited)}
+              ariaLabel={at("tariff_label_premium_unlimited", {}, "Unlimited")}
+              onCheckedChange={(value) => tariffsStore.updateDraftField("premium_unlimited", value)}
+            />
+            <span>{at("tariff_label_premium_unlimited", {}, "Unlimited")}</span>
+          </label>
+        </div>
+        <small class="admin-muted">
+          {at(
+            "tariff_hint_premium_unlimited",
+            {},
+            "Premium squads stay available without a traffic quota. Enabling this locks the GB field."
+          )}
+        </small>
+      </div>
+    </AdminSettingCard>
+    <AdminSettingCard
+      title={at("tariff_label_premium_traffic_strategy", {}, "Premium traffic reset strategy")}
+      description={at(
+        "tariff_hint_premium_traffic_strategy",
+        {},
+        "By default premium traffic follows the effective regular strategy. Choose a value to reset the premium quota independently; for example, regular traffic can use NO_RESET while premium traffic resets monthly."
+      )}
+      alignStart
+    >
+      <div class="tariff-setting-control-stack">
+        <AdminSelect
+          value={String(tariffDraft.premium_traffic_limit_strategy || "")}
+          items={premiumTrafficStrategyOptions}
+          placeholder={at(
+            "tariff_premium_traffic_strategy_inherit",
+            {},
+            "Inherit regular traffic strategy"
+          )}
+          ariaLabel={at(
+            "tariff_label_premium_traffic_strategy",
+            {},
+            "Premium traffic reset strategy"
+          )}
+          onValueChange={(value) =>
+            tariffsStore.updateDraftField("premium_traffic_limit_strategy", value)}
+        />
+        {#if tariffDraft.premium_traffic_limit_strategy === "MONTH_ROLLING"}
+          <small class="admin-muted">
+            {at(
+              "tariff_hint_premium_traffic_strategy_month_rolling",
+              {},
+              "Core calculates this premium cycle from the subscription start, independently of Remnawave reset dates. Existing subscriptions are re-anchored on the next premium sync."
+            )}
+          </small>
+        {/if}
+      </div>
+    </AdminSettingCard>
+  </AdminSettingsGroup>
+
+  {#if normalizeUuidList(tariffDraft.premiumSquadUuids).length && !tariffDraft.premium_unlimited}
+    <TariffFlexibleLimitPackages
+      {at}
+      baseUnits={Number(tariffDraft.premium_monthly_gb || 0)}
+      currencyCode={defaultCurrencyCode}
+      premium
+    />
+  {/if}
+
+  <section class="admin-editor-section">
+    <header class="admin-editor-section-head">
+      <div class="admin-editor-section-title">
+        <strong>{at("tariff_premium_topup_title", {}, "Premium traffic top-up")}</strong>
+        <small
+          >{at(
+            "tariff_premium_topup_subtitle",
+            {},
+            "Packages that extend the premium limit for the current period when the user runs out"
+          )}</small
+        >
+      </div>
+      <div class="admin-editor-section-actions">
+        {#if showTribute}
+          <TributeCatalogButton {at} />
+        {/if}
+        <AdminButton size="sm" onclick={addPremiumTopupRow}
+          ><Plus size={12} /> {at("tariff_btn_package", {}, "Package")}</AdminButton
+        >
+      </div>
+    </header>
+    <AdminSettingCard
+      title={at("tariff_premium_topup_always_label", {}, "Top-up always available")}
+      description={at(
+        "tariff_premium_topup_always_hint",
+        {},
+        "By default, premium traffic top-up appears to the user (in the mini app and bot menu) after at least 80% of the premium limit is used. Enable this to show the offer regardless of usage percentage."
+      )}
+    >
+      <div class="admin-setting-switch">
+        <Switch.Root
+          aria-label={at("tariff_premium_topup_always_label", {}, "Top-up always available")}
+          checked={Boolean(tariffDraft.premium_topup_always_available)}
+          onCheckedChange={(value) =>
+            tariffsStore.updateDraftField("premium_topup_always_available", value)}
+          class="admin-switch-root"
+        >
+          <Switch.Thumb class="admin-switch-thumb" />
+        </Switch.Root>
+        <span>
+          {tariffDraft.premium_topup_always_available
+            ? at("enabled", {}, "Enabled")
+            : at("disabled", {}, "Disabled")}
+        </span>
+      </div>
+    </AdminSettingCard>
+    {#if showTribute}
+      <p class="admin-muted">
+        {at(
+          "tariff_tribute_products_hint",
+          {},
+          "Optional. Map each fixed traffic package to a Tribute Digital Product. Configure its price in Tribute to match this package; the local price is not sent to Tribute"
+        )}
+      </p>
+      <TributeCatalogIssues {at} rows={premiumProductRows} mode="product" />
+    {/if}
+    {#if tariffDraft.premiumTopupRows.length}
+      <div class="admin-row-editor">
+        <div
+          class="admin-row-editor-line {showTribute
+            ? 'admin-row-editor-tribute-product'
+            : 'admin-row-editor-package'} admin-row-editor-header"
+        >
+          <span></span>
+          <span>{at("tariff_col_volume_gb", {}, "Volume, GB")}</span>
+          <span>{currencyPriceColumnLabel}</span>
+          <span>{at("tariff_col_price_stars_full", {}, "⭐ Stars")}</span>
+          {#if showTribute}
+            <span>{at("tariff_col_tribute_product_id", {}, "Tribute product ID")}</span>
+            <span>{at("tariff_col_tribute_product_link", {}, "Tribute product link")}</span>
+          {/if}
+          <span></span>
+        </div>
+        <Sortable
+          items={tariffDraft.premiumTopupRows}
+          class={`admin-row-editor-line ${showTribute ? "admin-row-editor-tribute-product" : "admin-row-editor-package"}`}
+          getKey={draftRowKey}
+          handleLabel={at("tariff_package_reorder", {}, "Drag to reorder")}
+          onReorder={movePremiumTopupRow}
+        >
+          {#snippet children(row: DraftRow, index: number)}
+            <span class="admin-row-editor-mobile-label" aria-hidden="true"
+              >{at("tariff_col_volume_gb", {}, "Volume, GB")}</span
+            >
+            <Input
+              class="input"
+              type="number"
+              min="0.1"
+              step="0.1"
+              placeholder="10"
+              value={row.gb}
+              oninput={draftRowInputHandler(tariffsStore, "premiumTopupRows", index, "gb")}
+              aria-label={at("tariff_col_volume_gb", {}, "Volume, GB")}
+            />
+            <span class="admin-row-editor-mobile-label" aria-hidden="true"
+              >{currencyPriceColumnLabel}</span
+            >
+            <Input
+              class="input"
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="199"
+              value={row.price}
+              oninput={draftRowInputHandler(tariffsStore, "premiumTopupRows", index, "price")}
+              aria-label={currencyPriceAriaLabel}
+            />
+            <span class="admin-row-editor-mobile-label" aria-hidden="true"
+              >{at("tariff_col_price_stars_full", {}, "⭐ Stars")}</span
+            >
+            <Input
+              class="input"
+              type="number"
+              min="0"
+              step="1"
+              placeholder="100"
+              value={row.stars}
+              oninput={draftRowInputHandler(tariffsStore, "premiumTopupRows", index, "stars")}
+              aria-label={at("tariff_label_price_stars", {}, "⭐ Stars")}
+            />
+            {#if showTribute}
+              <span class="admin-row-editor-mobile-label" aria-hidden="true"
+                >{at("tariff_col_tribute_product_id", {}, "Tribute product ID")}</span
+              >
+              <TributeProductField {at} field="premiumTopupRows" {index} {row} />
+              <span class="admin-row-editor-mobile-label" aria-hidden="true"
+                >{at("tariff_col_tribute_product_link", {}, "Tribute product link")}</span
+              >
+              <Input
+                class="input"
+                type="url"
+                placeholder={at(
+                  "tariff_placeholder_tribute_product_link",
+                  {},
+                  "https://t.me/tribute/app?startapp=..."
+                )}
+                value={row.tribute_product_link}
+                oninput={draftRowInputHandler(
+                  tariffsStore,
+                  "premiumTopupRows",
+                  index,
+                  "tribute_product_link"
+                )}
+                aria-label={at("tariff_label_tribute_product_link", {}, "Tribute product link")}
+              />
+            {/if}
+            <AdminButton
+              size="sm"
+              variant="danger"
+              onclick={() => tariffsStore.removeDraftRow("premiumTopupRows", index)}
+              aria-label={at("btn_delete", {}, "Delete")}><Trash2 size={13} /></AdminButton
+            >
+          {/snippet}
+        </Sortable>
+      </div>
+    {/if}
+  </section>
+</Tabs.Content>
+
+<style>
+  .premium-limit-input-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.75rem;
+    align-items: center;
+  }
+
+  .tariff-setting-control-stack {
+    display: grid;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .premium-limit-unlimited-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-height: 2.5rem;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  @media (max-width: 640px) {
+    .premium-limit-input-row {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

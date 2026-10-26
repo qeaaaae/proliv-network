@@ -1,0 +1,804 @@
+import json
+import logging
+import time
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any
+
+from aiogram import Bot
+from aiohttp import web
+from sqlalchemy.orm import sessionmaker
+
+from bot.middlewares.i18n import JsonI18n
+from bot.utils.http_transport import fetch_json
+from bot.utils.outbound_network import OutboundPolicy, approved_endpoints
+from config.settings import Settings
+from db.dal import payment_dal
+
+from ..base import (
+    normalize_payment_currency_code,
+    parse_supported_currency_codes,
+    provider_runtime_enabled,
+)
+from ..shared import (
+    HttpClientMixin,
+    PaymentSuccessRequest,
+    check_webhook_source_ip,
+    constant_time_compare,
+    finalize_successful_payment,
+    first_value,
+    lookup_payment_by_order_or_provider_id,
+    notify_user_payment_failed,
+    payment_amount_matches,
+    payment_units_for_activation,
+)
+from .config import (
+    _FAILED_EVENTS,
+    _SUCCESS_EVENTS,
+    PaykillaConfig,
+    _config_min_payment_amount,
+    _config_min_payment_currency,
+    _debug_invoice_body,
+    _decimal_from_api,
+    _exchange_rate_url_for,
+    _invoice_text,
+    _invoice_type_for,
+    _payment_currencies,
+    _response_invoice_data,
+    _sign_query,
+    _signature_preview,
+    _target_invoice_currency,
+    _webhook_signature,
+    format_paykilla_amount,
+    paykilla_amount_places,
+)
+
+if TYPE_CHECKING:
+    from bot.services.referral_service import ReferralService
+    from bot.services.subscription_service_impl.core import SubscriptionService
+else:
+    ReferralService = object
+    SubscriptionService = object
+
+logger = logging.getLogger(__name__)
+
+
+class PaykillaService(HttpClientMixin):
+    def __init__(
+        self,
+        *,
+        bot: Bot,
+        settings: Settings,
+        config: PaykillaConfig,
+        i18n: JsonI18n,
+        async_session_factory: sessionmaker,
+        subscription_service: SubscriptionService,
+        referral_service: ReferralService,
+        default_return_url: str,
+    ):
+        self.bot = bot
+        self.settings = settings
+        self.config = config
+        self.i18n = i18n
+        self.async_session_factory = async_session_factory
+        self.subscription_service = subscription_service
+        self.referral_service = referral_service
+        self._default_return_url = default_return_url
+        self._exchange_rate_cache: dict[tuple[str, str, str], tuple[float, Decimal]] = {}
+        self._currency_cache: tuple[float, list[dict[str, Any]]] = (0, [])
+
+        self._init_http_client(total_timeout=lambda: self.settings.PAYMENT_REQUEST_TIMEOUT_SECONDS)
+        if not self.configured:
+            logger.warning(
+                "PaykillaService initialized but not fully configured. Payments disabled."
+            )
+
+    @property
+    def configured(self) -> bool:
+        return bool(provider_runtime_enabled(self.config) and self.api_key and self.secret_key)
+
+    @property
+    def base_url(self) -> str:
+        return (self.config.BASE_URL or "https://account-api.paykilla.com").rstrip("/")
+
+    @property
+    def widget_url(self) -> str:
+        return (self.config.WIDGET_URL or "https://gopay.paykilla.com").rstrip("/")
+
+    @property
+    def api_key(self) -> str:
+        return (self.config.API_KEY or "").strip()
+
+    @property
+    def secret_key(self) -> str:
+        return (self.config.SECRET_KEY or "").strip()
+
+    @property
+    def currency(self) -> str:
+        return normalize_payment_currency_code(self.config.CURRENCY or "USD")
+
+    @property
+    def verify_webhook_signature(self) -> bool:
+        return self.config.VERIFY_WEBHOOK_SIGNATURE
+
+    def _signed_invoice_url(self) -> str:
+        timestamp_ms = int(time.time() * 1000)
+        recv_window_ms = int(self.config.RECV_WINDOW_MS)
+        query, signature = _sign_query(timestamp_ms, recv_window_ms, self.secret_key)
+        return f"{self.base_url}/api/v2/invoice?{query}&signature={signature}"
+
+    def _signed_invoice_details_url(self, invoice_id: str) -> str:
+        timestamp_ms = int(time.time() * 1000)
+        recv_window_ms = int(self.config.RECV_WINDOW_MS)
+        query, signature = _sign_query(timestamp_ms, recv_window_ms, self.secret_key)
+        return f"{self.base_url}/api/v2/invoice/{invoice_id}?{query}&signature={signature}"
+
+    def _signed_currency_url(self) -> str:
+        timestamp_ms = int(time.time() * 1000)
+        recv_window_ms = int(self.config.RECV_WINDOW_MS)
+        query, signature = _sign_query(timestamp_ms, recv_window_ms, self.secret_key)
+        return f"{self.base_url}/api/v2/currency?{query}&signature={signature}"
+
+    def _exchange_rate_url(self, source_currency: str, target_currency: str) -> str:
+        return _exchange_rate_url_for(self.config, source_currency, target_currency)
+
+    async def _exchange_rate(self, source_currency: str, target_currency: str) -> Decimal:
+        source_currency = normalize_payment_currency_code(source_currency)
+        target_currency = normalize_payment_currency_code(target_currency)
+        if source_currency == target_currency:
+            return Decimal("1")
+
+        url = self._exchange_rate_url(source_currency, target_currency)
+        cache_key = (url, source_currency, target_currency)
+        cache_seconds = int(self.config.EXCHANGE_RATE_CACHE_SECONDS)
+        now = time.time()
+        cache = self._exchange_rate_cache
+        cached = cache.get(cache_key)
+        if cached and now - cached[0] < cache_seconds:
+            return cached[1]
+
+        response_data = await fetch_json(
+            url,
+            total_seconds=self.settings.PAYMENT_REQUEST_TIMEOUT_SECONDS,
+            policy=OutboundPolicy(approved_endpoints([self.config._trusted_exchange_rate_url])),
+        )
+        if not isinstance(response_data, dict) or response_data.get("result") != "success":
+            raise ValueError("exchange_rate_unavailable")
+        rates = response_data.get("rates")
+        target_rate = rates.get(target_currency) if isinstance(rates, dict) else None
+        rate = _decimal_from_api(target_rate)
+        if rate is None or rate <= 0:
+            raise ValueError("exchange_rate_missing")
+
+        cache[cache_key] = (now, rate)
+        return rate
+
+    async def _paykilla_currencies(self) -> list[dict[str, Any]]:
+        cache_seconds = int(self.config.EXCHANGE_RATE_CACHE_SECONDS)
+        now = time.time()
+        cached_at, cached_data = getattr(self, "_currency_cache", (0, []))
+        if cached_data and now - cached_at < cache_seconds:
+            return cached_data
+
+        headers = {"X-API-KEY": self.api_key}
+        session = await self._get_session()
+        try:
+            async with session.get(self._signed_currency_url(), headers=headers) as response:
+                response_text = await response.text()
+                try:
+                    response_data = json.loads(response_text) if response_text else []
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "Paykilla currency metadata request returned invalid JSON: %s",
+                        response_text,
+                    )
+                    return cached_data
+                if response.status != 200 or not isinstance(response_data, list):
+                    logger.warning(
+                        "Paykilla currency metadata request failed (status=%s, body=%s)",
+                        response.status,
+                        response_data,
+                    )
+                    return cached_data
+        except Exception:
+            logger.exception("Paykilla currency metadata request failed.")
+            return cached_data
+
+        self._currency_cache = (now, response_data)
+        return response_data
+
+    async def _currency_info_for(self, currency: str) -> dict[str, Any] | None:
+        currency = normalize_payment_currency_code(currency)
+        for item in await self._paykilla_currencies():
+            if not isinstance(item, dict):
+                continue
+            if normalize_payment_currency_code(item.get("ticker"), default="") == currency:
+                return item
+        return None
+
+    async def _invoice_amount_bounds_error(
+        self, *, amount: Decimal, currency: str
+    ) -> dict[str, Any] | None:
+        info = await self._currency_info_for(currency)
+        if not info:
+            return None
+        minimum = _decimal_from_api(info.get("invoiceMin"))
+        maximum = _decimal_from_api(info.get("invoiceMax"))
+        if minimum is not None and amount < minimum:
+            return {
+                "message": "invoice_amount_below_minimum",
+                "currency": currency,
+                "amount": str(amount),
+                "minimum": str(format_paykilla_amount(minimum, currency)),
+            }
+        if maximum is not None and amount > maximum:
+            return {
+                "message": "invoice_amount_above_maximum",
+                "currency": currency,
+                "amount": str(amount),
+                "maximum": str(format_paykilla_amount(maximum, currency)),
+            }
+        return None
+
+    async def _invoice_amount_and_currency(
+        self, *, amount: float, payment_currency: str
+    ) -> tuple[Decimal, str]:
+        payment_currency = normalize_payment_currency_code(payment_currency or self.currency)
+        invoice_currency = _target_invoice_currency(self.config, payment_currency)
+        invoice_amount = format_paykilla_amount(amount, payment_currency)
+        if invoice_currency == payment_currency:
+            return invoice_amount, invoice_currency
+
+        rate = await self._exchange_rate(payment_currency, invoice_currency)
+        converted_amount = format_paykilla_amount(invoice_amount * rate, invoice_currency)
+        logger.info(
+            "Paykilla invoice currency conversion: payment=%s %s, invoice=%s %s, rate=%s",
+            invoice_amount,
+            payment_currency,
+            converted_amount,
+            invoice_currency,
+            rate,
+        )
+        return converted_amount, invoice_currency
+
+    async def _configured_minimum_error(
+        self, *, amount: float, payment_currency: str
+    ) -> dict[str, Any] | None:
+        min_amount = _config_min_payment_amount(self.config)
+        if min_amount <= 0:
+            return None
+        min_currency = _config_min_payment_currency(self.config)
+        payment_currency = normalize_payment_currency_code(payment_currency)
+        payment_amount = format_paykilla_amount(amount, payment_currency)
+        if payment_currency == min_currency:
+            comparable_amount = payment_amount
+        else:
+            rate = await self._exchange_rate(payment_currency, min_currency)
+            comparable_amount = format_paykilla_amount(payment_amount * rate, min_currency)
+        if comparable_amount >= min_amount:
+            return None
+        return {
+            "message": "payment_amount_below_minimum",
+            "currency": payment_currency,
+            "amount": str(payment_amount),
+            "minimum": str(format_paykilla_amount(min_amount, min_currency)),
+            "minimum_currency": min_currency,
+            "converted_amount": str(comparable_amount),
+        }
+
+    def _invoice_body(
+        self,
+        *,
+        payment_db_id: int,
+        amount: Any,
+        currency: str | None,
+        description: str,
+    ) -> dict[str, Any]:
+        currency_code = normalize_payment_currency_code(currency or self.currency)
+        invoice_text = _invoice_text(getattr(self.settings, "WEBAPP_TITLE", None), payment_db_id)
+        body: dict[str, Any] = {
+            "type": _invoice_type_for(self.config, currency_code),
+            "purpose": invoice_text,
+            "currency": currency_code,
+            "totalPrice": str(format_paykilla_amount(amount, currency_code)),
+            "paymentCurrencies": _payment_currencies(self.config),
+            "clientOrderId": str(payment_db_id),
+            "userPaysServiceFee": bool(self.config.USER_PAYS_SERVICE_FEE),
+            "userPaysNetworkFee": bool(self.config.USER_PAYS_NETWORK_FEE),
+            "description": invoice_text,
+        }
+        if self.config.LIFETIME_SECONDS:
+            expires_at = datetime.now(UTC) + timedelta(seconds=int(self.config.LIFETIME_SECONDS))
+            body["expiredAt"] = expires_at.isoformat().replace("+00:00", "Z")
+        return body
+
+    async def create_payment_link(
+        self,
+        *,
+        payment_db_id: int,
+        amount: float,
+        currency: str | None,
+        description: str,
+        url_callback: str | None = None,
+    ) -> tuple[bool, dict[str, Any]]:
+        if not self.configured:
+            logger.error("PaykillaService is not configured. Cannot create payment link.")
+            return False, {"message": "service_not_configured"}
+
+        currency_code = normalize_payment_currency_code(currency or self.currency)
+        supported = parse_supported_currency_codes(self.config.SUPPORTED_CURRENCIES)
+        if supported and currency_code not in supported:
+            return False, {
+                "message": "unsupported_currency",
+                "currency": currency_code,
+                "supported_currencies": list(supported),
+            }
+
+        try:
+            minimum_error = await self._configured_minimum_error(
+                amount=amount,
+                payment_currency=currency_code,
+            )
+            if minimum_error:
+                logger.error(
+                    "Paykilla create_payment_link: payment amount below configured minimum "
+                    "(details=%s)",
+                    minimum_error,
+                )
+                return False, minimum_error
+            invoice_amount, invoice_currency = await self._invoice_amount_and_currency(
+                amount=amount,
+                payment_currency=currency_code,
+            )
+        except Exception as exc:
+            logger.exception(
+                "Paykilla create_payment_link: failed to resolve invoice currency "
+                "(amount=%s currency=%s target=%s).",
+                amount,
+                currency_code,
+                _target_invoice_currency(self.config, currency_code),
+            )
+            return False, {"message": str(exc) or "exchange_rate_unavailable"}
+
+        bounds_error = await self._invoice_amount_bounds_error(
+            amount=invoice_amount,
+            currency=invoice_currency,
+        )
+        if bounds_error:
+            logger.error(
+                "Paykilla create_payment_link: invoice amount violates PayKilla limits "
+                "(details=%s, payment_amount=%s, payment_currency=%s)",
+                bounds_error,
+                format_paykilla_amount(amount, currency_code),
+                currency_code,
+            )
+            return False, bounds_error
+
+        body = self._invoice_body(
+            payment_db_id=payment_db_id,
+            amount=invoice_amount,
+            currency=invoice_currency,
+            description=description,
+        )
+        headers = {
+            "X-API-KEY": self.api_key,
+            "Content-Type": "application/json",
+        }
+        session = await self._get_session()
+        try:
+            async with session.post(
+                self._signed_invoice_url(),
+                json=body,
+                headers=headers,
+            ) as response:
+                response_text = await response.text()
+                try:
+                    response_data = json.loads(response_text) if response_text else {}
+                except json.JSONDecodeError:
+                    logger.error("Paykilla create_payment_link: invalid JSON: %s", response_text)
+                    return False, {
+                        "status": response.status,
+                        "message": "invalid_json",
+                        "raw": response_text,
+                    }
+                invoice = _response_invoice_data(response_data)
+                invoice_id = first_value(invoice, "id")
+                if response.status not in {200, 201} or not invoice_id:
+                    logger.error(
+                        "Paykilla create_payment_link: API error "
+                        "(status=%s, body=%s, request_body=%s)",
+                        response.status,
+                        response_data,
+                        _debug_invoice_body(body),
+                    )
+                    return False, {"status": response.status, "message": response_data}
+                invoice["payment_url"] = f"{self.widget_url}/{invoice_id}"
+                return True, invoice
+        except Exception as exc:
+            logger.exception("Paykilla create_payment_link: request failed.")
+            return False, {"message": str(exc)}
+
+    async def get_invoice_details(self, invoice_id: str) -> tuple[bool, dict[str, Any]]:
+        if not self.configured:
+            return False, {"message": "service_not_configured"}
+
+        invoice_id = str(invoice_id or "").strip()
+        if not invoice_id:
+            return False, {"message": "missing_invoice_id"}
+
+        headers = {
+            "X-API-KEY": self.api_key,
+            "Content-Type": "application/json",
+        }
+        session = await self._get_session()
+        try:
+            async with session.get(
+                self._signed_invoice_details_url(invoice_id),
+                headers=headers,
+            ) as response:
+                response_text = await response.text()
+                try:
+                    response_data = json.loads(response_text) if response_text else {}
+                except json.JSONDecodeError:
+                    logger.error("Paykilla get_invoice_details: invalid JSON: %s", response_text)
+                    return False, {
+                        "status": response.status,
+                        "message": "invalid_json",
+                        "raw": response_text,
+                    }
+                invoice = _response_invoice_data(response_data)
+                if response.status != 200 or not first_value(invoice, "id"):
+                    logger.warning(
+                        "Paykilla get_invoice_details failed: id=%s status=%s body=%s",
+                        invoice_id,
+                        response.status,
+                        response_data,
+                    )
+                    return False, {"status": response.status, "message": response_data}
+                return True, invoice
+        except Exception as exc:
+            logger.exception("Paykilla get_invoice_details request failed: id=%s", invoice_id)
+            return False, {"message": str(exc)}
+
+    async def try_reuse_pending_invoice(self, payment: Any) -> str | None:
+        invoice_id = str(getattr(payment, "provider_payment_id", None) or "").strip()
+        if not invoice_id:
+            return None
+
+        success, data = await self.get_invoice_details(invoice_id)
+        if not success:
+            return None
+        if str(first_value(data, "id") or "") != invoice_id:
+            return None
+        if str(data.get("clientOrderId") or "") != str(payment.payment_id):
+            return None
+        if str(data.get("status") or "").strip().upper() != "PROCESSING":
+            return None
+        return f"{self.widget_url}/{invoice_id}"
+
+    def _webhook_url_for_request(self, request: web.Request) -> str | None:
+        configured = self.config.full_webhook_url(getattr(self.settings, "WEBHOOK_BASE_URL", None))
+        if configured:
+            return configured
+        try:
+            return f"{request.scheme}://{request.host}{request.path_qs}"
+        except Exception:
+            return None
+
+    async def _verify_success_invoice(
+        self,
+        *,
+        payment: Any,
+        invoice_id: str,
+        webhook_data: dict[str, Any],
+    ) -> tuple[bool, str]:
+        """Verify a paid webhook against the invoice held by PayKilla.
+
+        Local payments retain the price in the storefront currency, whereas a
+        PayKilla invoice may be converted into a configured invoice currency.
+        The provider invoice is therefore the durable source of the exact
+        amount and currency that must be present in a successful webhook.
+        """
+        invoice_id = str(invoice_id or "").strip()
+        if not invoice_id:
+            return False, "missing_invoice_id"
+
+        local_invoice_id = str(getattr(payment, "provider_payment_id", "") or "").strip()
+        if local_invoice_id and local_invoice_id != invoice_id:
+            logger.error(
+                "Paykilla webhook: invoice id mismatch for payment %s (expected=%s received=%s)",
+                payment.payment_id,
+                local_invoice_id,
+                invoice_id,
+            )
+            return False, "invoice_mismatch"
+
+        success, invoice = await self.get_invoice_details(invoice_id)
+        if not success:
+            logger.error(
+                "Paykilla webhook: cannot verify provider invoice %s for payment %s: %s",
+                invoice_id,
+                payment.payment_id,
+                invoice,
+            )
+            return False, "invoice_verification_unavailable"
+
+        if str(first_value(invoice, "id") or "") != invoice_id:
+            logger.error(
+                "Paykilla webhook: invoice details returned unexpected id for payment %s "
+                "(expected=%s received=%s)",
+                payment.payment_id,
+                invoice_id,
+                first_value(invoice, "id"),
+            )
+            return False, "invoice_mismatch"
+        if str(invoice.get("clientOrderId") or "") != str(payment.payment_id):
+            logger.error(
+                "Paykilla webhook: invoice client order mismatch for payment %s (received=%s)",
+                payment.payment_id,
+                invoice.get("clientOrderId"),
+            )
+            return False, "invoice_mismatch"
+
+        webhook_amount = first_value(webhook_data, "amount", "expectedAmount")
+        webhook_currency = str(webhook_data.get("currency") or "").strip()
+        invoice_amount = first_value(invoice, "totalPrice", "expectedAmount", "amount")
+        invoice_currency = str(invoice.get("currency") or "").strip()
+        if (
+            webhook_amount is None
+            or not webhook_currency
+            or invoice_amount is None
+            or not invoice_currency
+        ):
+            logger.error(
+                "Paykilla webhook: missing amount or currency while verifying payment %s "
+                "(webhook_amount=%s webhook_currency=%s invoice_amount=%s invoice_currency=%s)",
+                payment.payment_id,
+                webhook_amount,
+                webhook_currency,
+                invoice_amount,
+                invoice_currency,
+            )
+            return False, "missing_amount_or_currency"
+        if normalize_payment_currency_code(
+            webhook_currency, default=""
+        ) != normalize_payment_currency_code(
+            invoice_currency,
+            default="",
+        ):
+            logger.error(
+                "Paykilla webhook: currency mismatch for payment %s (invoice=%s webhook=%s)",
+                payment.payment_id,
+                invoice_currency,
+                webhook_currency,
+            )
+            return False, "currency_mismatch"
+        if not payment_amount_matches(
+            expected_amount=invoice_amount,
+            received_amount=webhook_amount,
+            places=paykilla_amount_places(invoice_currency),
+            allow_overpayment=True,
+        ):
+            logger.error(
+                "Paykilla webhook: amount mismatch for payment %s (invoice=%s webhook=%s)",
+                payment.payment_id,
+                invoice_amount,
+                webhook_amount,
+            )
+            return False, "amount_mismatch"
+        return True, ""
+
+    def _verify_webhook_signature(self, request: web.Request, raw_body: bytes) -> bool:
+        timestamp = str(request.headers.get("X-API-TIMESTAMP") or "").strip()
+        signature = str(request.headers.get("X-API-SIGN") or "").strip().lower()
+        recv_window_raw = str(request.headers.get("X-API-RECV-WINDOW") or "5000").strip()
+        api_key = str(request.headers.get("X-API-KEY") or "").strip()
+        if not timestamp or not signature:
+            return False
+        if api_key and not constant_time_compare(api_key, self.api_key):
+            logger.warning("Paykilla webhook: X-API-KEY does not match configured API key.")
+            return False
+        try:
+            timestamp_ms = int(timestamp)
+            recv_window_ms = int(recv_window_raw)
+        except ValueError:
+            return False
+        now_ms = int(time.time() * 1000)
+        if abs(now_ms - timestamp_ms) > max(recv_window_ms, 1000):
+            logger.warning(
+                "Paykilla webhook: timestamp outside recv window "
+                "(timestamp=%s now=%s recvWindow=%s).",
+                timestamp_ms,
+                now_ms,
+                recv_window_ms,
+            )
+            return False
+        webhook_url = self._webhook_url_for_request(request)
+        if not webhook_url:
+            logger.warning("Paykilla webhook: cannot resolve webhook URL for signature.")
+            return False
+        expected = _webhook_signature(
+            timestamp=timestamp,
+            method=request.method or "POST",
+            url=webhook_url,
+            raw_body=raw_body,
+            secret_key=self.secret_key,
+        )
+        if constant_time_compare(expected, signature):
+            return True
+        logger.warning(
+            "Paykilla webhook: invalid signature (received=%s expected=%s url=%s).",
+            _signature_preview(signature),
+            _signature_preview(expected),
+            webhook_url,
+        )
+        return False
+
+    async def webhook_route(self, request: web.Request) -> web.Response:
+        if not self.configured:
+            return web.Response(status=503, text="paykilla_disabled")
+
+        trusted = self.config.trusted_ips_list
+        ip_check = check_webhook_source_ip(
+            request,
+            trusted_ips=trusted,
+            trusted_proxies=self.settings.trusted_proxies,
+            allow_empty=True,
+        )
+        if not ip_check.allowed:
+            logger.warning(
+                "Paykilla webhook denied from unauthorized IP source "
+                "(client_ip=%s remote=%s x_forwarded_for=%s trusted_ip_count=%d).",
+                ip_check.client_ip,
+                request.remote,
+                request.headers.get("X-Forwarded-For"),
+                len(trusted),
+            )
+            return web.Response(status=403, text="forbidden")
+
+        raw_body = await request.read()
+        if self.verify_webhook_signature and not self._verify_webhook_signature(
+            request,
+            raw_body,
+        ):
+            return web.Response(status=403, text="invalid_signature")
+
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except Exception:
+            logger.exception("Paykilla webhook: failed to parse JSON.")
+            return web.Response(status=400, text="bad_request")
+
+        if not isinstance(payload, dict):
+            return web.Response(status=400, text="bad_request")
+
+        event_type = str(payload.get("eventType") or "").strip().upper()
+        data = payload.get("data")
+        if not event_type or not isinstance(data, dict):
+            logger.error("Paykilla webhook: missing event envelope fields: %s", payload)
+            return web.Response(status=400, text="missing_fields")
+
+        if event_type not in _SUCCESS_EVENTS and event_type not in _FAILED_EVENTS:
+            logger.info("Paykilla webhook: intermediate event '%s' ignored.", event_type)
+            return web.Response(text="status_ignored")
+
+        data_type = str(data.get("type") or "").strip().upper()
+        if data_type and data_type != "INVOICE":
+            logger.info(
+                "Paykilla webhook: non-invoice event '%s' ignored (type=%s).",
+                event_type,
+                data_type,
+            )
+            return web.Response(text="status_ignored")
+
+        invoice_id = str(data.get("id") or "").strip()
+        client_order_id = data.get("clientOrderId")
+
+        if not (invoice_id or client_order_id):
+            logger.error("Paykilla webhook: missing invoice ids: %s", payload)
+            return web.Response(status=400, text="missing_fields")
+
+        async with self.async_session_factory() as session:
+            payment = await lookup_payment_by_order_or_provider_id(
+                session,
+                providers="paykilla",
+                order_id_raw=client_order_id,
+                provider_payment_id=invoice_id or None,
+            )
+            if not payment:
+                logger.error(
+                    "Paykilla webhook: payment not found (clientOrderId=%s, invoice_id=%s)",
+                    client_order_id,
+                    invoice_id,
+                )
+                return web.Response(status=404, text="payment_not_found")
+
+            if payment.status == "succeeded" and event_type in _SUCCESS_EVENTS:
+                return web.Response(text="ok")
+
+            resolved_id = invoice_id or str(payment.payment_id)
+
+            if event_type in _SUCCESS_EVENTS:
+                verified, verification_error = await self._verify_success_invoice(
+                    payment=payment,
+                    invoice_id=invoice_id,
+                    webhook_data=data,
+                )
+                if not verified:
+                    if verification_error == "invoice_verification_unavailable":
+                        return web.Response(status=503, text=verification_error)
+                    return web.Response(status=400, text=verification_error)
+
+                try:
+                    claimed_payment = await payment_dal.claim_payment_finalization(
+                        session,
+                        payment.payment_id,
+                        provider_payment_id=resolved_id,
+                    )
+                except Exception:
+                    await session.rollback()
+                    logger.exception(
+                        "Paykilla webhook: failed to mark payment %s as succeeded.",
+                        resolved_id,
+                    )
+                    return web.Response(status=500, text="processing_error")
+
+                if claimed_payment is None:
+                    return web.Response(text="ok")
+                payment = claimed_payment
+
+                sale_mode = payment.sale_mode or (
+                    "traffic" if self.settings.traffic_sale_mode else "subscription"
+                )
+                payment_units = payment_units_for_activation(payment, sale_mode)
+
+                outcome = await finalize_successful_payment(
+                    PaymentSuccessRequest(
+                        bot=self.bot,
+                        settings=self.settings,
+                        i18n=self.i18n,
+                        session=session,
+                        subscription_service=self.subscription_service,
+                        referral_service=self.referral_service,
+                        payment=payment,
+                        user_id=payment.user_id,
+                        amount=float(payment.amount),
+                        currency=str(payment.currency),
+                        sale_mode=sale_mode,
+                        months=payment_units,
+                        traffic_amount=float(payment_units),
+                        provider_subscription="paykilla",
+                        provider_notification="paykilla",
+                        db_user=payment.user,
+                        log_prefix="Paykilla webhook",
+                    )
+                )
+                if outcome is None:
+                    return web.Response(status=500, text="processing_error")
+                return web.Response(text="ok")
+
+            if event_type in _FAILED_EVENTS:
+                try:
+                    await payment_dal.update_provider_payment_and_status(
+                        session,
+                        payment.payment_id,
+                        resolved_id,
+                        "failed",
+                    )
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
+                    logger.exception(
+                        "Paykilla webhook: failed to mark payment %s as failed.",
+                        resolved_id,
+                    )
+                    return web.Response(status=500, text="processing_error")
+                await notify_user_payment_failed(
+                    bot=self.bot,
+                    settings=self.settings,
+                    i18n=self.i18n,
+                    session=session,
+                    payment=payment,
+                )
+                return web.Response(text="ok")
+        return web.Response(text="status_ignored")

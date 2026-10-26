@@ -1,0 +1,168 @@
+from __future__ import annotations
+
+import asyncio
+import os
+from pathlib import Path
+from typing import cast
+
+import pytest
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from bot.handlers.admin.sync_admin_runner import perform_sync
+from bot.middlewares.i18n import JsonI18n
+from bot.services.panel_api_service import PanelApiService
+from config.settings import Settings
+from db.models import Subscription, User
+from tests.support.settings_stub import settings_stub
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SEEDED_TELEGRAM_IDS = (910000001, 910000002, 910000003)
+pytestmark = pytest.mark.skipif(
+    os.getenv("QA_REMNAWAVE_UPGRADE") != "1",
+    reason="requires the scheduled same-database Remnawave upgrade stand",
+)
+
+
+def _read_env(path: Path) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        result[key] = value
+    return result
+
+
+def _async_dsn() -> str:
+    dsn = os.getenv(
+        "QA_DB_DSN",
+        "postgresql://remnawave_minishop:remnawave_minishop@127.0.0.1:6768/remnawave_minishop",
+    )
+    return dsn.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+
+async def _verify_upgrade() -> None:
+    env = _read_env(Path(os.getenv("QA_ENV_FILE", str(REPO_ROOT / ".env.remnawave-dev"))))
+    settings = cast(
+        Settings,
+        settings_stub(
+            PANEL_API_URL=os.getenv("QA_REMNAWAVE_API_URL", "http://127.0.0.1:3000/api"),
+            PANEL_API_KEY=os.getenv("QA_REMNAWAVE_API_TOKEN") or env["REMNAWAVE_DEV_API_TOKEN"],
+            PANEL_WRITE_MODE="live",
+            PANEL_ALL_USERS_CACHE_TTL_SECONDS=0,
+            PANEL_USER_CACHE_TTL_SECONDS=0,
+            PANEL_DEVICES_CACHE_TTL_SECONDS=0,
+            parsed_user_squad_uuids=[],
+            parsed_user_external_squad_uuid=None,
+            REDIS_URL=None,
+            DATABASE_URL=_async_dsn(),
+        ),
+    )
+    service = PanelApiService(settings)
+    engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    sessions = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    i18n = JsonI18n(str(REPO_ROOT / "locales"), default="en")
+    try:
+        compatibility = await service.get_panel_api_compatibility(force_refresh=True)
+        assert compatibility.version is not None
+        assert compatibility.version.lstrip("v") == "3.4.5"
+
+        async with sessions() as session:
+            seeded_user_ids = list(
+                (
+                    await session.scalars(
+                        select(User.user_id).where(User.telegram_id.in_(SEEDED_TELEGRAM_IDS))
+                    )
+                ).all()
+            )
+            subscriptions_before = list(
+                (
+                    await session.execute(
+                        select(
+                            Subscription.subscription_id,
+                            Subscription.panel_user_uuid,
+                            Subscription.panel_subscription_uuid,
+                        ).where(Subscription.user_id.in_(seeded_user_ids))
+                    )
+                ).all()
+            )
+            subscription_ids_before = {row.subscription_id for row in subscriptions_before}
+            assert subscription_ids_before
+
+        async with sessions() as session:
+            result = await perform_sync(service, session, settings, i18n)
+            assert result["status"] == "completed", result["errors"]
+            assert result["errors"] == [], result
+
+            # Replay both partial states left by older application versions:
+            # a reconciled user with untouched subscriptions, then a repaired
+            # subscription user reference with its old subscription UUID.
+            for restore_user_reference in (True, False):
+                for original in subscriptions_before:
+                    payload = {"panel_subscription_uuid": original.panel_subscription_uuid}
+                    if restore_user_reference:
+                        payload["panel_user_uuid"] = original.panel_user_uuid
+                    await session.execute(
+                        update(Subscription)
+                        .where(Subscription.subscription_id == original.subscription_id)
+                        .values(**payload)
+                    )
+                await session.commit()
+                result = await perform_sync(service, session, settings, i18n)
+                assert result["status"] == "completed", result["errors"]
+                assert result["errors"] == [], result
+                current_ids = set(
+                    (
+                        await session.scalars(
+                            select(Subscription.subscription_id).where(
+                                Subscription.user_id.in_(seeded_user_ids)
+                            )
+                        )
+                    ).all()
+                )
+                assert current_ids == subscription_ids_before
+
+        async with sessions() as session:
+            users = list(
+                (
+                    await session.scalars(
+                        select(User).where(User.telegram_id.in_(SEEDED_TELEGRAM_IDS))
+                    )
+                ).all()
+            )
+            assert {user.telegram_id for user in users} == set(SEEDED_TELEGRAM_IDS)
+            assert all(str(user.panel_user_uuid or "").isdecimal() for user in users)
+
+            subscriptions = list(
+                (
+                    await session.scalars(
+                        select(Subscription).where(
+                            Subscription.user_id.in_([user.user_id for user in users])
+                        )
+                    )
+                ).all()
+            )
+            assert {subscription.subscription_id for subscription in subscriptions} == (
+                subscription_ids_before
+            )
+            subscription_refs = [
+                str(subscription.panel_subscription_uuid or "") for subscription in subscriptions
+            ]
+            assert all(subscription_refs)
+            assert len(set(subscription_refs)) == len(subscription_refs)
+            assert all(subscription.panel_user_uuid.isdecimal() for subscription in subscriptions)
+            active_subscriptions = [
+                subscription for subscription in subscriptions if subscription.is_active
+            ]
+            assert active_subscriptions
+    finally:
+        await service.close_session()
+        await engine.dispose()
+
+
+def test_same_database_2_8_1_to_3_4_5_upgrade_and_sync() -> None:
+    assert os.getenv("QA_REMNAWAVE_UPGRADE_FROM") == "2.8.1"
+    assert os.getenv("QA_REMNAWAVE_PRESET") == "3.4.5"
+    asyncio.run(_verify_upgrade())

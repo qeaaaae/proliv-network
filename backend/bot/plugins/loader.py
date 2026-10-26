@@ -1,0 +1,344 @@
+"""Discovery and invocation of application plugins.
+
+Plugins are discovered once per process through the ``minishop.plugins``
+entry point group and cached. Tests (or embedding code) can also register
+plugin instances programmatically with :func:`register`.
+
+A failing plugin never breaks the core: errors are logged and the plugin is
+skipped, unless ``PLUGINS_STRICT`` is enabled, in which case the error is
+re-raised so a deployment that requires the plugin fails fast.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from importlib import metadata
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from .packages import managed_entry_points, package_root
+from .spec import (
+    ENTRY_POINT_GROUP,
+    Plugin,
+    PluginContext,
+    QueueHandler,
+    WorkerTaskSpec,
+    validate_plugin_api_compatibility,
+)
+
+if TYPE_CHECKING:
+    from aiogram import Router
+    from aiohttp import web
+
+    from bot.middlewares.i18n import JsonI18n
+    from config.settings import Settings
+    from db.migrator import Migration
+
+logger = logging.getLogger(__name__)
+
+_builtin_plugins: list[Plugin] | None = None
+_discovered_plugins: list[Plugin] | None = None
+_registered_plugins: list[Plugin] = []
+
+
+def register(plugin: Plugin) -> None:
+    """Register a plugin instance programmatically (primarily for tests)."""
+    _registered_plugins.append(plugin)
+
+
+def reset_plugins() -> None:
+    """Drop the discovery cache and programmatic registrations (for tests)."""
+    global _builtin_plugins, _discovered_plugins
+    _builtin_plugins = None
+    _discovered_plugins = None
+    _registered_plugins.clear()
+    from .extensions.registry import ExtensionRegistry, set_registry
+
+    set_registry(ExtensionRegistry())
+    from bot.infra.grants import reset_grant_modifiers
+    from bot.infra.payment_events import reset_payment_purchase_resolvers
+    from bot.infra.pricing import reset_price_modifiers
+    from bot.infra.promo_policies import reset_promo_redemption_policies
+    from bot.services.entitlements import reset_entitlements
+
+    reset_grant_modifiers()
+    reset_payment_purchase_resolvers()
+    reset_price_modifiers()
+    reset_promo_redemption_policies()
+    reset_entitlements()
+
+
+def _coerce_plugin(loaded: object, entry_point_name: str) -> Plugin:
+    if isinstance(loaded, type):
+        loaded = loaded()
+    if not isinstance(loaded, Plugin):
+        raise TypeError(
+            f"Entry point {entry_point_name!r} in group {ENTRY_POINT_GROUP!r} must provide "
+            f"a Plugin subclass or instance, got {type(loaded).__name__}"
+        )
+    return loaded
+
+
+def _plugin_entry_points() -> metadata.EntryPoints:
+    """Return installed plugin entry points through a test-isolatable seam."""
+    return metadata.entry_points(group=ENTRY_POINT_GROUP)
+
+
+def _discover(settings: Settings) -> list[Plugin]:
+    plugins: list[Plugin] = []
+    try:
+        entry_points = _plugin_entry_points()
+    except Exception:
+        logger.exception("Failed to enumerate %s entry points", ENTRY_POINT_GROUP)
+        if settings.PLUGINS_STRICT:
+            raise
+        return plugins
+    managed = managed_entry_points(package_root())
+    bundled_names = {point.name for point in entry_points}
+    duplicates = bundled_names.intersection(point.name for point in managed)
+    if duplicates:
+        raise RuntimeError(f"Plugin is supplied by both image and package: {sorted(duplicates)}")
+    for entry_point in [*entry_points, *managed]:
+        try:
+            plugins.append(_coerce_plugin(entry_point.load(), entry_point.name))
+        except Exception:
+            logger.exception("Failed to load plugin from entry point %r", entry_point.name)
+            if settings.PLUGINS_STRICT or entry_point in managed:
+                raise
+    return plugins
+
+
+def _get_builtin_plugins() -> list[Plugin]:
+    """Built-in plugins ship with the application and are always active;
+    PLUGINS_ENABLED only gates externally installed plugins."""
+    global _builtin_plugins
+    if _builtin_plugins is None:
+        from .builtin import BUILTIN_PLUGINS
+
+        _builtin_plugins = [plugin_cls() for plugin_cls in BUILTIN_PLUGINS]
+    return _builtin_plugins
+
+
+def get_plugins(settings: Settings) -> list[Plugin]:
+    """Return active plugins: built-ins, then entry-point and registered ones."""
+    global _discovered_plugins
+    builtin = _get_builtin_plugins()
+    if not settings.PLUGINS_ENABLED or os.environ.get("MINISHOP_PLUGIN_SAFE_MODE") == "1":
+        plugins = list(builtin)
+        for plugin in plugins:
+            validate_plugin_api_compatibility(plugin)
+        return plugins
+    if _discovered_plugins is None:
+        _discovered_plugins = _discover(settings)
+        logger.info(
+            "Plugins active: %s",
+            ", ".join(
+                f"{plugin.name}=={plugin.version}"
+                for plugin in (*builtin, *_discovered_plugins, *_registered_plugins)
+            )
+            or "none",
+        )
+    plugins = [*builtin, *_discovered_plugins, *_registered_plugins]
+    for plugin in plugins:
+        validate_plugin_api_compatibility(plugin)
+    return plugins
+
+
+def _run_hook(
+    settings: Settings, plugin: Plugin, hook_name: str, *args: object, **kwargs: object
+) -> None:
+    try:
+        getattr(plugin, hook_name)(*args, **kwargs)
+    except Exception:
+        logger.exception("Plugin %r failed in %s; skipping it", plugin.name, hook_name)
+        if settings.PLUGINS_STRICT:
+            raise
+
+
+def run_setup(ctx: PluginContext) -> None:
+    """Invoke the general ``setup`` hook of every plugin."""
+    from .extensions.registry import ExtensionRegistry, set_registry
+
+    registry = ExtensionRegistry()
+    set_registry(registry)
+    for plugin in get_plugins(ctx.settings):
+        hook = "setup"
+        try:
+            plugin.setup(ctx)
+            hook = "extensions"
+            contributions = plugin.extensions(ctx)
+        except Exception:
+            logger.exception("Plugin %r failed in %s", plugin.name, hook)
+            if ctx.settings.PLUGINS_STRICT:
+                raise
+            continue
+        # Conflicts are configuration errors even in non-strict mode.
+        registry.register(plugin.name, plugin.version, contributions)
+    configure_entitlements(ctx)
+
+
+def configure_entitlements(ctx: PluginContext) -> None:
+    """Activate zero or one plugin-provided entitlements provider."""
+    from bot.services.entitlements import (
+        DefaultEntitlements,
+        EntitlementsProviderConflictError,
+        set_entitlements_provider,
+    )
+
+    # Clear any stale process-local provider before evaluating a new plugin
+    # configuration. A conflict below must fail closed rather than leave a
+    # previous provider active.
+    default_provider = DefaultEntitlements()
+    set_entitlements_provider(default_provider, source="core")
+    contributions = []
+    for plugin in get_plugins(ctx.settings):
+        try:
+            contributed = plugin.entitlements_provider()
+        except Exception:
+            logger.exception(
+                "Plugin %r failed in entitlements_provider; skipping it",
+                plugin.name,
+            )
+            if ctx.settings.PLUGINS_STRICT:
+                raise
+            continue
+        if contributed is None:
+            continue
+        contributions.append((plugin.name, contributed))
+
+    if len(contributions) > 1:
+        sources = ", ".join(name for name, _provider in contributions)
+        raise EntitlementsProviderConflictError(
+            f"Multiple authoritative entitlement providers are configured: {sources}"
+        )
+
+    if contributions:
+        source, provider = contributions[0]
+        set_entitlements_provider(provider, source=source)
+
+
+def setup_bot_plugins(ctx: PluginContext, *, user_root: Router, admin_root: Router) -> None:
+    """Let every plugin register its aiogram routers."""
+    for plugin in get_plugins(ctx.settings):
+        _run_hook(
+            ctx.settings,
+            plugin,
+            "setup_bot",
+            ctx,
+            user_root=user_root,
+            admin_root=admin_root,
+        )
+
+
+def setup_web_plugins(ctx: PluginContext, app: web.Application, *, scope: str) -> None:
+    """Let every plugin register its aiohttp routes on ``app``."""
+    for plugin in get_plugins(ctx.settings):
+        _run_hook(ctx.settings, plugin, "setup_web", ctx, app, scope=scope)
+
+
+def collect_worker_tasks(ctx: PluginContext) -> list[WorkerTaskSpec]:
+    """Gather background task specs from every plugin."""
+    specs: list[WorkerTaskSpec] = []
+    for plugin in get_plugins(ctx.settings):
+        try:
+            specs.extend(plugin.worker_tasks(ctx) or [])
+        except Exception:
+            logger.exception("Plugin %r failed in worker_tasks; skipping it", plugin.name)
+            if ctx.settings.PLUGINS_STRICT:
+                raise
+    return specs
+
+
+def collect_queue_handlers(
+    ctx: PluginContext,
+    *,
+    reserved: set[str],
+) -> dict[str, QueueHandler]:
+    """Gather webhook-queue handlers from plugins.
+
+    ``reserved`` holds provider names already taken by the core; a plugin
+    handler that clashes with a reserved or previously collected name is
+    rejected (fatal in strict mode).
+    """
+    handlers: dict[str, QueueHandler] = {}
+    for plugin in get_plugins(ctx.settings):
+        try:
+            contributed = plugin.queue_handlers(ctx) or {}
+        except Exception:
+            logger.exception("Plugin %r failed in queue_handlers; skipping it", plugin.name)
+            if ctx.settings.PLUGINS_STRICT:
+                raise
+            continue
+        for provider, handler in contributed.items():
+            if provider in reserved or provider in handlers:
+                message = (
+                    f"Plugin {plugin.name!r} tried to register queue handler for "
+                    f"provider {provider!r}, which is already taken"
+                )
+                logger.error(message)
+                if ctx.settings.PLUGINS_STRICT:
+                    raise ValueError(message)
+                continue
+            handlers[provider] = handler
+    return handlers
+
+
+def collect_migrations(settings: Settings) -> dict[str, list[Migration]]:
+    """Gather migration chains from plugins keyed by plugin name."""
+    chains: dict[str, list[Migration]] = {}
+    for plugin in get_plugins(settings):
+        try:
+            migrations = list(plugin.migrations() or [])
+        except Exception:
+            logger.exception("Plugin %r failed in migrations; skipping it", plugin.name)
+            if settings.PLUGINS_STRICT:
+                raise
+            continue
+        if not migrations:
+            continue
+        if plugin.name in chains:
+            message = f"Duplicate plugin name {plugin.name!r} in migration chains"
+            logger.error(message)
+            if settings.PLUGINS_STRICT:
+                raise ValueError(message)
+            continue
+        chains[plugin.name] = migrations
+    return chains
+
+
+def _read_locales_dir(path: Path) -> dict[str, dict[str, str]]:
+    locales: dict[str, dict[str, str]] = {}
+    for file in sorted(path.glob("*.json")):
+        try:
+            data = json.loads(file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            logger.exception("Failed to read plugin locale file %s", file)
+            continue
+        if isinstance(data, dict):
+            locales[file.stem] = {
+                str(key): str(value) for key, value in data.items() if isinstance(value, str)
+            }
+    return locales
+
+
+def apply_plugin_locales(settings: Settings, i18n: JsonI18n) -> None:
+    """Merge plugin locale files into the i18n catalog.
+
+    Plugin keys never override core keys; runtime overrides (DB/file) are
+    layered on top by the existing override mechanism regardless of order.
+    """
+    for plugin in get_plugins(settings):
+        try:
+            locales_dir = plugin.locales_dir()
+            if locales_dir is None:
+                continue
+            additions = _read_locales_dir(locales_dir)
+            if additions:
+                i18n.plugin_locale_groups[plugin.name] = tuple(plugin.locale_groups())
+                i18n.merge_base_locales(additions, source=plugin.name)
+        except Exception:
+            logger.exception("Plugin %r failed in locales_dir; skipping it", plugin.name)
+            if settings.PLUGINS_STRICT:
+                raise

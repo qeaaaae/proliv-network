@@ -1,0 +1,462 @@
+import logging
+from datetime import datetime
+from typing import Any, Protocol
+
+from aiogram import Bot
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from bot.infra.event_payloads import ReferralBonusGrantedPayload
+from bot.middlewares.i18n import JsonI18n
+from bot.services.partner_program_service import PartnerProgramService
+from bot.services.referral_accruals import enqueue_period_accrual
+from bot.services.registration_invite_gate import referral_program_enabled
+from bot.services.subscription_order_terms import read_subscription_terms
+from bot.utils.referral_links import build_bot_referral_link
+from config.settings import Settings
+from config.subscription_periods import days_to_legacy_months, legacy_months_to_days
+from db.dal import payment_dal, referral_stats_dal, subscription_dal, user_dal
+
+logger = logging.getLogger(__name__)
+
+
+class _SubscriptionServiceLike(Protocol):
+    async def has_active_subscription(self, session: Any, user_id: int) -> bool: ...
+
+    async def extend_active_subscription_days(
+        self,
+        session: Any,
+        user_id: int,
+        bonus_days: int,
+        reason: str,
+        tariff_key: str | None = None,
+    ) -> datetime | None: ...
+
+
+class ReferralService:
+    def __init__(
+        self,
+        settings: Settings,
+        subscription_service: _SubscriptionServiceLike,
+        bot: Bot | None,
+        i18n: JsonI18n | None,
+    ):
+        self.settings = settings
+        self.subscription_service = subscription_service
+        self.bot = bot
+        self.i18n = i18n
+
+    async def apply_referral_bonuses_for_payment(
+        self,
+        session: AsyncSession,
+        referee_user_id: int,
+        purchased_subscription_months: int,
+        current_payment_db_id: int | None = None,
+        skip_if_active_before_payment: bool = True,
+        tariff_key: str | None = None,
+        duration_days: int | None = None,
+        defer: bool = False,
+        recover: bool = False,
+        gift_id: int | None = None,
+    ) -> dict[str, Any]:
+
+        referee_final_end_date: datetime | None = None
+        referee_bonus_applied_days: int | None = None
+        inviter_bonus_successfully_applied = False
+        inviter_bonus_end_date: datetime | None = None
+        inviter_bonus_kind: str | None = None
+
+        try:
+            referee_user_model = await user_dal.get_user_by_id(session, referee_user_id)
+            if not referee_user_model:
+                return {"referee_bonus_applied_days": None, "referee_new_end_date": None}
+
+            inviter_user_id = (
+                referee_user_model.referred_by_id
+                if referral_program_enabled(self.settings)
+                else None
+            )
+            partner_config = getattr(self.settings, "partner_settings", None)
+            if (
+                inviter_user_id is not None
+                and bool(getattr(partner_config, "enabled", False))
+                and bool(getattr(partner_config, "referral_program_disabled", False))
+                and not await PartnerProgramService(
+                    self.settings
+                ).referral_program_enabled_for_user(session, user_id=inviter_user_id)
+            ):
+                inviter_user_id = None
+            partner_client_bonus = False
+            if inviter_user_id is None and gift_id is None:
+                partner_client_bonus = await PartnerProgramService(
+                    self.settings
+                ).client_payment_bonus_eligible(
+                    session,
+                    user_id=referee_user_id,
+                )
+            if inviter_user_id is None and not partner_client_bonus:
+                logger.debug(
+                    "User %s has no eligible referral or partner-client benefit. No bonuses.",
+                    referee_user_id,
+                )
+                return {"referee_bonus_applied_days": None, "referee_new_end_date": None}
+
+            one_bonus_per_client = bool(
+                getattr(self.settings, "REFERRAL_ONE_BONUS_PER_REFEREE", True)
+            )
+            if partner_client_bonus:
+                one_bonus_per_client = bool(
+                    getattr(self.settings.partner_settings, "one_bonus_per_client", True)
+                )
+
+            # The payment finalizer holds the user row lock while this prior-payment
+            # check and the resulting bonus are committed, so concurrent payments for
+            # one user cannot both win the one-time bonus.
+            if one_bonus_per_client:
+                try:
+                    succeeded_count = await payment_dal.count_user_succeeded_payments(
+                        session,
+                        referee_user_id,
+                        exclude_payment_id=current_payment_db_id,
+                        qualifying_subscription_only=True,
+                        include_gift_activations=not partner_client_bonus,
+                        **({"before_payment_id": current_payment_db_id} if recover else {}),
+                    )
+                    if succeeded_count and succeeded_count > 0:
+                        logger.info(
+                            "Referral bonuses skipped for user %s: already has %s succeeded "
+                            "payments.",
+                            referee_user_id,
+                            succeeded_count,
+                        )
+                        return {"referee_bonus_applied_days": None, "referee_new_end_date": None}
+                except Exception as e_cnt:
+                    if defer:
+                        raise
+                    logger.error(
+                        "Failed counting succeeded payments for user %s: %s", referee_user_id, e_cnt
+                    )
+
+            # Additionally, do not award referral bonuses if the user was active at payment time
+            # (has an active subscription now). This avoids giving bonuses to already active users.
+            if skip_if_active_before_payment:
+                try:
+                    if await self.subscription_service.has_active_subscription(
+                        session, referee_user_id
+                    ):
+                        logger.info(
+                            "Referral bonuses skipped for user %s: user currently has an active "
+                            "subscription.",
+                            referee_user_id,
+                        )
+                        return {"referee_bonus_applied_days": None, "referee_new_end_date": None}
+                except Exception as e_sub:
+                    logger.error(
+                        "Failed to check active subscription for %s: %s", referee_user_id, e_sub
+                    )
+
+            inviter_user_model = (
+                await user_dal.get_user_by_id(session, inviter_user_id)
+                if inviter_user_id is not None
+                else None
+            )
+
+            referee_name_for_msg = referee_user_model.first_name or f"User {referee_user_id}"
+
+            default_lang_for_placeholder = self.settings.DEFAULT_LANGUAGE
+            inviter_name_for_referee_msg = (
+                self.i18n.gettext(default_lang_for_placeholder, "friend_placeholder")
+                if self.i18n is not None
+                else "friend"
+            )
+            if inviter_user_model and inviter_user_model.first_name:
+                inviter_name_for_referee_msg = inviter_user_model.first_name
+
+            payment_terms = (
+                read_subscription_terms(
+                    await payment_dal.get_payment_by_db_id(session, current_payment_db_id)
+                )
+                if current_payment_db_id is not None and (defer or duration_days is not None)
+                else None
+            )
+            if payment_terms is not None:
+                inviter_bonus_days, referee_bonus_days = (
+                    payment_terms.inviter_days,
+                    payment_terms.referee_days,
+                )
+            else:
+                inviter_bonus_days, referee_bonus_days = self._referral_bonus_days_for_payment(
+                    purchased_subscription_months,
+                    tariff_key=tariff_key,
+                    duration_days=duration_days,
+                )
+            if partner_client_bonus:
+                inviter_bonus_days = None
+            if defer:
+                if current_payment_db_id is None:
+                    raise ValueError("A durable accrual requires a payment")
+                participants = (
+                    ("inviter", inviter_user_id, inviter_bonus_days),
+                    ("referee", referee_user_id, referee_bonus_days),
+                )
+                for role, beneficiary, days in participants:
+                    if (
+                        beneficiary is not None
+                        and days
+                        and days > 0
+                        and (role != "inviter" or inviter_user_model is not None)
+                    ):
+                        await enqueue_period_accrual(
+                            session,
+                            payment_id=current_payment_db_id,
+                            referee_user_id=referee_user_id,
+                            user_id=beneficiary,
+                            role=role,
+                            days=days,
+                            tariff_key=tariff_key,
+                            one_time=one_bonus_per_client,
+                            gift_id=gift_id,
+                        )
+                return {"referee_bonus_applied_days": None, "referee_new_end_date": None}
+            logger.info(
+                "Referral bonus payment check: referee_user_id=%s inviter_user_id=%s "
+                "payment_db_id=%s months=%s tariff_key=%s inviter_bonus_days=%s "
+                "referee_bonus_days=%s source=%s",
+                referee_user_id,
+                inviter_user_id,
+                current_payment_db_id,
+                purchased_subscription_months,
+                tariff_key,
+                inviter_bonus_days,
+                referee_bonus_days,
+                "partner" if partner_client_bonus else "referral",
+            )
+
+            if inviter_user_id is not None and inviter_bonus_days and inviter_bonus_days > 0:
+                if not inviter_user_model:
+                    logger.warning(
+                        "Inviter user %s not found in local DB. Cannot apply inviter bonus.",
+                        inviter_user_id,
+                    )
+                else:
+                    inviter_active_sub = (
+                        await subscription_dal.get_active_subscription_by_user_id(
+                            session,
+                            inviter_user_id,
+                            inviter_user_model.panel_user_uuid,
+                        )
+                        if inviter_user_model.panel_user_uuid
+                        else None
+                    )
+                    new_end_date_inviter = (
+                        await self.subscription_service.extend_active_subscription_days(
+                            session=session,
+                            user_id=inviter_user_id,
+                            bonus_days=inviter_bonus_days,
+                            reason=f"referral bonus from {referee_name_for_msg}",
+                            **({"tariff_key": tariff_key} if tariff_key else {}),
+                        )
+                    )
+
+                    if new_end_date_inviter:
+                        inviter_bonus_successfully_applied = True
+                        inviter_bonus_end_date = new_end_date_inviter
+                        inviter_bonus_kind = "extended" if inviter_active_sub else "new_sub"
+                        logger.info(
+                            "Bonus of %s days successfully applied/extended for inviter %s.",
+                            inviter_bonus_days,
+                            inviter_user_id,
+                        )
+                    else:
+                        logger.warning(
+                            "Failed to apply inviter referral bonus for inviter %s after payment "
+                            "%s. Bonus not marked successful.",
+                            inviter_user_id,
+                            current_payment_db_id,
+                        )
+
+            if referee_bonus_days and referee_bonus_days > 0:
+                referee_reason = (
+                    "partner client payment bonus"
+                    if partner_client_bonus
+                    else f"referee bonus (invited by {inviter_name_for_referee_msg})"
+                )
+                new_end_date_referee = (
+                    await self.subscription_service.extend_active_subscription_days(
+                        session=session,
+                        user_id=referee_user_id,
+                        bonus_days=referee_bonus_days,
+                        reason=referee_reason,
+                        **({"tariff_key": tariff_key} if tariff_key else {}),
+                    )
+                )
+                if new_end_date_referee:
+                    referee_final_end_date = new_end_date_referee
+                    referee_bonus_applied_days = referee_bonus_days
+                    logger.info(
+                        "Bonus of %s days successfully applied to referee %s.",
+                        referee_bonus_days,
+                        referee_user_id,
+                    )
+                else:
+                    logger.warning(
+                        "Failed to apply referee bonus for %s (could not extend their new "
+                        "subscription).",
+                        referee_user_id,
+                    )
+
+            if referee_bonus_applied_days or inviter_bonus_successfully_applied:
+                referral_event_payload = ReferralBonusGrantedPayload(
+                    referee_user_id=referee_user_id,
+                    referee_bonus_days=referee_bonus_applied_days,
+                    referee_new_end_date=referee_final_end_date,
+                    inviter_bonus_applied=inviter_bonus_successfully_applied,
+                    inviter_user_id=(
+                        inviter_user_id if inviter_bonus_successfully_applied else None
+                    ),
+                    inviter_bonus_days=(
+                        inviter_bonus_days if inviter_bonus_successfully_applied else None
+                    ),
+                    inviter_bonus_end_date=inviter_bonus_end_date,
+                    inviter_bonus_kind=inviter_bonus_kind,
+                    referee_name=referee_name_for_msg,
+                    payment_db_id=current_payment_db_id,
+                    purchased_subscription_months=purchased_subscription_months or None,
+                    purchased_subscription_days=duration_days,
+                    tariff_key=tariff_key,
+                    one_bonus_per_referee=one_bonus_per_client,
+                    gift_id=gift_id,
+                    reason="gift_activation" if gift_id is not None else "payment",
+                ).to_payload()
+            else:
+                referral_event_payload = None
+
+            return {
+                "referee_bonus_applied_days": referee_bonus_applied_days,
+                "referee_new_end_date": referee_final_end_date,
+                "inviter_bonus_applied_flag": inviter_bonus_successfully_applied,
+                "referee_bonus_source": "partner" if partner_client_bonus else "referral",
+                "event_payload": referral_event_payload,
+            }
+        except Exception as e:
+            logger.exception(
+                "Error in apply_referral_bonuses_for_payment for referee %s: %s", referee_user_id, e
+            )
+
+            raise
+
+    def _referral_bonus_days_for_payment(
+        self,
+        purchased_subscription_months: int,
+        *,
+        tariff_key: str | None = None,
+        duration_days: int | None = None,
+    ) -> tuple[int | None, int | None]:
+        months = int(purchased_subscription_months)
+        tariffs_config = getattr(self.settings, "tariffs_config", None)
+        if tariff_key and tariffs_config:
+            try:
+                tariff = tariffs_config.require_configured(str(tariff_key))
+            except Exception:
+                logger.warning(
+                    "Referral bonuses skipped: tariff %s was not found.",
+                    tariff_key,
+                )
+                return None, None
+            if tariff.billing_model != "period":
+                return None, None
+            if getattr(tariff, "period_unit", "month") == "day":
+                months = duration_days or legacy_months_to_days(months)
+            elif duration_days is not None:
+                months = days_to_legacy_months(duration_days) or 0
+            return (
+                tariff.referral_inviter_bonus_days(months),
+                tariff.referral_referee_bonus_days(months),
+            )
+
+        if duration_days is not None:
+            months = days_to_legacy_months(duration_days) or 0
+        return (
+            self.settings.referral_bonus_inviter.get(months),
+            self.settings.referral_bonus_referee.get(months),
+        )
+
+    async def generate_referral_link(
+        self, session: AsyncSession, bot_username: str, inviter_user_id: int
+    ) -> str | None:
+        if not referral_program_enabled(self.settings):
+            return None
+        try:
+            user = await user_dal.get_user_by_id(session, inviter_user_id)
+            if not user:
+                logger.warning(
+                    "Unable to generate referral link: user %s not found.",
+                    inviter_user_id,
+                )
+                return None
+
+            referral_code = await user_dal.ensure_referral_code(session, user)
+            if not referral_code:
+                logger.warning(
+                    "User %s has no referral code even after regeneration attempt.",
+                    inviter_user_id,
+                )
+                return None
+
+            return build_bot_referral_link(bot_username, referral_code)
+        except Exception as exc:
+            logger.exception(
+                "Failed to generate referral link for user %s: %s", inviter_user_id, exc
+            )
+            return None
+
+    async def get_referral_stats(self, session: AsyncSession, user_id: int) -> dict:
+        """Get referral statistics for a user"""
+
+        try:
+            # Count total invited users (referrals)
+            invited_count_result = await session.execute(
+                text("SELECT COUNT(*) FROM users WHERE referred_by_id = :user_id"),
+                {"user_id": user_id},
+            )
+            invited_count = invited_count_result.scalar() or 0
+
+            # Count users who made successful payments (purchased subscription)
+            purchased_count_result = await session.execute(
+                text("""
+                    SELECT COUNT(DISTINCT u.user_id)
+                    FROM users u
+                    JOIN payments p ON u.user_id = p.user_id
+                    WHERE u.referred_by_id = :user_id
+                    AND p.status = 'succeeded'
+                """),
+                {"user_id": user_id},
+            )
+            purchased_count = purchased_count_result.scalar() or 0
+
+            received = await self._received_bonus(session, user_id)
+            return {
+                "invited_count": invited_count,
+                "purchased_count": purchased_count,
+                "received_bonus_days": received.days if received else None,
+                "received_bonus_since": received.since if received else None,
+            }
+        except Exception as e:
+            logger.error("Error getting referral stats for user %s: %s", user_id, e)
+            return {
+                "invited_count": 0,
+                "purchased_count": 0,
+                "received_bonus_days": None,
+                "received_bonus_since": None,
+            }
+
+    async def _received_bonus(
+        self, session: AsyncSession, user_id: int
+    ) -> referral_stats_dal.ReceivedInviterBonus | None:
+        """Invitation bonus days already credited; ``None`` when the lookup fails."""
+        try:
+            async with session.begin_nested():
+                return await referral_stats_dal.get_received_inviter_bonus(session, user_id)
+        except Exception:
+            logger.exception("Failed to total received referral bonus days for user %s", user_id)
+            return None

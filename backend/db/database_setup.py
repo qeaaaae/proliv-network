@@ -1,0 +1,221 @@
+import logging
+from collections.abc import AsyncGenerator
+
+from sqlalchemy import text
+from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from bot.infra.performance import TimedAsyncPool, instrument_engine
+from config.settings import Settings
+from db.models import Base
+
+from .migrator import run_all_migration_chains
+from .restore_guard import RestoreAwareAsyncSession
+
+logger = logging.getLogger(__name__)
+
+async_engine: AsyncEngine | None = None
+DB_INIT_ADVISORY_LOCK_ID = 817512404897421337
+
+
+def _trial_premium_baseline_bytes(settings: Settings) -> int:
+    if not settings.parsed_trial_premium_squad_uuids:
+        return 0
+    return int(settings.trial_premium_traffic_limit_bytes or 0)
+
+
+def redacted_database_url(database_url: str) -> str:
+    try:
+        return make_url(database_url).render_as_string(hide_password=True)
+    except Exception:
+        return "<invalid database url>"
+
+
+def init_db_connection(settings: Settings) -> async_sessionmaker[AsyncSession]:
+    global async_engine
+
+    if async_engine is None:
+        logger.info(
+            "Attempting to create SQLAlchemy engine with URL: %s",
+            redacted_database_url(settings.DATABASE_URL),
+        )
+        async_engine = create_async_engine(
+            settings.DATABASE_URL,
+            echo=False,
+            poolclass=TimedAsyncPool,
+            pool_pre_ping=True,
+            pool_size=settings.DB_POOL_SIZE,
+            max_overflow=settings.DB_MAX_OVERFLOW,
+            pool_timeout=settings.DB_POOL_TIMEOUT_SECONDS,
+            pool_recycle=settings.DB_POOL_RECYCLE_SECONDS,
+        )
+        instrument_engine(async_engine)
+
+    local_async_session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
+        bind=async_engine,
+        class_=RestoreAwareAsyncSession,
+        expire_on_commit=False,
+        autocommit=False,
+        autoflush=False,
+    )
+    logger.info("SQLAlchemy Async Engine and SessionFactory configured for PostgreSQL.")
+    return local_async_session_factory
+
+
+async def get_async_session(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncGenerator[AsyncSession, None]:
+
+    if session_factory is None:
+        raise RuntimeError("AsyncSessionFactory is not provided or initialized.")
+
+    async_session = session_factory()
+    try:
+        yield async_session
+    finally:
+        await async_session.close()
+
+
+async def init_db(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+
+    global async_engine
+    if async_engine is None:
+        logger.warning("init_db: async_engine was None, re-initializing via init_db_connection.")
+
+        raise RuntimeError(
+            "async_engine is not initialized. Call init_db_connection and get session_factory first."  # noqa: E501
+        )
+
+    async with async_engine.begin() as conn:
+        await conn.execute(text(f"SELECT pg_advisory_xact_lock({DB_INIT_ADVISORY_LOCK_ID})"))
+        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(lambda sync_conn: run_all_migration_chains(sync_conn, settings))
+    logger.info("PostgreSQL database initialized/checked successfully using SQLAlchemy.")
+
+    if settings.ADMIN_IDS:
+        from bot.services.account_roles import migrate_legacy_admin_ids
+
+        async with session_factory() as session:
+            imported, unresolved = await migrate_legacy_admin_ids(session, settings.ADMIN_IDS)
+            await session.commit()
+        if imported or unresolved:
+            logger.info(
+                "Legacy admin import: %s linked accounts, %s unresolved identities",
+                imported,
+                unresolved,
+            )
+
+    from sqlalchemy import select
+
+    from bot.services.account_roles import ROLE_OWNER, active_admin_user_ids
+    from db.auth_models import AccountRole
+
+    async with session_factory() as session:
+        admin_ids = await active_admin_user_ids(session)
+        owner_exists = await session.scalar(
+            select(AccountRole.user_id)
+            .where(AccountRole.role == ROLE_OWNER, AccountRole.revoked_at.is_(None))
+            .limit(1)
+        )
+    if not admin_ids:
+        if settings.BOOTSTRAP_OWNER_TELEGRAM_ID is not None or settings.BOOTSTRAP_OWNER_EMAIL:
+            logger.info(
+                "First-owner identities are configured. Sign in with the configured Telegram "
+                "identity or verified email to receive the owner role once."
+            )
+        registration_url = str(
+            settings.PUBLIC_APP_URL or settings.SUBSCRIPTION_MINI_APP_URL or "the public Web App"
+        ).rstrip("/")
+        logger.warning(
+            "No administrator is assigned. Open %s, register an account, "
+            "copy its Minishop ID from the "
+            "profile, then run: docker compose exec backend python "
+            "backend/scripts/bootstrap_owner.py --minishop-id <ms_id>. "
+            "Verified email accounts may use --email <verified-email> instead.",
+            registration_url,
+        )
+    elif owner_exists is None:
+        logger.warning(
+            "No owner is assigned; role management is unavailable. Run: docker compose exec "
+            "backend python backend/scripts/bootstrap_owner.py --minishop-id <ms_id> "
+            "for an existing account."
+        )
+
+    try:
+        from bot.services.settings_override_service import load_overrides_from_db
+
+        await load_overrides_from_db(settings, session_factory)
+    except Exception as e_overrides:
+        logger.warning("Failed to load setting overrides on startup: %s", e_overrides)
+
+    async with session_factory() as session:
+        from .dal.panel_sync_dal import get_panel_sync_status, update_panel_sync_status
+
+        try:
+            current_status = await get_panel_sync_status(session)
+            if current_status is None:
+                logger.info("Initializing panel_sync_status record.")
+                await update_panel_sync_status(
+                    session,
+                    status="never_run",
+                    details="System initialized",
+                    users_processed=0,
+                    subs_synced=0,
+                )
+                await session.commit()
+        except Exception as e_sync_init:
+            await session.rollback()
+            logger.exception("Failed to initialize PanelSyncStatus: %s", e_sync_init)
+
+        tariffs_config = settings.tariffs_config
+        if tariffs_config:
+            from db.tariff_reconciliation import reconcile_subscription_tariffs
+
+            trial_premium_baseline = _trial_premium_baseline_bytes(settings)
+            await session.execute(
+                text(
+                    """
+                    UPDATE subscriptions AS s
+                    SET
+                        tariff_key = NULL,
+                        tariff_binding_source = NULL,
+                        tariff_bound_at = NULL,
+                        tariff_binding_note = NULL,
+                        tier_baseline_bytes = COALESCE(s.traffic_limit_bytes, :trial_baseline),
+                        premium_baseline_bytes = :trial_premium_baseline,
+                        premium_topup_balance_bytes = 0,
+                        premium_topup_used_bytes = 0,
+                        premium_used_bytes = COALESCE(s.premium_used_bytes, 0),
+                        premium_is_limited = FALSE,
+                        effective_monthly_price_rub = NULL
+                    WHERE s.is_active = TRUE
+                      AND (
+                        COALESCE(LOWER(s.provider), '') = 'trial'
+                        OR COALESCE(UPPER(s.status_from_panel), '') = 'TRIAL'
+                      )
+                    """
+                ),
+                {
+                    "trial_baseline": settings.trial_traffic_limit_bytes,
+                    "trial_premium_baseline": trial_premium_baseline,
+                },
+            )
+            report = await reconcile_subscription_tariffs(
+                session,
+                tariffs_config,
+                apply=True,
+            )
+            await session.commit()
+            if report.unresolved:
+                logger.warning(
+                    "Startup tariff reconciliation left %s active subscriptions unresolved",
+                    report.unresolved,
+                )

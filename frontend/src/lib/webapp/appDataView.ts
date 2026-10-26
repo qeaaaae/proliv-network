@@ -1,0 +1,161 @@
+import { normalizeBrand } from "./browser.js";
+import {
+  arrayField,
+  recordArrayField,
+  recordField,
+  recordOrNull,
+  type WebappRecord,
+} from "./domainTypes.js";
+import { paymentMethodsForContext, type PaymentMethod } from "./tariffs.js";
+
+export type AppDataViewInput = {
+  cfg: WebappRecord;
+  data: WebappRecord | null;
+  fallbackBrandTitle: string;
+  mockData: WebappRecord;
+  telegramMiniAppContext?: boolean;
+};
+
+export type AppDataView = {
+  appSettings: WebappRecord;
+  balance: WebappRecord;
+  authProviders: string[];
+  recommendedAuthProviders: string[];
+  brand: WebappRecord;
+  brandTitle: string;
+  devicesEnabled: boolean;
+  subscriptionReissueEnabled: boolean;
+  emailAuthEnabled: boolean;
+  notificationPreferencesEnabled: boolean;
+  faviconBrand: WebappRecord;
+  installGuidesEnabled: boolean;
+  methods: PaymentMethod[];
+  partnerProgramEnabled: boolean;
+  pendingPayment: WebappRecord | null;
+  plans: WebappRecord[];
+  rawEmailAuthEnabled: unknown;
+  referral: WebappRecord;
+  referralBonusDetails: WebappRecord[];
+  referralOneBonusPerReferee: boolean;
+  referralProgramEnabled: boolean;
+  referralWelcomeBonusDays: number;
+  subscription: WebappRecord;
+  subscriptionPurchaseDescription: string;
+  suggestedPromoCode: string;
+  supportEnabled: boolean;
+};
+
+export function normalizeAuthProviders(value: unknown, emailAuthEnabled: boolean): string[] {
+  const providers = arrayField(value)
+    .map((provider) =>
+      String(provider || "")
+        .trim()
+        .toLowerCase()
+    )
+    .filter(Boolean);
+  const normalized = [...new Set(providers)];
+  if (normalized.length) return normalized;
+  return emailAuthEnabled ? ["telegram", "email"] : ["telegram"];
+}
+
+export function normalizeRecommendedAuthProviders(
+  value: unknown,
+  authProviders: readonly string[]
+): string[] {
+  if (!Array.isArray(value)) return [...authProviders];
+  const available = new Set(authProviders);
+  const providers = value
+    .map((provider) =>
+      String(provider || "")
+        .trim()
+        .toLowerCase()
+    )
+    .filter((provider) => provider && available.has(provider));
+  return [...new Set(providers)];
+}
+
+export function computeAppDataView({
+  cfg,
+  data,
+  fallbackBrandTitle,
+  mockData,
+  telegramMiniAppContext = false,
+}: AppDataViewInput): AppDataView {
+  const mock = recordField(mockData);
+  const dataRecord = recordField(data);
+  const brandTitle = String(cfg.title || fallbackBrandTitle);
+  const brand = normalizeBrand({
+    title: brandTitle,
+    logoUrl: cfg.logoUrl,
+  }) as WebappRecord;
+  const faviconBrand = {
+    ...brand,
+    faviconUrl: String(cfg.faviconUrl || "").trim() || brand.logoUrl,
+  };
+  const plans = recordArrayField(
+    arrayField(dataRecord.plans).length ? dataRecord.plans : mock.plans
+  );
+  const methods = paymentMethodsForContext(
+    (arrayField(dataRecord.payment_methods).length
+      ? dataRecord.payment_methods
+      : []) as PaymentMethod[],
+    telegramMiniAppContext
+  );
+  const appSettings = recordField(dataRecord.settings || mock.settings);
+  const rawEmailAuthEnabled =
+    recordField(dataRecord.settings).email_auth_enabled ??
+    appSettings.email_auth_enabled ??
+    cfg.emailAuthEnabled;
+  const emailAuthEnabled = rawEmailAuthEnabled !== false && rawEmailAuthEnabled !== "false";
+  const rawNotificationPreferencesEnabled =
+    recordField(dataRecord.settings).notification_preferences_enabled ??
+    appSettings.notification_preferences_enabled ??
+    cfg.notificationPreferencesEnabled;
+  const notificationPreferencesEnabled =
+    rawNotificationPreferencesEnabled !== false && rawNotificationPreferencesEnabled !== "false";
+  const authProviders = normalizeAuthProviders(
+    recordField(dataRecord.settings).auth_providers ??
+      appSettings.auth_providers ??
+      cfg.authProviders,
+    emailAuthEnabled
+  );
+  const recommendedAuthProviders = normalizeRecommendedAuthProviders(
+    recordField(dataRecord.settings).recommended_auth_providers ??
+      appSettings.recommended_auth_providers ??
+      cfg.recommendedAuthProviders,
+    authProviders
+  );
+  const subscription = recordField(dataRecord.subscription || mock.subscription);
+  const referral = recordField(dataRecord.referral || mock.referral);
+
+  return {
+    appSettings,
+    balance: recordField(dataRecord.balance || mock.balance),
+    authProviders,
+    recommendedAuthProviders,
+    brand,
+    brandTitle,
+    devicesEnabled: Boolean(appSettings.my_devices_enabled),
+    subscriptionReissueEnabled: Boolean(appSettings.subscription_reissue_enabled),
+    emailAuthEnabled,
+    notificationPreferencesEnabled,
+    faviconBrand,
+    installGuidesEnabled: Boolean(appSettings.subscription_guides_enabled),
+    methods,
+    partnerProgramEnabled: Boolean(appSettings.partner_program_enabled ?? false),
+    pendingPayment: recordOrNull(dataRecord.pending_payment),
+    plans,
+    rawEmailAuthEnabled,
+    referral,
+    referralBonusDetails: recordArrayField(referral.bonus_details),
+    referralOneBonusPerReferee: Boolean(referral.one_bonus_per_referee),
+    referralProgramEnabled: appSettings.referral_program_enabled !== false,
+    referralWelcomeBonusDays: Math.max(0, Number(referral.welcome_bonus_days || 0)),
+    subscription,
+    subscriptionPurchaseDescription: String(
+      appSettings.subscription_purchase_description || ""
+    ).trim(),
+    suggestedPromoCode: String(dataRecord.suggested_promo_code || "").trim(),
+    supportEnabled: Boolean(appSettings.support_tickets_enabled ?? true),
+  };
+}

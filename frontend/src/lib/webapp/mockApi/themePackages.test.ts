@@ -1,0 +1,187 @@
+import { describe, it, expect } from "vitest";
+import { zipSync, strToU8 } from "fflate";
+import { readDemoZip } from "./themePackages";
+
+describe("documentation theme ZIP import", () => {
+  it("reads the uploaded collection instead of substituting a fixed theme", () => {
+    const data = zipSync({
+      "themes/one/theme.json": strToU8('{"key":"one"}'),
+      "themes/two/theme.json": strToU8('{"key":"two"}'),
+      "themes/minishop-themes.json": strToU8('{"schema_version":1,"themes":[{"path":"two"}]}'),
+    });
+    expect(readDemoZip(data).map((item) => item.theme.key)).toEqual(["two"]);
+  });
+  it("rejects traversal and executable files", () => {
+    expect(() => readDemoZip(zipSync({ "../escape/theme.json": strToU8("{}") }))).toThrow();
+    expect(() =>
+      readDemoZip(
+        zipSync({
+          "one/theme.json": strToU8('{"key":"one"}'),
+          "one/run.js": strToU8("alert(1)"),
+        })
+      )
+    ).toThrow();
+  });
+  it("accepts safe SVG assets and rejects active SVG markup", () => {
+    const safe = readDemoZip(
+      zipSync({
+        "one/theme.json": strToU8('{"key":"one"}'),
+        "one/icons/mark.svg": strToU8(
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
+        ),
+      })
+    )[0];
+    expect(safe.files["icons/mark.svg"]).toBeDefined();
+
+    expect(() =>
+      readDemoZip(
+        zipSync({
+          "one/theme.json": strToU8('{"key":"one"}'),
+          "one/icons/mark.svg": strToU8(
+            '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+          ),
+        })
+      )
+    ).toThrow();
+  });
+  it("accepts static inline SVG styles and rejects concealed URLs or page layout", () => {
+    const archive = (style: string) =>
+      zipSync({
+        "one/theme.json": strToU8('{"key":"one"}'),
+        "one/icons/mark.svg": strToU8(`<svg><path style="${style}"/></svg>`),
+      });
+    expect(
+      readDemoZip(
+        archive("fill:url('#paint');vector-effect:non-scaling-stroke;paint-order:stroke fill")
+      )[0].files["icons/mark.svg"]
+    ).toBeDefined();
+    for (const style of [
+      "fill:u&#114;l(https://evil.test/a)",
+      "fill:u/**/rl(https://evil.test/a)",
+      "fill:u\\72l(https://evil.test/a)",
+      "position:fixed",
+      "fill:expression(alert(1))",
+    ])
+      expect(() => readDemoZip(archive(style))).toThrow();
+  });
+  it("parses comments as XML and rejects malformed or encoded active SVG content", () => {
+    const archive = (svg: string) =>
+      zipSync({
+        "one/theme.json": strToU8('{"key":"one"}'),
+        "one/icons/mark.svg": strToU8(svg),
+      });
+    const safe = '<svg><!-- <script>inert example</script> --><path fill="red"/></svg>';
+    expect(readDemoZip(archive(safe))[0].files["icons/mark.svg"]).toEqual(strToU8(safe));
+    for (const svg of [
+      "<svg><!-- <!-- nested --> --><path/></svg>",
+      "<svg><path></svg>",
+      '<svg><path fill="red" fill="blue"/></svg>',
+      '<svg><use href="&#106;avascript:alert(1)"/></svg>',
+      '<svg><path fill="u&#114;l(https://evil.example/a)"/></svg>',
+      '<svg><path fill="u\\72l(https://evil.example/a)"/></svg>',
+      '<svg><path fill="u/**/rl(https://evil.example/a)"/></svg>',
+      '<svg><path style="fill:u&#114;l(https://evil.example/a)"/></svg>',
+      '<svg xmlns="http://www.w3.org/1999/xhtml"><path/></svg>',
+      '<svg xmlns:x="http://www.w3.org/2000/svg"><x:path/></svg>',
+    ])
+      expect(() => readDemoZip(archive(svg))).toThrow();
+    expect(
+      readDemoZip(archive('<svg><defs><path id="mark"/></defs><use href="#mark"/></svg>'))
+    ).toHaveLength(1);
+  });
+  it("rejects broken archives and duplicate case-insensitive paths", () => {
+    expect(() => readDemoZip(strToU8("not a zip"))).toThrow();
+    expect(() =>
+      readDemoZip(
+        zipSync({
+          "one/theme.json": strToU8('{"key":"one"}'),
+          "one/THEME.JSON": strToU8("{}"),
+        })
+      )
+    ).toThrow();
+  });
+  it("returns the declared preview image and rejects packages without one", async () => {
+    const preview = new Uint8Array([82, 73, 70, 70]);
+    const withPreview = readDemoZip(
+      zipSync({
+        "one/theme.json": strToU8('{"key":"one"}'),
+        "one/theme-package.json": strToU8(
+          '{"schema_version":1,"preview":"preview.webp","compatibility":{"theme_api":1}}'
+        ),
+        "one/preview.webp": preview,
+      })
+    )[0];
+    const { demoThemePreviewImage } = await import("./themePreview");
+    const blob = demoThemePreviewImage(withPreview);
+    expect(blob.type).toBe("image/webp");
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(preview);
+
+    expect(() =>
+      demoThemePreviewImage(
+        readDemoZip(
+          zipSync({
+            "one/theme.json": strToU8('{"key":"one"}'),
+          })
+        )[0]
+      )
+    ).toThrow();
+  });
+});
+
+describe("documentation package lifecycle", () => {
+  it("retains a previous package for rollback after update", async () => {
+    const { themePackageResponse } = await import("./themePackages");
+    const { DEV_MOCK } = await import("../previewMock");
+    DEV_MOCK.config.themesCatalog = { default_theme: "dark", themes: [] };
+    const catalog = (await themePackageResponse("/admin/themes/library", {})) as {
+      generation: number;
+    };
+    async function upload(version: string) {
+      const form = new FormData();
+      form.append(
+        "file",
+        new File(
+          [
+            zipSync({
+              "ocean/theme.json": strToU8('{"key":"ocean","tokens":{"bg":"#123456"}}'),
+              "ocean/theme-package.json": strToU8(
+                JSON.stringify({ schema_version: 1, version, compatibility: { theme_api: 1 } })
+              ),
+            }),
+          ],
+          "sample.zip"
+        )
+      );
+      const response = (await themePackageResponse("/admin/themes/imports", {
+        method: "POST",
+        body: form,
+      })) as { operation: { id: string } };
+      return response.operation.id;
+    }
+    const first = await upload("1.0.0");
+    expect(
+      await themePackageResponse("/admin/themes/imports/" + first + "/install", {
+        method: "POST",
+        body: JSON.stringify({
+          choices: [{ key: "ocean", action: "install" }],
+          expected_generation: catalog.generation,
+          idempotency_key: "first",
+        }),
+      })
+    ).toMatchObject({ ok: true });
+    const second = await upload("2.0.0");
+    expect(
+      await themePackageResponse("/admin/themes/imports/" + second + "/install", {
+        method: "POST",
+        body: JSON.stringify({
+          choices: [{ key: "ocean", action: "update" }],
+          expected_generation: catalog.generation + 1,
+          idempotency_key: "second",
+        }),
+      })
+    ).toMatchObject({ ok: true });
+    expect(await themePackageResponse("/admin/themes/library", {})).toMatchObject({
+      installations: [{ key: "ocean", version: "2.0.0", can_rollback: true }],
+    });
+  });
+});

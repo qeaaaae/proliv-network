@@ -1,0 +1,894 @@
+import logging
+from datetime import UTC, datetime, timedelta
+
+from aiohttp import web
+from sqlalchemy.orm import sessionmaker
+
+from bot.app.web.context import (
+    get_i18n,
+    get_optional_subscription_service,
+    get_panel_service,
+    get_session_factory,
+    get_settings,
+)
+from bot.app.web.request_parsing import parse_body_or_400
+from bot.app.web.webapp.subscription_reissue import send_subscription_reissue_email
+from bot.services.subscription_reissue_access import AccessRotationBusy, reissue_subscription_access
+from config.settings import Settings
+from config.traffic_strategy import canonical_traffic_limit_strategy
+from db.dal import message_log_dal, subscription_dal, user_dal
+
+from .auth import _require_admin_user_id
+from .common import (
+    _admin_subscription_traffic_strategy_lock_reason,
+    _decorate_admin_subscription_traffic_strategy,
+    _error,
+    _is_trial_subscription,
+    _ok,
+    _serialize_subscription,
+)
+from .schemas import (
+    AdminUserExtendBody,
+    AdminUserHwidDeviceLimitBody,
+    AdminUserPremiumOverrideBody,
+    AdminUserRegularTrafficOverrideBody,
+    AdminUserTariffBody,
+    AdminUserTrafficGrantBody,
+    AdminUserTrafficStrategyBody,
+)
+from .users_ban import admin_user_ban_route as admin_user_ban_route
+from .users_communication import (
+    admin_user_message_preview_route as admin_user_message_preview_route,
+)
+from .users_communication import (
+    admin_user_message_route as admin_user_message_route,
+)
+from .users_communication import (
+    admin_user_telegram_profile_link_route as admin_user_telegram_profile_link_route,
+)
+from .users_listing import (
+    _invalidate_after_admin_user_mutation,
+    _resolve_admin_period_tariff_key,
+)
+
+logger = logging.getLogger(__name__)
+
+
+async def _is_panel_user_confirmed_absent(panel_service: object, panel_uuid: str) -> bool:
+    lookup = getattr(panel_service, "get_user_by_uuid_lookup", None)
+    if not callable(lookup):
+        return False
+
+    try:
+        result = await lookup(panel_uuid, log_response=False)
+    except Exception:
+        logger.warning(
+            "Admin webapp could not verify whether panel user %s is absent.",
+            panel_uuid,
+            exc_info=True,
+        )
+        return False
+
+    return isinstance(result, dict) and result.get("not_found") is True
+
+
+async def admin_user_delete_route(request: web.Request) -> web.Response:
+    actor_id = _require_admin_user_id(request)
+    target_id = int(request.match_info["user_id"])
+
+    settings: Settings = get_settings(request)
+    panel_service = get_panel_service(request)
+    if panel_service is None:
+        subscription_service = get_optional_subscription_service(request)
+        panel_service = getattr(subscription_service, "panel_service", None)
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        user = await user_dal.get_user_by_id(session, target_id)
+        if not user:
+            return _error(404, "not_found")
+
+        panel_user_uuids = await user_dal.get_panel_user_uuids_for_user(
+            session,
+            target_id,
+            user=user,
+        )
+        if panel_user_uuids and panel_service is None:
+            await session.rollback()
+            return _error(503, "panel_service_unavailable")
+
+        for panel_uuid in panel_user_uuids:
+            try:
+                panel_deleted = await panel_service.delete_user_from_panel(
+                    panel_uuid,
+                    log_response=False,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Admin webapp failed to delete panel user %s for user %s: %s",
+                    panel_uuid,
+                    target_id,
+                    exc,
+                )
+                await session.rollback()
+                return _error(502, "panel_delete_failed", str(exc))
+
+            if not panel_deleted:
+                panel_deleted = await _is_panel_user_confirmed_absent(
+                    panel_service,
+                    panel_uuid,
+                )
+                if panel_deleted:
+                    logger.info(
+                        "Panel user %s is already absent; continuing local user deletion.",
+                        panel_uuid,
+                    )
+
+            if not panel_deleted:
+                await session.rollback()
+                return _error(
+                    502,
+                    "panel_delete_failed",
+                    f"Failed to delete panel user {panel_uuid}",
+                )
+
+        ok = await user_dal.delete_user_and_relations(session, target_id)
+        if not ok:
+            await session.rollback()
+            return _error(404, "not_found")
+        await message_log_dal.create_message_log_no_commit(
+            session,
+            {
+                "user_id": actor_id if actor_id != target_id else None,
+                "event_type": "admin_delete_user_webapp",
+                "content": (
+                    f"Deleted user_id={target_id}; "
+                    f"panel_uuids={','.join(panel_user_uuids) or 'none'}"
+                ),
+                "is_admin_event": True,
+            },
+        )
+        await session.commit()
+    try:
+        await _invalidate_after_admin_user_mutation(settings, target_id)
+    except Exception:
+        logger.warning(
+            "Admin user delete committed but post-delete cache invalidation failed for user %s",
+            target_id,
+            exc_info=True,
+        )
+    return _ok({})
+
+
+async def admin_user_subscription_reissue_route(request: web.Request) -> web.Response:
+    """Reissue (revoke + regenerate) the user's subscription link on the panel.
+
+    Unlike the user-facing Mini App action this is not gated on
+    ``SUBSCRIPTION_REISSUE_ENABLED`` or a linked email: an admin must always be
+    able to invalidate a leaked link. When email delivery is configured and the
+    user has a linked address, the new link is emailed best-effort; the revoke
+    itself succeeds either way.
+    """
+    actor_id = _require_admin_user_id(request)
+    target_id = int(request.match_info["user_id"])
+    settings: Settings = get_settings(request)
+
+    panel_service = get_panel_service(request)
+    if panel_service is None:
+        subscription_service = get_optional_subscription_service(request)
+        panel_service = getattr(subscription_service, "panel_service", None)
+    if panel_service is None:
+        return _error(503, "panel_service_unavailable")
+
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        user = await user_dal.get_user_by_id(session, target_id)
+        if not user:
+            return _error(404, "not_found")
+
+        # Same resolution as the user-card detail endpoint: reset the link the
+        # card actually shows (canonical uuid first, active subscription next).
+        active = await subscription_dal.get_active_subscription_by_user_id(session, target_id)
+        panel_user_uuid = str(
+            getattr(user, "panel_user_uuid", None) or getattr(active, "panel_user_uuid", None) or ""
+        ).strip()
+        if not panel_user_uuid:
+            return _error(
+                404,
+                "no_panel_user",
+                "The user is not linked to a Remnawave panel user",
+            )
+
+        try:
+            updated_panel_user, gateway_url = await reissue_subscription_access(
+                session,
+                panel_service,
+                user_id=target_id,
+                panel_user_uuid=panel_user_uuid,
+                settings=settings,
+            )
+        except AccessRotationBusy:
+            response = _error(
+                409, "subscription_reissue_in_progress", "Subscription reissue is in progress"
+            )
+            response.headers["Retry-After"] = "2"
+            return response
+        except Exception as exc:
+            logger.warning(
+                "Admin webapp failed to reissue subscription for user %s: %s",
+                target_id,
+                exc,
+            )
+            updated_panel_user = None
+        if not updated_panel_user:
+            return _error(
+                502,
+                "subscription_reissue_failed",
+                "Unable to revoke the subscription on the Remnawave panel",
+            )
+
+        email_sent = False
+        if settings.email_auth_configured and str(getattr(user, "email", "") or "").strip():
+            email_sent = await send_subscription_reissue_email(
+                settings=settings,
+                i18n=get_i18n(request),
+                session=session,
+                db_user=user,
+                updated_panel_user=updated_panel_user,
+                gateway_url=gateway_url,
+            )
+
+        await message_log_dal.create_message_log_no_commit(
+            session,
+            {
+                "user_id": actor_id,
+                "event_type": "admin_subscription_reissue_webapp",
+                "content": (
+                    f"Reissued subscription link for user_id={target_id} "
+                    f"panel_uuid={panel_user_uuid} email_sent={email_sent}"
+                ),
+                "is_admin_event": True,
+                "target_user_id": target_id,
+            },
+        )
+        await session.commit()
+
+    await _invalidate_after_admin_user_mutation(settings, target_id)
+    return _ok({"email_sent": bool(email_sent)})
+
+
+async def admin_user_reset_trial_route(request: web.Request) -> web.Response:
+    actor_id = _require_admin_user_id(request)
+    target_id = int(request.match_info["user_id"])
+    settings: Settings = get_settings(request)
+
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        user = await user_dal.get_user_by_id(session, target_id)
+        if not user:
+            return _error(404, "not_found")
+
+        active = await subscription_dal.get_active_subscription_by_user_id(session, target_id)
+        reset_at = await user_dal.mark_trial_eligibility_reset(session, target_id)
+        if reset_at is None:
+            await session.rollback()
+            return _error(404, "not_found")
+
+        if _is_trial_subscription(active):
+            panel_user_uuid = str(getattr(active, "panel_user_uuid", "") or "").strip()
+            if not panel_user_uuid:
+                await session.rollback()
+                return _error(409, "panel_user_missing")
+
+            subscription_service = get_optional_subscription_service(request)
+            panel_service = get_panel_service(request) or getattr(
+                subscription_service, "panel_service", None
+            )
+            if panel_service is None:
+                await session.rollback()
+                return _error(503, "panel_service_unavailable")
+
+            reset_at_utc = reset_at if reset_at.tzinfo else reset_at.replace(tzinfo=UTC)
+            expire_at = reset_at_utc.astimezone(UTC)
+            expire_at_iso = expire_at.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            try:
+                updated_panel_user = await panel_service.update_user_details_on_panel(
+                    panel_user_uuid,
+                    {"uuid": panel_user_uuid, "expireAt": expire_at_iso},
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Admin webapp failed to expire active trial for user %s: %s",
+                    target_id,
+                    exc,
+                )
+                await session.rollback()
+                return _error(502, "panel_update_failed", str(exc))
+            if not updated_panel_user:
+                await session.rollback()
+                return _error(502, "panel_update_failed")
+
+            active.end_date = expire_at
+            active.is_active = False
+            active.status_from_panel = "EXPIRED_TRIAL_RESET"
+            active.skip_notifications = True
+            active.auto_renew_enabled = False
+
+        await message_log_dal.create_message_log_no_commit(
+            session,
+            {
+                "user_id": actor_id,
+                "event_type": "admin_reset_trial_webapp",
+                "content": (
+                    f"Reset trial eligibility for user_id={target_id}; "
+                    f"active_trial_expired={'yes' if _is_trial_subscription(active) else 'no'}"
+                ),
+                "is_admin_event": True,
+                "target_user_id": target_id,
+            },
+        )
+        await session.commit()
+    await _invalidate_after_admin_user_mutation(settings, target_id)
+    return _ok({})
+
+
+async def admin_user_premium_override_route(request: web.Request) -> web.Response:
+    """Premium-squad traffic overrides only (unlimited toggle + bonus GB)."""
+    actor_id = _require_admin_user_id(request)
+    target_id = int(request.match_info["user_id"])
+    settings: Settings = get_settings(request)
+    body = await parse_body_or_400(request, AdminUserPremiumOverrideBody)
+    subscription_service = get_optional_subscription_service(request)
+
+    unlimited = bool(body.unlimited)
+    bonus_bytes_raw = body.bonus_bytes
+    bonus_gb_raw = body.bonus_gb
+    if bonus_bytes_raw is None and bonus_gb_raw is None:
+        bonus_bytes = 0
+    elif bonus_bytes_raw is not None:
+        try:
+            bonus_bytes = int(bonus_bytes_raw)
+        except (TypeError, ValueError):
+            return _error(400, "invalid_bonus", "bonus_bytes must be an integer")
+    else:
+        try:
+            bonus_bytes = round(float(bonus_gb_raw) * (1024**3))
+        except (TypeError, ValueError):
+            return _error(400, "invalid_bonus", "bonus_gb must be a number")
+
+    if bonus_bytes < 0:
+        return _error(400, "invalid_bonus", "bonus must be non-negative")
+
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        active = await subscription_dal.get_active_subscription_by_user_id(session, target_id)
+        if not active:
+            return _error(404, "no_active_subscription")
+
+        active.premium_unlimited_override = bool(unlimited)
+        active.premium_bonus_bytes = int(bonus_bytes)
+        if active.premium_unlimited_override:
+            active.premium_is_limited = False
+
+        if subscription_service is not None:
+            synced = await subscription_service.sync_premium_squad_access_to_panel(
+                session, target_id
+            )
+            if not synced:
+                await session.rollback()
+                return _error(502, "panel_update_failed", "Unable to update Remnawave panel user")
+
+        await message_log_dal.create_message_log_no_commit(
+            session,
+            {
+                "user_id": actor_id,
+                "event_type": "admin_premium_override_webapp",
+                "content": (f"unlimited={bool(unlimited)} bonus_bytes={int(bonus_bytes)}"),
+                "is_admin_event": True,
+                "target_user_id": target_id,
+            },
+        )
+        await session.commit()
+        await session.refresh(active)
+
+    await _invalidate_after_admin_user_mutation(settings, target_id)
+    return _ok({"subscription": _serialize_subscription(active)})
+
+
+async def admin_user_regular_traffic_override_route(request: web.Request) -> web.Response:
+    """Main (regular) traffic: native unlimited panel limit + admin bonus GB."""
+    actor_id = _require_admin_user_id(request)
+    target_id = int(request.match_info["user_id"])
+    settings: Settings = get_settings(request)
+    body = await parse_body_or_400(request, AdminUserRegularTrafficOverrideBody)
+
+    unlimited = bool(body.unlimited)
+    regular_bonus_bytes_raw = body.regular_bonus_bytes
+    regular_bonus_gb_raw = body.regular_bonus_gb
+    if regular_bonus_bytes_raw is None and regular_bonus_gb_raw is None:
+        regular_bonus_bytes = 0
+    elif regular_bonus_bytes_raw is not None:
+        try:
+            regular_bonus_bytes = int(regular_bonus_bytes_raw)
+        except (TypeError, ValueError):
+            return _error(400, "invalid_regular_bonus", "regular_bonus_bytes must be an integer")
+    else:
+        try:
+            regular_bonus_bytes = round(float(regular_bonus_gb_raw) * (1024**3))
+        except (TypeError, ValueError):
+            return _error(400, "invalid_regular_bonus", "regular_bonus_gb must be a number")
+
+    if regular_bonus_bytes < 0:
+        return _error(400, "invalid_regular_bonus", "regular bonus must be non-negative")
+
+    subscription_service = get_optional_subscription_service(request)
+
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        active = await subscription_dal.get_active_subscription_by_user_id(session, target_id)
+        if not active:
+            return _error(404, "no_active_subscription")
+
+        active.regular_unlimited_override = bool(unlimited)
+        active.regular_bonus_bytes = int(regular_bonus_bytes)
+
+        if subscription_service is not None:
+            synced = await subscription_service.sync_main_traffic_limit_to_panel(session, target_id)
+            if not synced:
+                await session.rollback()
+                return _error(502, "panel_update_failed", "Unable to update Remnawave panel user")
+
+        await message_log_dal.create_message_log_no_commit(
+            session,
+            {
+                "user_id": actor_id,
+                "event_type": "admin_regular_traffic_override_webapp",
+                "content": (
+                    f"unlimited={bool(unlimited)} regular_bonus_bytes={int(regular_bonus_bytes)}"
+                ),
+                "is_admin_event": True,
+                "target_user_id": target_id,
+            },
+        )
+        await session.commit()
+        await session.refresh(active)
+
+    await _invalidate_after_admin_user_mutation(settings, target_id)
+    return _ok({"subscription": _serialize_subscription(active)})
+
+
+async def admin_user_traffic_strategy_route(request: web.Request) -> web.Response:
+    """Set a period subscription's Remnawave traffic reset strategy."""
+
+    actor_id = _require_admin_user_id(request)
+    target_id = int(request.match_info["user_id"])
+    settings: Settings = get_settings(request)
+    body = await parse_body_or_400(request, AdminUserTrafficStrategyBody)
+
+    traffic_limit_strategy = canonical_traffic_limit_strategy(body.traffic_limit_strategy)
+    if traffic_limit_strategy is None:
+        return _error(
+            400,
+            "invalid_traffic_strategy",
+            "traffic_limit_strategy must be one of: NO_RESET, DAY, WEEK, MONTH, MONTH_ROLLING",
+        )
+
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        active = await subscription_dal.get_active_subscription_by_user_id(session, target_id)
+        if not active:
+            return _error(404, "no_active_subscription")
+
+        lock_reason = _admin_subscription_traffic_strategy_lock_reason(
+            settings,
+            active,
+            panel_available=True,
+        )
+        if lock_reason == "traffic_tariff":
+            return _error(
+                409,
+                "traffic_strategy_locked",
+                (
+                    "Traffic package tariffs always use NO_RESET. Switch the user to a period "
+                    "tariff before changing the reset strategy."
+                ),
+            )
+        if lock_reason == "trial":
+            return _error(
+                409,
+                "traffic_strategy_locked",
+                "Trial traffic reset strategy is controlled by TRIAL_TRAFFIC_STRATEGY.",
+            )
+
+        panel_user_uuid = str(getattr(active, "panel_user_uuid", "") or "").strip()
+        if not panel_user_uuid:
+            return _error(
+                409,
+                "panel_user_missing",
+                "The active subscription is not linked to a Remnawave panel user.",
+            )
+
+        subscription_service = get_optional_subscription_service(request)
+        panel_service = get_panel_service(request) or getattr(
+            subscription_service, "panel_service", None
+        )
+        if panel_service is None:
+            return _error(503, "panel_service_unavailable")
+
+        update_payload = {
+            "uuid": panel_user_uuid,
+            "trafficLimitStrategy": traffic_limit_strategy,
+        }
+        try:
+            updated_panel_user = await panel_service.update_user_details_on_panel(
+                panel_user_uuid,
+                update_payload,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Admin webapp failed to update traffic strategy for user %s: %s",
+                target_id,
+                exc,
+            )
+            await session.rollback()
+            return _error(502, "panel_update_failed", str(exc))
+        if not updated_panel_user:
+            await session.rollback()
+            return _error(502, "panel_update_failed", "Unable to update Remnawave panel user")
+
+        if hasattr(active, "period_start_at"):
+            active.period_start_at = None
+        premium_inherits_regular = True
+        premium_inheritance_getter = getattr(
+            subscription_service,
+            "_premium_traffic_strategy_inherits_regular",
+            None,
+        )
+        if callable(premium_inheritance_getter):
+            premium_inherits_regular = bool(premium_inheritance_getter(active))
+        if premium_inherits_regular and hasattr(active, "premium_period_start_at"):
+            active.premium_period_start_at = None
+
+        await message_log_dal.create_message_log(
+            session,
+            {
+                "user_id": actor_id,
+                "event_type": "admin_traffic_strategy_webapp",
+                "content": f"traffic_limit_strategy={traffic_limit_strategy}",
+                "is_admin_event": True,
+                "target_user_id": target_id,
+            },
+        )
+        await session.commit()
+        await session.refresh(active)
+
+    await _invalidate_after_admin_user_mutation(settings, target_id)
+    subscription_payload = _serialize_subscription(active)
+    _decorate_admin_subscription_traffic_strategy(
+        subscription_payload,
+        settings,
+        active,
+        traffic_limit_strategy=traffic_limit_strategy,
+        panel_available=True,
+    )
+    return _ok({"subscription": subscription_payload})
+
+
+async def admin_user_hwid_device_limit_route(request: web.Request) -> web.Response:
+    """Override the user's base HWID device limit.
+
+    ``hwid_device_limit == 0`` means unlimited; ``NULL`` means the tariff/.env
+    default is used. Purchased extra devices remain tracked separately and are
+    added when syncing the effective panel limit.
+    """
+    actor_id = _require_admin_user_id(request)
+    target_id = int(request.match_info["user_id"])
+    settings: Settings = get_settings(request)
+    body = await parse_body_or_400(request, AdminUserHwidDeviceLimitBody)
+
+    unlimited = bool(body.unlimited)
+    use_default = bool(body.use_default or body.reset_to_default)
+    limit_raw = body.hwid_device_limit if body.hwid_device_limit is not None else body.limit
+
+    if unlimited:
+        hwid_device_limit: int | None = 0
+    elif use_default or limit_raw is None or limit_raw == "":
+        hwid_device_limit = None
+    else:
+        try:
+            hwid_device_limit = int(limit_raw)
+        except (TypeError, ValueError):
+            return _error(
+                400,
+                "invalid_hwid_device_limit",
+                "hwid_device_limit must be a non-negative integer",
+            )
+        if hwid_device_limit < 0 or hwid_device_limit > 1_000_000:
+            return _error(
+                400,
+                "invalid_hwid_device_limit",
+                "hwid_device_limit must be an integer from 0 to 1000000",
+            )
+
+    subscription_service = get_optional_subscription_service(request)
+
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        active = await subscription_dal.get_active_subscription_by_user_id(session, target_id)
+        if not active:
+            return _error(404, "no_active_subscription")
+
+        active.hwid_device_limit = hwid_device_limit
+        active.hwid_device_limit_is_override = hwid_device_limit is not None
+
+        effective_limit = None
+        if subscription_service is not None:
+            effective_limit = await subscription_service.sync_hwid_device_limit_to_panel(
+                session, target_id
+            )
+            if effective_limit is None:
+                await session.rollback()
+                return _error(502, "panel_update_failed", "Unable to update Remnawave panel user")
+
+        await message_log_dal.create_message_log_no_commit(
+            session,
+            {
+                "user_id": actor_id,
+                "event_type": "admin_hwid_device_limit_webapp",
+                "content": (
+                    f"hwid_device_limit={hwid_device_limit!r} "
+                    f"effective_hwid_device_limit={effective_limit!r}"
+                ),
+                "is_admin_event": True,
+                "target_user_id": target_id,
+            },
+        )
+        await session.commit()
+        await session.refresh(active)
+
+    await _invalidate_after_admin_user_mutation(settings, target_id)
+    return _ok({"subscription": _serialize_subscription(active)})
+
+
+async def admin_user_traffic_grant_route(request: web.Request) -> web.Response:
+    """Credit regular or premium traffic to a user without a payment.
+
+    Body: ``{"kind": "regular" | "premium", "gb": float}`` (alternatively
+    ``"bytes": int``). Mirrors the same effect as a user-purchased top-up:
+    the chosen balance grows, panel limit/squads are refreshed, and an entry
+    is added to ``traffic_topups`` with ``kind="admin_topup"`` or
+    ``kind="admin_premium_topup"`` and ``payment_id=NULL``.
+    """
+    actor_id = _require_admin_user_id(request)
+    target_id = int(request.match_info["user_id"])
+    settings: Settings = get_settings(request)
+    body = await parse_body_or_400(request, AdminUserTrafficGrantBody)
+
+    kind = str(body.kind or "regular").strip().lower()
+    if kind not in {"regular", "premium"}:
+        return _error(400, "invalid_kind", "kind must be 'regular' or 'premium'")
+
+    bytes_raw = body.bytes
+    gb_raw = body.gb
+    if bytes_raw is None and gb_raw is None:
+        return _error(400, "missing_amount", "either 'gb' or 'bytes' is required")
+    try:
+        if bytes_raw is not None:
+            grant_bytes = int(bytes_raw)
+            gb_value = grant_bytes / (1024**3)
+        else:
+            gb_value = float(gb_raw)
+            grant_bytes = round(gb_value * (1024**3))
+    except (TypeError, ValueError):
+        return _error(400, "invalid_amount", "amount must be a positive number")
+    if gb_value <= 0 or grant_bytes <= 0:
+        return _error(400, "invalid_amount", "amount must be positive")
+
+    subscription_service = get_optional_subscription_service(request)
+    if subscription_service is None:
+        return _error(503, "subscription_service_unavailable")
+
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        active = await subscription_dal.get_active_subscription_by_user_id(session, target_id)
+        if not active:
+            return _error(404, "no_active_subscription")
+
+        if kind == "regular":
+            result = await subscription_service.admin_grant_topup(session, target_id, gb_value)
+        else:
+            result = await subscription_service.admin_grant_premium_topup(
+                session, target_id, gb_value
+            )
+        if not result:
+            await session.rollback()
+            return _error(
+                422,
+                "grant_failed",
+                "Unable to credit traffic (missing tariff/squads or panel error)",
+            )
+
+        await message_log_dal.create_message_log(
+            session,
+            {
+                "user_id": actor_id,
+                "event_type": "admin_traffic_grant_webapp",
+                "content": f"kind={kind} bytes={grant_bytes}",
+                "is_admin_event": True,
+                "target_user_id": target_id,
+            },
+        )
+        await session.commit()
+
+        refreshed = await subscription_dal.get_active_subscription_by_user_id(session, target_id)
+
+    await _invalidate_after_admin_user_mutation(settings, target_id)
+    return _ok(
+        {
+            "subscription": _serialize_subscription(refreshed) if refreshed else None,
+            "grant": {
+                "kind": kind,
+                "granted_bytes": grant_bytes,
+                "granted_gb": gb_value,
+            },
+        }
+    )
+
+
+async def admin_user_extend_route(request: web.Request) -> web.Response:
+    actor_id = _require_admin_user_id(request)
+    target_id = int(request.match_info["user_id"])
+    settings: Settings = get_settings(request)
+    body = await parse_body_or_400(request, AdminUserExtendBody)
+    requested_end_date = body.end_date
+    if body.days is not None and requested_end_date is not None:
+        return _error(400, "invalid_days")
+    days = int(body.days or 0)
+    if days == 0 and requested_end_date is None:
+        return _error(400, "invalid_days")
+    extend_hwid_devices = body.extend_hwid_devices
+    extend_hwid_devices = True if extend_hwid_devices is None else bool(extend_hwid_devices)
+    apply_tariff_hwid_limit = bool(body.apply_tariff_hwid_limit)
+    tariff_key, tariff_error = _resolve_admin_period_tariff_key(
+        settings,
+        body.tariff_key,
+        allow_legacy_without_tariffs=True,
+    )
+    if tariff_error:
+        return _error(400, tariff_error)
+
+    subscription_service = get_optional_subscription_service(request)
+    if subscription_service is None:
+        return _error(503, "subscription_service_unavailable")
+
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        if days < 0 or requested_end_date is not None:
+            active = await subscription_dal.get_active_subscription_by_user_id(session, target_id)
+            current_end = getattr(active, "end_date", None) if active else None
+            if not isinstance(current_end, datetime):
+                return _error(404, "no_active_subscription")
+            if current_end.tzinfo is None:
+                current_end = current_end.replace(tzinfo=UTC)
+
+            if requested_end_date is not None:
+                days = (requested_end_date - current_end.date()).days
+                if days == 0:
+                    return _error(400, "invalid_days")
+
+            now = datetime.now(UTC)
+            target_end = max(current_end, now) + timedelta(days=days)
+            if target_end <= now:
+                return _error(
+                    400,
+                    "invalid_end_date",
+                    "Subscription end date must remain in the future",
+                )
+
+        if days < 0:
+            extend_hwid_devices = False
+        new_end = await subscription_service.extend_active_subscription_days(
+            session,
+            target_id,
+            days,
+            "admin_extend_subscription_webapp",
+            extend_hwid_devices=extend_hwid_devices,
+            apply_tariff_hwid_limit=apply_tariff_hwid_limit,
+            **({"tariff_key": tariff_key} if tariff_key else {}),
+        )
+        if not new_end:
+            await session.rollback()
+            return _error(500, "extend_failed")
+
+        await message_log_dal.create_message_log(
+            session,
+            {
+                "user_id": actor_id,
+                "event_type": "admin_extend_subscription_webapp",
+                "content": (
+                    f"{days:+d}d -> {new_end.isoformat()} "
+                    f"(hwid={'yes' if extend_hwid_devices else 'no'} "
+                    f"tariff={tariff_key or 'legacy'} "
+                    f"apply_tariff_hwid_limit={'yes' if apply_tariff_hwid_limit else 'no'})"
+                ),
+                "is_admin_event": True,
+                "target_user_id": target_id,
+            },
+        )
+        await session.commit()
+
+        refreshed = await subscription_dal.get_active_subscription_by_user_id(session, target_id)
+
+    await _invalidate_after_admin_user_mutation(settings, target_id)
+    return _ok(
+        {
+            "subscription": _serialize_subscription(refreshed) if refreshed else None,
+        }
+    )
+
+
+async def admin_user_tariff_route(request: web.Request) -> web.Response:
+    actor_id = _require_admin_user_id(request)
+    target_id = int(request.match_info["user_id"])
+    settings: Settings = get_settings(request)
+    body = await parse_body_or_400(request, AdminUserTariffBody)
+    tariff_key, tariff_error = _resolve_admin_period_tariff_key(
+        settings,
+        body.tariff_key,
+    )
+    if tariff_error:
+        return _error(400, tariff_error)
+    if not tariff_key:
+        return _error(400, "tariff_required")
+
+    subscription_service = get_optional_subscription_service(request)
+    if subscription_service is None:
+        return _error(503, "subscription_service_unavailable")
+
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        user = await user_dal.get_user_by_id(session, target_id)
+        if not user or not user.panel_user_uuid:
+            return _error(404, "no_panel_user")
+        active = await subscription_dal.get_active_subscription_by_user_id(
+            session, target_id, user.panel_user_uuid
+        )
+        if not active:
+            return _error(404, "no_active_subscription")
+
+        result = await subscription_service.switch_tariff_without_payment(
+            session,
+            target_id,
+            tariff_key,
+            "admin_assign",
+            apply_tariff_hwid_limit=bool(body.apply_tariff_hwid_limit),
+        )
+        if not result or result.get("subscription_id") != active.subscription_id:
+            await session.rollback()
+            return _error(500, "tariff_change_failed")
+
+        refreshed = await subscription_dal.get_active_subscription_by_user_id(
+            session, target_id, user.panel_user_uuid
+        )
+        if (
+            not refreshed
+            or refreshed.subscription_id != active.subscription_id
+            or refreshed.tariff_key != tariff_key
+        ):
+            await session.rollback()
+            return _error(500, "tariff_change_failed")
+
+        await message_log_dal.create_message_log(
+            session,
+            {
+                "user_id": actor_id,
+                "event_type": "admin_change_tariff_webapp",
+                "content": f"tariff={tariff_key}",
+                "is_admin_event": True,
+                "target_user_id": target_id,
+            },
+        )
+        subscription_payload = _serialize_subscription(refreshed)
+        await session.commit()
+
+    await _invalidate_after_admin_user_mutation(settings, target_id)
+    return _ok({"subscription": subscription_payload})

@@ -1,0 +1,286 @@
+# Resolve the application version from .git at build time and emit a tiny
+# .build-version file. The .git tree is consumed in this throwaway stage and
+# never copied into the runtime image; only the tag + commit version string and
+# a low-cardinality build provenance marker ship. Non-main builds include the
+# branch name so they are visibly distinct from release builds. This matches the
+# runtime fallback chain in _resolve_app_version (REMNAWAVE_MINISHOP_VERSION env
+# > .build-version file > live git > "dev+unknown") so the admin sidebar always
+# shows a tag / sha even though the runtime images have no git tooling and no
+# .git tree.
+FROM alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0 AS version-builder
+COPY deploy/docker/retry_apk.sh /tmp/retry_apk.sh
+RUN sh /tmp/retry_apk.sh add --no-cache git
+WORKDIR /repo
+ARG REMNAWAVE_MINISHOP_BRANCH=""
+ARG GIT_BRANCH=""
+ARG BRANCH_NAME=""
+ARG GITHUB_REF_NAME=""
+ARG CI_COMMIT_REF_NAME=""
+ARG REMNAWAVE_MINISHOP_BUILD_PROVENANCE="custom"
+ARG REMNAWAVE_MINISHOP_BUILD_TAG=""
+ARG REMNAWAVE_MINISHOP_BUILD_COMMIT=""
+RUN --mount=type=bind,source=.git,target=/repo/.git \
+    set -eu; \
+    tag="$REMNAWAVE_MINISHOP_BUILD_TAG"; \
+    sha="$REMNAWAVE_MINISHOP_BUILD_COMMIT"; \
+    branch="${REMNAWAVE_MINISHOP_BRANCH:-${GIT_BRANCH:-${BRANCH_NAME:-${GITHUB_REF_NAME:-${CI_COMMIT_REF_NAME:-}}}}}"; \
+    if [ -z "$sha" ]; then \
+        git config --global --add safe.directory /repo; \
+        if [ -z "$tag" ]; then tag=$(git describe --tags --abbrev=0 2>/dev/null || true); fi; \
+        if [ -z "$sha" ]; then sha=$(git rev-parse --short HEAD 2>/dev/null || true); fi; \
+        if [ -z "$branch" ]; then branch=$(git branch --show-current 2>/dev/null || true); fi; \
+        if [ -z "$branch" ]; then branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true); fi; \
+    fi; \
+    case "$branch" in \
+        refs/heads/*) branch="${branch#refs/heads/}" ;; \
+        refs/remotes/origin/*) branch="${branch#refs/remotes/origin/}" ;; \
+        origin/*) branch="${branch#origin/}" ;; \
+        HEAD) branch="" ;; \
+    esac; \
+    branch_slug=$(printf '%s' "$branch" | sed -E 's/[^A-Za-z0-9._-]+/-/g; s/^-+//; s/-+$//' | cut -c1-48); \
+    branch_suffix=""; \
+    if [ -n "$branch_slug" ] && [ "$branch_slug" != "main" ]; then branch_suffix="-$branch_slug"; fi; \
+    if [ -n "$tag" ] && [ -n "$sha" ]; then \
+        version="${tag}${branch_suffix}+g${sha}"; \
+    elif [ -n "$sha" ]; then \
+        version="dev${branch_suffix}+g${sha}"; \
+    elif [ -n "$tag" ]; then \
+        version="${tag}${branch_suffix}"; \
+    else \
+        version="dev${branch_suffix}+unknown"; \
+    fi; \
+    provenance=$(printf '%s' "$REMNAWAVE_MINISHOP_BUILD_PROVENANCE" | tr '[:upper:]' '[:lower:]'); \
+    case "$provenance" in \
+        official|custom|unknown) ;; \
+        true|1|yes|upstream|release) provenance="official" ;; \
+        false|0|no|fork|modified|local|"") provenance="custom" ;; \
+        *) provenance="custom" ;; \
+    esac; \
+    printf '%s' "$version" > /build-version; \
+    printf '%s' "${tag:-unknown}" > /build-tag; \
+    printf '%s' "${sha:-unknown}" > /build-commit; \
+    printf '%s' "$provenance" > /build-provenance
+
+
+FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac AS python-dependencies
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/backend \
+    VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /app
+
+# A 502 from an Ubuntu mirror fails the image build outright, so index refreshes
+# retry instead of taking the release down with them.
+RUN set -eux; \
+    printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
+      > /etc/apt/apt.conf.d/99-minishop-retries; \
+    apt_update_with_retries() { \
+      for attempt in 1 2 3 4 5; do \
+        if apt-get update; then return 0; fi; \
+        echo "apt-get update failed (attempt ${attempt}/5), retrying" >&2; \
+        sleep "$((attempt * 10))"; \
+      done; \
+      return 1; \
+    }; \
+    apt_update_with_retries; \
+    DEBIAN_FRONTEND=noninteractive apt-get upgrade -y; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      gnupg \
+      python3.12 \
+      python3.12-venv; \
+    . /etc/os-release; \
+    install -d /usr/share/postgresql-common/pgdg; \
+    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+      | gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg; \
+    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list; \
+    apt_update_with_retries; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends postgresql-client-17; \
+    python3.12 -m venv "$VIRTUAL_ENV"; \
+    # Keep curl in the runtime image: it backs the container healthcheck. A
+    # spawned curl is far cheaper than booting a full Python interpreter every
+    # interval. Only gnupg (build-time key import) is purged here.
+    apt-get purge -y --auto-remove gnupg; \
+    rm -rf /var/lib/apt/lists/*
+
+RUN useradd -u 10001 -m appuser
+
+COPY backend/requirements.txt backend/requirements.txt
+COPY deploy/docker/refresh_pip_vendor.py /tmp/refresh_pip_vendor.py
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-compile --upgrade "pip==26.2.2" && \
+    pip install --no-compile --no-deps --only-binary=:all: --target /tmp/pip-vendor-fixes \
+      "urllib3==2.8.0" "msgpack==1.2.3" "setuptools==80.9.0" && \
+    pip install --no-compile -r backend/requirements.txt && \
+    python /tmp/refresh_pip_vendor.py /tmp/pip-vendor-fixes && \
+    rm -rf /tmp/pip-vendor-fixes /tmp/refresh_pip_vendor.py
+
+FROM python-dependencies AS python-base
+
+COPY locales ./locales
+COPY data ./data
+COPY backend ./backend
+RUN mkdir -p /app/logs /app/data \
+    && if [ ! -f /app/data/locales-overrides.json ]; then printf '{}\n' > /app/data/locales-overrides.json; fi \
+    && chown -R appuser:appuser /app/logs /app/data
+COPY --from=version-builder /build-version /app/.build-version
+COPY --from=version-builder /build-tag /app/.build-tag
+COPY --from=version-builder /build-commit /app/.build-commit
+COPY --from=version-builder /build-provenance /app/.build-provenance
+
+USER appuser
+
+
+FROM node:24-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS node-runtime
+
+FROM node-runtime AS frontend-builder
+
+WORKDIR /app/frontend
+
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN --mount=type=cache,target=/root/.npm \
+    if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+COPY frontend ./
+COPY backend/config/defaults/svg_policy.json ../backend/config/defaults/svg_policy.json
+RUN mkdir -p ../backend/bot/app/web/templates
+
+RUN npm run build:webapp
+COPY backend/bot/app/web/templates/subscription_webapp.html ../backend/bot/app/web/templates/subscription_webapp.html
+RUN node ./scripts/prepare_nginx_assets.mjs --out ../frontend-nginx-dist
+
+
+FROM python-base AS backend
+
+USER root
+
+# The Mini App shell is rendered by the backend, which rewrites the stylesheet
+# and script tags to the content-hashed asset names (subscription_webapp.<hash>.css).
+# Those hashed files are build artifacts and gitignored, so a clean checkout has
+# none of them: without this copy the asset resolver falls back to the bare
+# /subscription_webapp.css URL. That URL never changes between deploys and is
+# served no-store, which iOS WebViews (WKWebView) cache aggressively and refuse to
+# revalidate -> stale CSS and a broken-looking Mini App on iOS only. Pull the
+# freshly built assets (the same hashes the nginx image serves) into the image so
+# the shell emits immutable, cache-busting URLs.
+COPY --from=frontend-builder /app/backend/bot/app/web/templates/ ./backend/bot/app/web/templates/
+COPY deploy/docker/backend-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/backend-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/backend-entrypoint.sh"]
+
+# GitHub source URL (disabled): https://github.com/3252a8/remnawave-minishop
+LABEL org.opencontainers.image.source="https://gitlab.com/3252a8/remnawave-minishop" \
+      org.opencontainers.image.title="remnawave-minishop-backend" \
+      org.opencontainers.image.description="Remnawave Minishop backend (Telegram bot API, web app, webhooks)." \
+      org.opencontainers.image.licenses="MIT"
+
+EXPOSE 8080 8081
+CMD ["python", "backend/plugin_launcher.py", "backend"]
+
+
+FROM docker:29.9.1-cli@sha256:6fae2214c3121a28d5aa639d09032f61310b7c9c75ffbad1025f261a1b621800 AS docker-test-tools
+
+FROM python-dependencies AS qa-deps
+
+# The optional test image supplies POSIX shell tools on Windows hosts too.
+# It is never used as an application runtime image.
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      bash \
+      git \
+      openssl \
+    && rm -rf /var/lib/apt/lists/*
+COPY requirements-dev.txt /tmp/requirements-dev.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r /tmp/requirements-dev.txt
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=docker-test-tools /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker-test-tools /usr/local/libexec/docker/cli-plugins /usr/local/libexec/docker/cli-plugins
+COPY --from=node-runtime /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+LABEL minishop.test.runtime="core" minishop.local.keep="true"
+WORKDIR /workspace
+CMD ["python", "-m", "pytest"]
+
+FROM qa-deps AS qa
+COPY . /workspace
+CMD ["python", "-m", "pytest"]
+
+
+FROM python-base AS worker
+
+# GitHub source URL (disabled): https://github.com/3252a8/remnawave-minishop
+LABEL org.opencontainers.image.source="https://gitlab.com/3252a8/remnawave-minishop" \
+      org.opencontainers.image.title="remnawave-minishop-worker" \
+      org.opencontainers.image.description="Remnawave Minishop background worker (scheduled jobs, async tasks)." \
+      org.opencontainers.image.licenses="MIT"
+
+CMD ["python", "backend/plugin_launcher.py", "worker"]
+
+
+FROM nginx:1.30.6-alpine@sha256:970364228b1e4f932abc22d321932816782cca8a20b85a77552a7cfe9acfb3b5 AS nginx-brotli-builder
+
+# Refresh Alpine packages for every published source revision.
+ARG REMNAWAVE_MINISHOP_APK_REFRESH=""
+COPY deploy/docker/retry_apk.sh /tmp/retry_apk.sh
+RUN set -eu; \
+    : "$REMNAWAVE_MINISHOP_APK_REFRESH"; \
+    sh /tmp/retry_apk.sh upgrade --no-cache; \
+    sh /tmp/retry_apk.sh add --no-cache \
+        build-base \
+        git \
+        linux-headers \
+        openssl-dev \
+        pcre2-dev \
+        wget \
+        zlib-dev; \
+    nginx_version="$(nginx -v 2>&1 | sed 's#nginx version: nginx/##')"; \
+    cd /tmp; \
+    wget -q "https://nginx.org/download/nginx-${nginx_version}.tar.gz"; \
+    tar -xzf "nginx-${nginx_version}.tar.gz"; \
+    git clone --branch v1.0.0rc --depth 1 --recurse-submodules \
+        https://github.com/google/ngx_brotli.git; \
+    cd "nginx-${nginx_version}"; \
+    ./configure \
+        --with-compat \
+        --with-cc-opt='-Wno-error=vla-parameter -Wno-error=unterminated-string-initialization' \
+        --add-dynamic-module=../ngx_brotli; \
+    make modules; \
+    mkdir -p /brotli-modules; \
+    cp objs/ngx_http_brotli_static_module.so /brotli-modules/
+
+
+FROM nginx:1.30.6-alpine@sha256:970364228b1e4f932abc22d321932816782cca8a20b85a77552a7cfe9acfb3b5 AS frontend
+
+ARG REMNAWAVE_MINISHOP_APK_REFRESH=""
+COPY deploy/docker/retry_apk.sh /tmp/retry_apk.sh
+# GitHub source URL (disabled): https://github.com/3252a8/remnawave-minishop
+LABEL org.opencontainers.image.source="https://gitlab.com/3252a8/remnawave-minishop" \
+      org.opencontainers.image.title="remnawave-minishop-frontend" \
+      org.opencontainers.image.description="Remnawave Minishop frontend (nginx serving the subscription Mini App)." \
+      org.opencontainers.image.licenses="MIT"
+
+COPY --from=nginx-brotli-builder /brotli-modules/ngx_http_brotli_static_module.so /usr/lib/nginx/modules/
+RUN set -eu; \
+    : "$REMNAWAVE_MINISHOP_APK_REFRESH"; \
+    sh /tmp/retry_apk.sh upgrade --no-cache; \
+    rm /tmp/retry_apk.sh; \
+    sed -i '1i load_module modules/ngx_http_brotli_static_module.so;' /etc/nginx/nginx.conf
+COPY deploy/docker/frontend/nginx.conf /etc/nginx/minishop/default.conf.template
+COPY deploy/docker/frontend/00-startup-banner.sh /docker-entrypoint.d/00-startup-banner.sh
+COPY deploy/docker/frontend/robots.txt /usr/share/nginx/html/robots.txt
+RUN set -eu; \
+    find /docker-entrypoint.d -type f -name '*.sh' -exec sed -i 's/\r$//' {} +; \
+    chmod +x /docker-entrypoint.d/00-startup-banner.sh
+COPY --from=frontend-builder /app/frontend-nginx-dist/ /usr/share/nginx/html/
+COPY --from=version-builder /build-tag /build-tag
+COPY --from=version-builder /build-commit /build-commit
+
+EXPOSE 80

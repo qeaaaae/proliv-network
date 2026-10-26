@@ -1,0 +1,590 @@
+import inspect
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from sqlalchemy import and_, case, delete, func, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from db.models import (
+    FlexibleTrafficLimit,
+    HwidDevicePurchase,
+    Payment,
+    TariffChange,
+    TrafficTopup,
+    TrafficWarning,
+)
+
+from ._sqlalchemy import rowcount
+from .tariff_read_batch import current_tariff_read_batch, utc
+
+
+async def create_traffic_topup(
+    session: AsyncSession,
+    *,
+    subscription_id: int,
+    payment_id: int | None,
+    purchased_bytes: int,
+    kind: str,
+) -> TrafficTopup:
+    record = TrafficTopup(
+        subscription_id=subscription_id,
+        payment_id=payment_id,
+        purchased_bytes=purchased_bytes,
+        kind=kind,
+    )
+    session.add(record)
+    await session.flush()
+    await session.refresh(record)
+    return record
+
+
+async def create_flexible_traffic_limit(
+    session: AsyncSession,
+    *,
+    subscription_id: int,
+    payment_id: int | None,
+    kind: str,
+    tariff_key: str,
+    limit_bytes: int,
+    valid_from: datetime,
+    valid_until: datetime,
+    monthly_amount: float = 0.0,
+    monthly_stars_amount: int = 0,
+) -> FlexibleTrafficLimit:
+    existing = None
+    if payment_id is not None:
+        existing = (
+            await session.execute(
+                select(FlexibleTrafficLimit).where(
+                    FlexibleTrafficLimit.payment_id == payment_id,
+                    FlexibleTrafficLimit.kind == kind,
+                    FlexibleTrafficLimit.valid_from == valid_from,
+                    FlexibleTrafficLimit.valid_until == valid_until,
+                )
+            )
+        ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    record = FlexibleTrafficLimit(
+        subscription_id=subscription_id,
+        payment_id=payment_id,
+        kind=kind,
+        tariff_key=tariff_key,
+        limit_bytes=max(0, int(limit_bytes)),
+        valid_from=valid_from,
+        valid_until=valid_until,
+        monthly_amount=max(0.0, float(monthly_amount)),
+        monthly_stars_amount=max(0, int(monthly_stars_amount)),
+    )
+    session.add(record)
+    await session.flush()
+    return record
+
+
+async def get_active_flexible_traffic_limits(
+    session: AsyncSession,
+    *,
+    subscription_id: int,
+    at: datetime | None = None,
+) -> dict[str, int]:
+    at = at or datetime.now(UTC)
+    batch = current_tariff_read_batch(session)
+    if batch is not None and subscription_id in batch.subscription_ids:
+        return batch.active_limits(subscription_id, at)
+    result = await session.execute(
+        select(
+            FlexibleTrafficLimit.kind,
+            func.max(FlexibleTrafficLimit.limit_bytes),
+        )
+        .where(
+            FlexibleTrafficLimit.subscription_id == subscription_id,
+            FlexibleTrafficLimit.valid_from <= at,
+            FlexibleTrafficLimit.valid_until > at,
+        )
+        .group_by(FlexibleTrafficLimit.kind)
+    )
+    load_rows = getattr(result, "all", None)
+    if not callable(load_rows):
+        return {}
+    rows = await _resolve_result_value(load_rows())
+    return {str(kind): max(0, int(limit_bytes or 0)) for kind, limit_bytes in rows}
+
+
+async def get_active_flexible_traffic_limit_records(
+    session: AsyncSession,
+    *,
+    subscription_id: int,
+    at: datetime | None = None,
+) -> dict[str, FlexibleTrafficLimit]:
+    at = at or datetime.now(UTC)
+    result = await session.execute(
+        select(FlexibleTrafficLimit)
+        .where(
+            FlexibleTrafficLimit.subscription_id == subscription_id,
+            FlexibleTrafficLimit.valid_from <= at,
+            FlexibleTrafficLimit.valid_until > at,
+        )
+        .order_by(
+            FlexibleTrafficLimit.kind.asc(),
+            FlexibleTrafficLimit.limit_bytes.desc(),
+            FlexibleTrafficLimit.created_at.desc(),
+        )
+    )
+    scalars = await _resolve_result_value(result.scalars())
+    records = await _resolve_result_value(scalars.all())
+    record_by_kind: dict[str, FlexibleTrafficLimit] = {}
+    for record in records:
+        record_by_kind.setdefault(str(record.kind), record)
+    return record_by_kind
+
+
+async def list_flexible_traffic_limit_records_in_window(
+    session: AsyncSession,
+    *,
+    subscription_id: int,
+    valid_from: datetime,
+    valid_until: datetime,
+) -> list[FlexibleTrafficLimit]:
+    if valid_until <= valid_from:
+        return []
+    result = await session.execute(
+        select(FlexibleTrafficLimit)
+        .where(
+            FlexibleTrafficLimit.subscription_id == subscription_id,
+            FlexibleTrafficLimit.valid_from < valid_until,
+            FlexibleTrafficLimit.valid_until > valid_from,
+        )
+        .order_by(
+            FlexibleTrafficLimit.valid_from.asc(),
+            FlexibleTrafficLimit.limit_bytes.desc(),
+            FlexibleTrafficLimit.created_at.asc(),
+        )
+    )
+    scalars = await _resolve_result_value(result.scalars())
+    return list(await _resolve_result_value(scalars.all()))
+
+
+async def get_flexible_traffic_limit_history_start(
+    session: AsyncSession,
+    *,
+    subscription_id: int,
+    kind: str,
+) -> datetime | None:
+    batch = current_tariff_read_batch(session)
+    if batch is not None and subscription_id in batch.subscription_ids:
+        starts = [
+            row.valid_from for row in batch.flexible.get(subscription_id, []) if row.kind == kind
+        ]
+        return min(starts, key=utc) if starts else None
+    load_scalar = getattr(session, "scalar", None)
+    if not callable(load_scalar):
+        return None
+    value = await load_scalar(
+        select(func.min(FlexibleTrafficLimit.valid_from)).where(
+            FlexibleTrafficLimit.subscription_id == subscription_id,
+            FlexibleTrafficLimit.kind == kind,
+        )
+    )
+    return value if isinstance(value, datetime) else None
+
+
+async def sum_traffic_topups(
+    session: AsyncSession,
+    *,
+    subscription_id: int,
+    kinds: list[str] | None = None,
+    created_at_gte: datetime | None = None,
+) -> int:
+    batch = current_tariff_read_batch(session)
+    if batch is not None and subscription_id in batch.subscription_ids:
+        return sum(
+            row.purchased_bytes
+            for row in batch.topups.get(subscription_id, [])
+            if (not kinds or row.kind in kinds)
+            and (created_at_gte is None or utc(row.created_at) >= utc(created_at_gte))
+        )
+    conditions = [TrafficTopup.subscription_id == subscription_id]
+    if kinds:
+        conditions.append(TrafficTopup.kind.in_(list(kinds)))
+    if created_at_gte is not None:
+        conditions.append(TrafficTopup.created_at >= created_at_gte)
+    result = await session.execute(
+        select(func.coalesce(func.sum(TrafficTopup.purchased_bytes), 0)).where(and_(*conditions))
+    )
+    return int(result.scalar() or 0)
+
+
+async def create_hwid_device_purchase(
+    session: AsyncSession,
+    *,
+    subscription_id: int,
+    payment_id: int | None,
+    purchased_devices: int,
+    traffic_bonus_bytes: int | None = 0,
+    valid_from: datetime | None = None,
+    valid_until: datetime | None = None,
+) -> HwidDevicePurchase:
+    record = HwidDevicePurchase(
+        subscription_id=subscription_id,
+        payment_id=payment_id,
+        purchased_devices=purchased_devices,
+        traffic_bonus_bytes=(
+            max(0, int(traffic_bonus_bytes)) if traffic_bonus_bytes is not None else None
+        ),
+        valid_from=valid_from or datetime.now(UTC),
+        valid_until=valid_until,
+    )
+    session.add(record)
+    await session.flush()
+    await session.refresh(record)
+    return record
+
+
+def _hwid_active_conditions(subscription_id: int, at: datetime) -> list[Any]:
+    return [
+        HwidDevicePurchase.subscription_id == subscription_id,
+        HwidDevicePurchase.purchased_devices > 0,
+        or_(HwidDevicePurchase.valid_from.is_(None), HwidDevicePurchase.valid_from <= at),
+        or_(HwidDevicePurchase.valid_until.is_(None), HwidDevicePurchase.valid_until > at),
+    ]
+
+
+async def _resolve_result_value(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+async def sum_active_hwid_devices(
+    session: AsyncSession,
+    *,
+    subscription_id: int,
+    at: datetime | None = None,
+) -> int:
+    at = at or datetime.now(UTC)
+    result = await session.execute(
+        select(func.coalesce(func.sum(HwidDevicePurchase.purchased_devices), 0)).where(
+            and_(*_hwid_active_conditions(subscription_id, at))
+        )
+    )
+    return int(await _resolve_result_value(result.scalar()) or 0)
+
+
+async def get_hwid_device_entitlement_summary(
+    session: AsyncSession,
+    *,
+    subscription_id: int,
+    at: datetime | None = None,
+    include_future: bool = True,
+) -> dict[str, Any]:
+    at = at or datetime.now(UTC)
+    batch = current_tariff_read_batch(session)
+    if batch is not None and subscription_id in batch.subscription_ids:
+        return batch.hwid_summary(subscription_id, at, include_future)
+    active_result = await session.execute(
+        select(
+            func.coalesce(func.sum(HwidDevicePurchase.purchased_devices), 0),
+            func.max(HwidDevicePurchase.valid_until),
+            func.coalesce(func.sum(HwidDevicePurchase.traffic_bonus_bytes), 0),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            HwidDevicePurchase.traffic_bonus_bytes.is_(None),
+                            HwidDevicePurchase.purchased_devices,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+        ).where(and_(*_hwid_active_conditions(subscription_id, at)))
+    )
+    (
+        active_devices,
+        active_until,
+        traffic_bonus_bytes,
+        legacy_active_devices,
+    ) = await _resolve_result_value(active_result.one())
+    next_valid_from = None
+    if include_future:
+        future_result = await session.execute(
+            select(func.min(HwidDevicePurchase.valid_from)).where(
+                and_(
+                    HwidDevicePurchase.subscription_id == subscription_id,
+                    HwidDevicePurchase.purchased_devices > 0,
+                    HwidDevicePurchase.valid_from > at,
+                )
+            )
+        )
+        next_valid_from = await _resolve_result_value(future_result.scalar_one_or_none())
+    return {
+        "active_devices": int(active_devices or 0),
+        "active_until": active_until,
+        "traffic_bonus_bytes": int(traffic_bonus_bytes or 0),
+        "legacy_active_devices": int(legacy_active_devices or 0),
+        "next_valid_from": next_valid_from,
+    }
+
+
+def _hwid_payment_component_amount(
+    *,
+    payment_amount: Any,
+    sale_mode: Any,
+    hwid_full_price: Any,
+    hwid_proration_ratio: Any,
+    checkout_base_amount: Any,
+) -> float:
+    try:
+        total_paid = max(0.0, float(payment_amount or 0))
+    except (TypeError, ValueError):
+        total_paid = 0.0
+    sale_mode_base = str(sale_mode or "").split("@", 1)[0].split("|", 1)[0]
+    if sale_mode_base != "subscription" or hwid_full_price is None:
+        return total_paid
+
+    try:
+        hwid_component = max(0.0, float(hwid_full_price))
+    except (TypeError, ValueError):
+        return total_paid
+    try:
+        proration_ratio = max(0.0, min(1.0, float(hwid_proration_ratio)))
+    except (TypeError, ValueError):
+        proration_ratio = 1.0
+    hwid_component *= proration_ratio
+
+    try:
+        checkout_base = max(0.0, float(checkout_base_amount or 0))
+    except (TypeError, ValueError):
+        checkout_base = 0.0
+    if checkout_base > 0 and total_paid < checkout_base:
+        hwid_component *= total_paid / checkout_base
+    return min(total_paid, hwid_component)
+
+
+async def get_hwid_device_value_entries(
+    session: AsyncSession,
+    *,
+    subscription_id: int,
+    at: datetime | None = None,
+) -> list[dict[str, Any]]:
+    at = at or datetime.now(UTC)
+    result = await session.execute(
+        select(
+            HwidDevicePurchase.purchase_id,
+            HwidDevicePurchase.purchased_devices,
+            HwidDevicePurchase.valid_from,
+            HwidDevicePurchase.valid_until,
+            HwidDevicePurchase.created_at,
+            Payment.amount,
+            Payment.currency,
+            Payment.sale_mode,
+            Payment.hwid_full_price,
+            Payment.hwid_proration_ratio,
+            Payment.checkout_base_amount,
+        )
+        .outerjoin(Payment, Payment.payment_id == HwidDevicePurchase.payment_id)
+        .where(
+            and_(
+                HwidDevicePurchase.subscription_id == subscription_id,
+                HwidDevicePurchase.purchased_devices > 0,
+                or_(HwidDevicePurchase.valid_until.is_(None), HwidDevicePurchase.valid_until > at),
+            )
+        )
+    )
+    rows = await _resolve_result_value(result.all())
+    return [
+        {
+            "purchase_id": row[0],
+            "purchased_devices": row[1],
+            "valid_from": row[2],
+            "valid_until": row[3],
+            "created_at": row[4],
+            "amount": _hwid_payment_component_amount(
+                payment_amount=row[5],
+                sale_mode=row[7],
+                hwid_full_price=row[8],
+                hwid_proration_ratio=row[9],
+                checkout_base_amount=row[10],
+            ),
+            "currency": row[6],
+        }
+        for row in rows
+    ]
+
+
+async def expire_hwid_device_purchases(
+    session: AsyncSession,
+    *,
+    purchase_ids: list[int],
+    at: datetime | None = None,
+) -> int:
+    ids = [int(item) for item in purchase_ids if item is not None]
+    if not ids:
+        return 0
+    at = at or datetime.now(UTC)
+    result = await session.execute(
+        update(HwidDevicePurchase)
+        .where(HwidDevicePurchase.purchase_id.in_(ids))
+        .values(valid_until=at)
+    )
+    return rowcount(result)
+
+
+def _normalize_aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
+async def extend_hwid_device_purchases_for_subscription_bonus(
+    session: AsyncSession,
+    *,
+    subscription_id: int,
+    at: datetime | None = None,
+    subscription_end_before: datetime | None = None,
+    delta: timedelta,
+) -> int:
+    if delta.total_seconds() <= 0:
+        return 0
+    at = _normalize_aware_utc(at or datetime.now(UTC))
+    end_before = _normalize_aware_utc(subscription_end_before) if subscription_end_before else None
+
+    target_records: list[HwidDevicePurchase] = []
+    if end_before:
+        tail_result = await session.execute(
+            select(HwidDevicePurchase).where(
+                and_(
+                    HwidDevicePurchase.subscription_id == subscription_id,
+                    HwidDevicePurchase.purchased_devices > 0,
+                    HwidDevicePurchase.valid_until.is_not(None),
+                    HwidDevicePurchase.valid_until >= end_before,
+                    HwidDevicePurchase.valid_until > at,
+                    or_(
+                        HwidDevicePurchase.valid_from.is_(None),
+                        HwidDevicePurchase.valid_from < end_before,
+                    ),
+                )
+            )
+        )
+        target_records = list(tail_result.scalars().all())
+
+    if not target_records:
+        active_result = await session.execute(
+            select(HwidDevicePurchase).where(
+                and_(
+                    *_hwid_active_conditions(subscription_id, at),
+                    HwidDevicePurchase.valid_until.is_not(None),
+                )
+            )
+        )
+        target_records = list(active_result.scalars().all())
+
+    for record in target_records:
+        if record.valid_until is not None:
+            record.valid_until = _normalize_aware_utc(record.valid_until) + delta
+    if target_records:
+        await session.flush()
+    return len(target_records)
+
+
+async def create_tariff_change(
+    session: AsyncSession,
+    change_data: dict[str, Any],
+) -> TariffChange:
+    record = TariffChange(**change_data)
+    session.add(record)
+    await session.flush()
+    await session.refresh(record)
+    return record
+
+
+async def get_warning(
+    session: AsyncSession,
+    *,
+    subscription_id: int,
+    period_start_at: datetime | None,
+    level: int,
+    traffic_limit_bytes: int | None = None,
+) -> TrafficWarning | None:
+    """Return an existing traffic warning row if one was already recorded.
+
+    For traffic-style billing ``period_start_at`` is NULL. Do **not** match on
+    ``traffic_limit_bytes`` in that case: the effective limit can change between
+    worker ticks (panel sync, top-ups, admin adjustments). Matching on the exact
+    bytes caused duplicate Telegram alerts after restarts or the next poll.
+    The ``traffic_limit_bytes`` argument is kept for call-site compatibility
+    but is ignored when ``period_start_at`` is None.
+    """
+    conditions = [
+        TrafficWarning.subscription_id == subscription_id,
+        TrafficWarning.level == level,
+    ]
+    if period_start_at is None:
+        conditions.append(TrafficWarning.period_start_at.is_(None))
+    else:
+        conditions.append(TrafficWarning.period_start_at == period_start_at)
+    result = await session.execute(select(TrafficWarning).where(and_(*conditions)).limit(1))
+    return result.scalar_one_or_none()
+
+
+async def has_warning_level_between(
+    session: AsyncSession,
+    *,
+    subscription_id: int,
+    period_start_at: datetime | None,
+    min_level: int,
+    max_level: int,
+) -> bool:
+    conditions = [
+        TrafficWarning.subscription_id == subscription_id,
+        TrafficWarning.level >= min_level,
+        TrafficWarning.level <= max_level,
+    ]
+    if period_start_at is None:
+        conditions.append(TrafficWarning.period_start_at.is_(None))
+    else:
+        conditions.append(TrafficWarning.period_start_at == period_start_at)
+    result = await session.execute(
+        select(TrafficWarning.warning_id).where(and_(*conditions)).limit(1)
+    )
+    warning_id = await _resolve_result_value(result.scalar_one_or_none())
+    return warning_id is not None
+
+
+async def create_warning(
+    session: AsyncSession,
+    *,
+    subscription_id: int,
+    period_start_at: datetime | None,
+    level: int,
+    traffic_limit_bytes: int | None,
+) -> TrafficWarning:
+    record = TrafficWarning(
+        subscription_id=subscription_id,
+        period_start_at=period_start_at,
+        level=level,
+        traffic_limit_bytes=traffic_limit_bytes,
+    )
+    session.add(record)
+    await session.flush()
+    await session.refresh(record)
+    return record
+
+
+async def clear_period_warnings(session: AsyncSession, subscription_id: int) -> int:
+    result = await session.execute(
+        delete(TrafficWarning).where(TrafficWarning.subscription_id == subscription_id)
+    )
+    return rowcount(result)
+
+
+async def get_tariff_changes_for_subscription(
+    session: AsyncSession, subscription_id: int
+) -> list[TariffChange]:
+    result = await session.execute(
+        select(TariffChange)
+        .where(TariffChange.subscription_id == subscription_id)
+        .order_by(TariffChange.created_at.desc())
+    )
+    return list(result.scalars().all())

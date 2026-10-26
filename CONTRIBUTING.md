@@ -1,0 +1,491 @@
+# Контрибьютинг
+
+Этот документ фиксирует архитектуру, соглашения и **проверяемые** гейты качества проекта.
+Он написан для любого контрибьютора — человека или AI-агента. Главная идея:
+
+> **Контракты — единственный источник правды, и они держатся на тулинге, а не на договорённости.**
+> Типы, схемы и сгенерированные артефакты валят сборку при расхождении — поэтому ошибка
+> всплывает локально или в CI, а не в проде. Сомневаешься — заставь машину это проверить.
+
+Прочитай это один раз перед изменением кода. Большинство правил ниже защищены CI (раздел 1):
+если следуешь гейтам, тебе сообщат, когда ты нарушишь правило.
+
+---
+
+## 1. Гейты качества — выбирай по зоне изменений перед пушем
+
+CI (`.github/workflows/ci.yml`) прогоняет всё перечисленное; ничего не мёржится красным.
+
+Локально сначала классифицируй **весь** diff (включая staged и unstaged файлы) и запускай
+минимальный набор, который способен поймать регрессию в затронутой зоне. Полный прогон обязателен
+для product/shared-кода, корневых зависимостей и конфигурации, CI/deploy, нескольких затронутых зон
+или когда изоляцию нельзя уверенно доказать. Явно запрошенную команду всегда запускай дословно.
+
+Удобная агрегирующая команда из корня репозитория:
+```bash
+make check
+```
+
+Та же полная проверка доступна без GNU `make`:
+```bash
+npm run check
+```
+
+Для быстрого локального smoke-прогона без `ruff format --check`, `mypy` и полного frontend `build`
+можно использовать:
+```bash
+npm run check:quick
+```
+
+Для документации используется отдельная матрица; полный backend/frontend набор для этих изменений
+не запускается только ради ритуала:
+
+| Граница изменений | Обязательная локальная проверка |
+| --- | --- |
+| Только обычный Markdown/policy (`README*`, `AGENTS.md`, `CONTRIBUTING.md`, `docs/**/*.md`) и статические docs-ассеты, кроме generated-файлов | `git diff --check`, проверка изменённых ссылок/путей и визуальная проверка затронутого материала; если он публикуется docs-site — также `npm run check:docs` и `npm run build:docs` |
+| Только `docs-site/**` | `npm run check:docs` и `npm run build:docs`; добавь `npm run check:e2e` только при изменении demo runtime, клиентского поведения или навигации |
+| `docs-site/package-lock.json` или docs-site зависимости | `npm run check:lockfiles`, затем `npm run build:docs` |
+| Generated docs/contracts | соответствующий генератор и drift/contract test из таблицы ниже, затем `npm run check:docs`; изменение кода генератора уже считается code change |
+
+После scoped-прогона перечисли выполненные проверки и явно укажи, что полный `pytest`/`ruff`/
+`mypy`/frontend matrix пропущен из-за доказанного docs-only или docs-site-only diff. CI всё равно
+остаётся окончательным полным гейтом перед merge.
+
+There is no mypy frontier: the whole repository is in scope — all backend packages, both
+script roots (`backend/scripts`, `scripts`), and the whole `tests/` tree. The `type_ignore`
+allowlist holds a single boundary-proven entry (`config/settings.py`: pydantic-settings
+fills required fields from the environment, invisible to static analysis; the inline
+comment at the call site carries the proof).
+
+Явные команды ниже остаются источником правды для CI и ручной диагностики.
+
+**Бэкенд** (из корня репозитория; `pytest.ini` задаёт `pythonpath = backend .`):
+```bash
+python -m pytest -q                 # полный прогон (в CI поднимаются Postgres + Redis; warnings-as-errors; branch-coverage ratchet: fail_under=53)
+python -m ruff check .              # линт
+python -m ruff format --check .     # формат
+python -m mypy --explicit-package-bases backend/config backend/db backend/bot/infra \
+  backend/bot/middlewares backend/bot/utils \
+  backend/bot/plugins backend/bot/keyboards backend/bot/payment_providers backend/bot/services \
+  backend/bot/handlers backend/bot/app/factories backend/bot/app/controllers backend/bot/app/web \
+  backend/main_backend.py backend/main_worker.py backend/scripts scripts tests
+```
+
+Финальный набор ruff-семейств — `E, W, F, I, UP, B, ASYNC, DTZ, C4, SIM, PIE, PERF, RUF,
+LOG, G, PLE, T10` (задан в `pyproject.toml` `[tool.ruff.lint]`); `per-file-ignores` нет,
+поэтому нового lint-исключения по файлу завести нельзя. `pytest.ini` держит
+`filterwarnings = error`: любой незапланированный warning валит прогон.
+
+### Локальные backend-тесты на Windows
+
+На Windows вне CI `npm test` запускает свежий снимок текущих Git-исходников
+(включая новые неигнорируемые файлы) в Linux Docker. `.env` и граф знаний не
+попадают в снимок. Target `qa-deps` содержит только Python/Node/Docker CLI и
+зависимости; фронтенд и код продукта при подготовке окружения не собираются.
+Отладочный asyncio, warnings-as-errors и аргументы pytest сохраняются.
+
+```bash
+npm run check:local    # подготовка зависимостей по fingerprint + полный npm run check
+npm run qa:local       # полный изолированный stand, upgrade и zero-skips tests
+npm run test:env        # один раз подготовить Linux-зависимости
+npm run test:env:refresh # обновить ОС/зависимости явно; требуется сеть
+npm run test:env:gc     # освободить старые удерживающие контейнеры
+```
+
+`check:local` требует Node 24, uv и Python 3.12 (uv может скачать Python).
+Native Python и frontend node_modules хранятся вне checkout в
+`%LOCALAPPDATA%/minishop/test-envs` либо `$XDG_CACHE_HOME/minishop/test-envs`
+(по умолчанию `~/.cache/minishop/test-envs`); `MINISHOP_TEST_CACHE_DIR` меняет
+корень. node_modules подключается ссылкой. После очистки checkout ссылка
+восстанавливается, установка по неизменённым manifest/lock не повторяется.
+Пути разных ОС, архитектур и версий Node изолированы.
+
+Linux-образ закрепляется в `deploy/docker/test-runtime.lock.json` по digest и
+fingerprint зависимостей. GitLab публикует только dependency stage в
+`3252a8/remnawave-minishop-test-runtime`; artifact с новым lock нужно проверить
+и добавить в dev. При смене входных файлов старый lock не используется; при
+недоступности реестра есть локальная сборка. Mutable tag никогда не заменяет
+digest уже проверенного lock. Для обновления: `test:env:refresh`, затем
+`node scripts/test_runtime.mjs publish` с авторизацией Docker Hub как `3252a8`.
+Не переиспользуйте тестовые базы данных между прогонами.
+
+Остановленный keeper с `minishop.local.keep=true` удерживает только образ и
+не запускает процессов. Очистка контейнеров обязана исключать эту метку:
+`docker container prune -f --filter "label!=minishop.local.keep=true"`.
+Не используйте неограниченный `docker system prune` для этого engine.
+Пределы активного pytest: 4 CPU / 4 GiB; переопределение —
+`MINISHOP_TEST_CPUS` и `MINISHOP_TEST_MEMORY`. Вне запуска ресурсы не резервируются.
+Подробные правила хранения и обновления: [test-environments.md](docs/test-environments.md).
+
+Без Docker используется `.venv/Scripts/python.exe` или pytest из PATH.
+`MINISHOP_LOCAL_TEST_RUNTIME=native` выбирает native явно;
+`MINISHOP_LOCAL_TEST_RUNTIME=container` разрешает контейнер и на Linux/в CI.
+Не сохраняйте рабочие секреты в образ, lock или snapshot.
+
+**Фронтенд** (`frontend/`):
+```bash
+npm run check        # eslint + svelte-check + prettier --check
+npm run test         # Vitest unit-тесты helper'ов и store'ов
+npm run build        # vite build должен проходить после type-only изменений
+npm run test:e2e     # Playwright docs-demo smoke: webapp+админка, окна, вкладки, zero console errors
+```
+
+**У сгенерированных артефактов есть drift-guard — регенерируй, не правь руками:**
+| Артефакт | Регенерация | Защищён |
+| --- | --- | --- |
+| `docs/openapi.json` | `PYTHONPATH=backend python -m bot.app.web.openapi` | `tests/contracts/test_openapi_artifact.py` |
+| `docs-site/public/openapi.json` | `npm --prefix docs-site run sync:docs` | `npm run check:docs`, pre-commit, CI |
+| `docs/architecture/events.md` | `PYTHONPATH=backend python -m bot.infra.event_catalog` | `tests/contracts/test_contract_docs_accuracy.py` |
+| `docs/architecture/remnawave-api-compatibility.md` | `PYTHONPATH=backend python -m bot.services.panel_api_catalog` | `tests/contracts/test_remnawave_api_contract.py` |
+| `frontend/src/lib/api/openapi.generated.ts` | `npm --prefix frontend run generate:api-types` | CI `git diff --exit-code` |
+| demo settings manifest | `python scripts/export_settings_manifest.py` (+ prettier) | `tests/contracts/test_settings_manifest_demo_sync.py` |
+| `docs/remnawave-minishop.webp` | `npm run generate:readme-screenshot` | визуальная проверка README |
+| `backend/requirements.txt` | `python -m piptools compile --resolver=backtracking --no-emit-index-url --no-emit-trusted-host -o backend/requirements.txt backend/requirements.in` (Python 3.12) | CI install + `pip-audit` |
+| `frontend/package-lock.json`, `docs-site/package-lock.json` | `cd <каталог> && npx --yes npm@10.9.9 install --package-lock-only --ignore-scripts --no-audit --no-fund` | `npm run check:lockfiles`, pre-commit, CI до Docker matrix |
+
+В `docs-site/package.json` закреплён `postcss-selector-parser 7.1.6` для устранения
+[GHSA-rj75-hqrm-r3gf](https://github.com/advisories/GHSA-rj75-hqrm-r3gf):
+`@expressive-code/core` через `postcss-nested@6` пока требует уязвимую ветку parser 6.x.
+Удаляй этот override, когда upstream-зависимости сами разрешают parser не ниже `7.1.6`,
+а аудит и сборка документации проходят без него.
+
+Меняешь контракт API — регенерируй `openapi.json` **и** `openapi.generated.ts`.
+
+---
+
+## 2. Золотые правила (без исключений)
+
+- **Никогда не правь сгенерированный артефакт руками.** Запусти его генератор (раздел 1).
+- **Никогда не редактируй, не переупорядочивай и не перенумеровывай существующую миграцию БД.**
+  Миграции append-only и идемпотентны (раздел 5).
+- **Никогда не глуши тайпчекер на своём коде.** Не `# type: ignore` / `any` ради компиляции —
+  чини тип. `mypy` по всему бэкенду должен оставаться зелёным.
+- **Никогда не ломай wire-контракты:** HTTP-конверт `{"ok": …}`, flat-dict payload'ы событий,
+  сигнатуру подписчика плагина `(event_name, dict)`.
+- **Фасады (`admin_api`, `subscription_webapp`, `subscription_service`) используем только для
+  совместимости. Новый код имплементирует через конкретные внутренние модули (`*_impl`, domain,
+  service/route modules) и не опирается на фасады как на дефолтный внутренний API; любые
+  исключения фиксируем в контрактных тестах.
+- **Весь first-party код фронтенда — TypeScript** (`.ts` / `<script lang="ts">`). Новые `.js`
+  и `<script>` без `lang="ts"` в `frontend/src` запрещены архитектурными гейтами
+  (`first_party_js`, `svelte_lang_ts` в `scripts/architecture_gates.json`); исключение — только
+  сгенерированные артефакты из allowlist. Глобальный `checkJs` не включаем.
+- **Не хардкодь пользовательский или админский текст.** Любая новая или изменённая видимая строка
+  (бот, Web App, админка, email/уведомления, aria/placeholder/title) должна идти через локализацию
+  и иметь минимум базовые варианты в `locales/ru.json` и `locales/en.json`. Fallback-строка в
+  компоненте или helper'е — только английская страховка для разработки, а не замена ключа в
+  базовых локалях; кириллица живёт только в locale-файлах. Архитектурный gate
+  `cyrillic_fallbacks` не позволяет наращивать унаследованные нарушения этого правила.
+  **В админке ключ обязан лежать под префиксом `admin_`**: `at("foo")` резолвится как
+  `admin_foo`, и без этой записи панель молча покажет английский fallback русскому
+  администратору — ни типы, ни сборка этого не заметят. Проверяется тестом
+  `tests/contracts/test_admin_locale_keys.py`, который сверяет все литеральные `at("...")`
+  с обеими базовыми локалями.
+- **Сначала декомпозиция, потом типизация** — см. раздел 5. Не типизируй god-файл «на месте».
+- **Отличай «совместимость с другими ботами» (фича — оставить) от «остатков рефакторинга»
+  (убрать)** — см. раздел 6.
+- **Сохраняй границу core и отдельно поставляемого minishop PRO.** В публичной документации и
+  навигации core можно упоминать наличие PRO, кратко описывать его публичные возможности и давать
+  ссылку на официальный сайт. Это исключение не разрешает копировать в core код, приватные
+  контракты, ассеты или runtime-зависимости PRO.
+
+---
+
+## 3. Соглашения бэкенда
+
+Бэкенд — рукописный `aiohttp` + `aiogram` + SQLAlchemy (async) + pydantic v2. **FastAPI нет** —
+не вводи его. Обзор архитектуры: [docs/architecture.md](docs/architecture.md).
+
+Пошаговые рецепты для типовых задач (добавить платёжного провайдера, доменное событие или
+HTTP-эндпоинт) — [docs/development/how-to.md](docs/development/how-to.md); каждый заканчивается
+прогоном гейтов раздела 1.
+
+### 3.1 HTTP API (типизированные контракты)
+- Роуты регистрируются явно в `setup_subscription_webapp_routes`
+  (`bot/app/web/webapp/routes.py`) и `setup_admin_routes`
+  (`bot/app/web/admin_api_impl/routes.py`). Плагины добавляют роуты в рантайме через
+  `Plugin.setup_web`.
+- **Тела запросов:** парси через `parse_body` / `parse_body_or_400`
+  (`bot/app/web/request_parsing.py`) против `HttpBodyModel` — не возвращай сырой `_read_json`
+  для новых эндпоинтов. `parse_body_or_400` чисто сужает тип для mypy.
+- **Ответы:** собирай `HttpResponseModel` через явный classmethod `from_orm_*`, который читает
+  **только уже загруженные скалярные атрибуты** (например `obj.__dict__.get("user")`).
+  **Никогда не включай ORM-автоскан `from_attributes`** — он триггерит lazy-load после
+  закрытия сессии. Оборачивай конвертом `_ok` / `_error`; имена/типы полей не меняй.
+- **Регистрируй контракт каждого роута** в `bot/app/web/route_contracts.py`, чтобы он попал в
+  `openapi.json`. Не-JSON роуты (CSV/бинарь/multipart) объявляют content-type, а не JSON-модель.
+- Справочник HTTP: [docs/architecture/http-api.md](docs/architecture/http-api.md).
+
+### 3.2 Доменные события (типизированные payload'ы)
+- Одна pydantic-модель на событие в `bot/infra/event_payloads.py` (`extra="forbid"`). Публикуй
+  через `events.emit_model(Model(...))`; сама шина остаётся dict-based, а `emit` **никогда не
+  кидает исключений**.
+- Payload'ы — **flat-dict из примитивов + ISO-8601 datetime**, никогда не ORM-объекты.
+  Подписчики перечитывают богатые данные по id. Payload — это уведомление, не гарантия, что
+  строка уже закоммичена.
+- Добавил/изменил событие → обнови модель, регенерируй каталог событий.
+- Каталог: [docs/architecture/events.md](docs/architecture/events.md).
+
+### 3.3 Типобезопасность
+- `mypy` покрывает весь бэкенд и контрактные тесты (`tests/contracts`) и должен оставаться
+  зелёным. Новые backend-модули попадают в скоуп автоматически (по каталогам). Строгость
+  поднимай помодульно через `[[tool.mypy.overrides]]`, а не глобальным `strict`.
+
+### 3.4 Миграции
+- Рукописный **идемпотентный** мигратор (пакет `db/migrator/`): интроспекция схемы, затем условный
+  DDL (`IF NOT EXISTS`, проверки колонок). Применённые id трекаются в `schema_migrations`.
+- **Append-only.** Добавляй новую миграцию; никогда не правь/переупорядочивай существующие.
+  Цепочки плагинов неймспейснуты (`<plugin>.0001_*`).
+- Совместимость импорта с других ботов (remnashop / старые сборки) живёт здесь намеренно —
+  см. раздел 6.
+
+### 3.5 Плагины
+- Расширение через ABC `Plugin` + `PluginContext` (`bot/plugins/spec.py`), обнаруживаются через
+  entry-point группу `minishop.plugins`. Хуки: `setup`, `setup_bot`, `setup_web`,
+  `worker_tasks`, `queue_handlers`, `migrations`, `locales_dir`, `entitlements_provider`.
+- Plugin API — это публичная поверхность расширения, держи её стабильной. Подписчики получают
+  сырой `(event_name, dict)`; типизированные модели — additive-удобство, не обязательный
+  интерфейс.
+- Контракт: [docs/development/plugin-contract.md](docs/development/plugin-contract.md),
+  [docs/development/plugins.md](docs/development/plugins.md).
+
+---
+
+## 4. Соглашения фронтенда
+
+Svelte + Vite. API-клиент **типизирован из OpenAPI-спека**.
+
+- Зови API через типизированный клиент `lib/webapp/publicApi.ts` (`createApiClient`):
+  `api("/api/...")` выводит ответ из `paths`; `publicApi` выводит тело запроса. **Используй
+  литеральные строки путей** — переменная расширяет тип и теряет инференс. Распаковывай конверт
+  `{ok,…}` через `unwrap(...)`.
+- `openapi.generated.ts` генерируется из `docs/openapi.json` и **защищён drift-guard в CI** —
+  регенерируй при любом изменении контракта на бэке.
+- Весь first-party код — TypeScript: новые модули пиши в `.ts`, компоненты — с
+  `<script lang="ts">`; типизируй сторы (`writable<State>`), чтобы изменение контракта на бэке
+  валило `check:svelte` ровно у потребителя. Архитектурные гейты (`first_party_js`,
+  `svelte_lang_ts`) не пропустят новый нетипизированный файл. **Не** включай глобальный
+  `checkJs` — он не нужен, когда JS-файлов нет.
+- Для UI-текста используй `t(...)`/`at(...)` и добавляй реальные ключи в обе базовые локали:
+  `locales/ru.json` и `locales/en.json`. В админке `at("tariff_title", ...)` ищет
+  `admin_tariff_title`, поэтому проверяй итоговое имя ключа. Если добавляешь новую группу строк,
+  добавь узкий тест или существующий locale guard, чтобы ключи не остались только fallback'ами.
+- Frontend first-party Svelte code is Svelte 5 runes-only. Do not reintroduce `export let`,
+  `$:`, `$$props`, `$$restProps`, `<slot>`, `<svelte:component>`, `createEventDispatcher`, or
+  class API `$set`. `frontend/vite.config.mjs` and `frontend/vitest.config.mjs` enable
+  `runes: true` for `frontend/src`, while `npm run check:runes`, `svelte-check`, builds, and
+  Vitest fail if legacy syntax comes back.
+
+---
+
+### 4.1 Переиспользование UI
+
+Перед изменением интерфейса найди компонент для этой задачи и изучи **два реальных места его
+использования**. Порядок выбора: компонент сущности/действия → общий составной компонент →
+UI-примитив. Например, для провайдера нужен `PaymentProviderCell`, а не произвольный `AdminBadge`.
+Конфигурация shadcn и доступность Bits UI сами по себе не обеспечивают единый интерфейс.
+
+- Если нужного варианта нет, расширь общий компонент. Новый компонент создавай только при
+  отсутствии подходящего; объясни выбор и затронутых потребителей в описании изменения.
+- Не копируй оформление сущности, разметку панели или CSS другого раздела. Не используй
+  глобальные стили одного экрана для управления другим. Размеры общих элементов и мобильное
+  поведение должны принадлежать общему компоненту; различия задаются его параметрами.
+- Компоненты из `patterns` импортируются напрямую либо через их индекс. Примитивы и иконки —
+  через `$components/ui`. Прямые импорты `bits-ui` и библиотек иконок разрешены только внутри
+  слоя `components/ui`.
+- В экранах запрещены обычный `select`, новые нативные `input`/`textarea` и кнопки, вручную
+  оформленные классами `btn`/`admin-btn`. Используй соответствующие компоненты. Семантические
+  контейнеры, ссылки, списки и специализированные кнопки навигации этим не запрещаются.
+- Для выбора даты и времени используй `DateInput` (для времени — `withTime`), для флажков —
+  `Checkbox`, для других специальных полей — соответствующий компонент из карты ниже.
+  `Input` допускает только текстовые и числовые типы: календарь, флажок, загрузку файла и другие
+  специальные элементы запрещают линтер и проверка типов. Линтер учитывает псевдонимы импорта
+  и литералы внутри выражений.
+
+Карта выбора (пути относительно `frontend/src`; имена файлов — реальные примеры):
+
+| Задача | Общий компонент | Два примера использования |
+|---|---|---|
+| Кнопки администратора | `lib/components/patterns/admin/AdminButton.svelte` | `admin/sections/GiftsSection.svelte`, `admin/sections/PaymentsSection.svelte` |
+| Кнопки приложения | `lib/components/ui/button.svelte` | `webapp/gifts/GiftEntry.svelte`, `webapp/gifts/GiftFeature.svelte` |
+| Поле ввода | `lib/components/ui/input.svelte` | `admin/sections/users/UsersView.svelte`, `admin/sections/GiftCreateDialog.svelte` |
+| Подпись/подсказка поля | `lib/components/patterns/admin/AdminField.svelte` | `admin/sections/AdsSection.svelte`, `admin/sections/promos/PromoCreateDialog.svelte` |
+| Выпадающее меню | `lib/components/patterns/admin/AdminSelect.svelte` | `admin/sections/users/UsersView.svelte`, `admin/sections/GiftCreateDialog.svelte` |
+| Шапка списка | `lib/components/patterns/admin/AdminListToolbar.svelte` | `admin/sections/users/UsersView.svelte`, `admin/sections/GiftsSection.svelte`; также `PaymentsSection.svelte` |
+| Таблица и страницы | `lib/components/patterns/admin/AdminTable.svelte`, `AdminPagination.svelte` | `admin/sections/PaymentTable.svelte`, `admin/sections/GiftsSection.svelte` |
+| Переход к сущности | `lib/components/patterns/admin/AdminEntityLink.svelte` | `admin/sections/partners/PartnerDashboardTables.svelte`, `admin/sections/partners/PartnerDetailActivity.svelte` |
+| Провайдер и его логотип/эмодзи | `lib/components/patterns/admin/PaymentProviderCell.svelte` | `admin/sections/PaymentTable.svelte`, `admin/sections/GiftsSection.svelte` |
+| Значение с копированием в таблице | `lib/components/patterns/admin/AdminCopyableValue.svelte` | `admin/sections/PaymentTable.svelte`, `admin/sections/PaymentDetailModal.svelte` |
+| Поле ссылки с копированием | `lib/components/patterns/CopyLinkField.svelte` | `webapp/screens/InviteScreen.svelte`, `webapp/gifts/GiftCard.svelte`; вариант `admin` в `GiftsSection.svelte` |
+| Диалог | `lib/components/ui/dialog.svelte` | `admin/sections/GiftCreateDialog.svelte`, `webapp/gifts/GiftFeature.svelte` |
+
+Для поиска конкретных вложенных форм используй `rg` по имени компонента. Если второй потребитель
+ещё не существует, изучи ближайший общий компонент и явно отметь это в описании изменения.
+
+Область применения шапки проверена по всем разделам админки:
+
+| Списки и панели | Решение |
+|---|---|
+| Пользователи, платежи, подарки | `AdminListToolbar`: поиск, фильтры, счётчик и действия |
+| Партнёры, заявки на участие, выводы | Тот же компонент во всех трёх вкладках `PartnerProgramTables.svelte` |
+| Логи | Тот же компонент: фильтр пользователя, сброс, счётчик и обновление |
+| Поддержка | Тот же компонент: поиск и фильтры; счётчики статусов остаются во вкладках, неизвестный общий итог не подменяется длиной загруженной страницы |
+| Резервные копии | Тот же компонент без поиска и отдельного счётчика: действия и каталог в слоте `metadata`; на десктопе в одной строке, на мобильном с переносом |
+| Промокоды, реклама, история рассылок | Таблицы без отдельной панели фильтров; общие `AdminTable`/`AdminPagination`, действия страницы остаются в её заголовке |
+| Настройки, переводы, редактор тарифов, графики | Специализированные панели редакторов и диапазонов; это не шапки списков сущностей |
+
+`total` у общей шапки необязателен: передавай реальный итог выборки, а не размер текущей страницы.
+Одна лишь похожая стилизация не считается миграцией. Линтер запрещает возвращать старые классы
+панелей списков (`admin-toolbar`, `admin-toolbar-card`, `partners-filters`, панели поддержки).
+
+**Автоматическая защита.** `npm --prefix frontend run lint` проверяет UI-ограничения из
+`frontend/eslint.config.mjs` и `frontend/scripts/eslint-ui-reuse.mjs`. Они входят в `npm run check`
+и CI. Для старых полей есть точный перечень `nativeFieldBaseline`: файл, тип, количество и причина.
+Это долг существующих экранов, не разрешение добавлять новые исключения ради прохождения линтера.
+При миграции поля уменьши/удали запись; изменение количества обнаруживается в обе стороны.
+Нативные элементы внутри реализации базовых UI-компонентов разрешены. Исторические исключения:
+анимированная сумма пополнения и собственные поверхности редактора текста.
+
+**Проверка результата.** Изменение общего компонента требует проверки его затронутых потребителей,
+а не только вспомогательной функции. Для панели списка проверь поиск, сортировку, страницы,
+видимость мобильных фильтров и одинаковую высоту элементов. Для меню — открытие, выбор,
+клавиатуру и Escape без потери родительского диалога. Для провайдера — фактический логотип/эмодзи
+и подпись в таблицах и карточках. Для ссылок — полное значение, копирование и ручное выделение.
+Проверь тёмную тему на мобильном и десктопе, отсутствие обрезания и лишней прокрутки диалогов.
+Сценарии общего UI закреплены в `frontend/e2e/ui-reuse.spec.ts`; защитные правила — в
+`frontend/src/lib/uiReuse.test.ts`. Скриншоты помогают визуальному ревью, но не доказывают
+переиспользование компонента. Если запрошено утверждение интерфейса, сохрани снимки **до** правок
+и покажи сравнение до/после до коммита.
+
+---
+
+## 5. Принципы рефакторинга
+
+- **Сначала декомпозиция, потом типизация.** Для любого крупного/запутанного файла выноси
+  связные срезы в маленькие типизированные модули, а не типизируй на месте — одно усилие, два
+  выигрыша (типы + размер), без двойной работы. Цель — **ни одного модуля > ~900 строк** без
+  задокументированной причины. Единственная принятая причина — сгенерированный артефакт:
+  `module_size.allowlist` в `scripts/architecture_gates.json` держит только выходы генераторов
+  (`templates/*.js`, `openapi.generated.ts`, `demoDataset.js`), и это зафиксировано тестом
+  `tests/contracts/test_architecture_gates.py::test_module_size_allowlist_is_generated_artifacts_only`.
+  Разросшийся рукописный файл — режь, а не вноси в allowlist.
+- **Ловушка monkeypatch / re-export.** Тесты часто делают `monkeypatch.setattr(module, "name", …)`.
+  Перенос `name` в подмодуль с ре-экспортом восстанавливает *импорты*, но **не** семантику
+  monkeypatch — пропатченная и вызываемая копии расходятся, и патч молча не срабатывает
+  (зелёно-но-неверно). Прежде чем резать шов, `grep tests/` на патч-цель; если пропатченный
+  символ и его вызов расходятся по модулям — **сначала обнови тест патчить новый модуль**
+  (test-first), потом переноси. Всегда проверяй, что фейк реально вызывается.
+- **Раскладка провайдеров:** один провайдер = один пакет с единым интерфейсом
+  (`__init__` экспортит `SPEC` + фабричные точки входа; `config` + `service` есть всегда;
+  `webhook`/`callbacks`/`payment_methods`/`router` — только когда существенны, не плоди
+  5-строчный webhook-модуль). Строки `id` / `provider_key` / webhook-path не меняй (они
+  персистятся и настроены в панели).
+- **Гигиена импортов:** после разбиения прогони `ruff check --fix --select F401,F811` — не
+  копипасть исходный блок импортов. Повторять фреймворк-импорты в модулях — нормально; **не**
+  централизуй их за star-import общим модулем (тот самый антипаттерн, который мы убрали).
+
+---
+
+## 6. Что намеренно, а что removable
+
+**Оставить — это фичи, а не легаси:**
+- Кросс-бот **совместимость миграций** (`MIGRATION_REMNASHOP_*`, `backend/scripts/import_legacy.py`,
+  `legacy_referral_codes` / `legacy_import_mappings`, reconcile-миграции). Это и есть «миграция
+  с другого бота» + install wizard (`scripts/install.sh`). Порядок применяемых миграций
+  (ядро + плагинные, неймспейснутые) пинуется снапшот-тестом
+  `tests/contracts/test_migration_chain_snapshot.py`: любой reorder/renumber падает в CI, а не
+  только на ревью, поэтому append-only-правило теперь машинно-проверяемо.
+- **Deprecated env-алиасы** в `config/settings.py` (`ignore_deprecated_*`) — защищают
+  существующие деплои. Удалять только с окном депрекации.
+- Внутрипакетные общие хабы `_runtime.py` — load-bearing, не мёртвый код.
+
+**Убрать (сначала проверь импортёров / патч-цели):** ре-экспорт-шимы рефактора, deprecated-хелперы
+с пометкой «kept for compatibility» без вызовов, сериализаторы, осиротевшие после перехода на
+типизированные контракты.
+
+---
+
+## 7. Ключевые решения («почему»)
+
+- **Рукописные типизированные контракты вместо смены фреймворка.** Остались на aiohttp и добавили
+  pydantic request/response + модели событий, затем сгенерировали OpenAPI из живого роутера.
+  Резон: enforce-ить контракт там, где код уже работает, без переписывания.
+- **mypy/svelte-check как рачеты.** Покрытие типами только растёт и должно оставаться зелёным;
+  оно вскрыло реальные латентные баги (например aiogram `Message | InaccessibleMessage`).
+- **Сначала декомпозиция, потом типизация.** God-файлы сначала режутся на сфокусированные модули;
+  типизировать маленькие единицы дешевле и безопаснее, чем запутанные большие.
+- **Сгенерированные артефакты + drift-guards** (`openapi.json`, `events.md`, `openapi.generated.ts`)
+  делают контракт фронт↔бэк машинопроверяемым через границу.
+
+---
+
+## 8. Рабочий процесс
+
+- Ветка от `dev` (или как укажет мейнтейнер); PR'ы целятся в `dev`/`main` и должны проходить все
+  гейты раздела 1.
+- **Сообщения коммитов:** префиксы Conventional Commits (`fix:`, `feat:`, `refactor:`, `chore:`,
+  `docs:`, `ci:`, `build:`, `perf:`, `test:`, `style:`), на английском. Трейлер `Co-Authored-By`
+  **не добавлять**.
+- **[CHANGELOG.md](CHANGELOG.md) — единый источник истории изменений** для репозитория и
+  страницы `/changelog/` на сайте документации. Сайт получает файл через `sync:docs`;
+  сгенерированную копию не редактировать.
+- Перед коммитом значимого изменения Core обновляй раздел **«В разработке · dev»**:
+  `Добавлено`, `Изменено`, `Исправлено`, `Производительность`, `Документация`, `При обновлении` — только нужные
+  категории. Описывай итоговый эффект, а не список коммитов. Сначала прочитай весь dev-раздел
+  и последний релиз: дополняй существующий пункт той же возможности, объединяй повторы,
+  удаляй отменённые обещания. Исправление новой dev-фичи обычно уточняет её пункт; регрессия
+  выпущенной версии заслуживает отдельного пункта. Внутренние тесты, форматирование и
+  повторные CI-прогоны без нового эффекта отдельной записи не требуют.
+- В публичных описаниях используй нейтральные термины: **«коды активации»**, «начисление
+  периода», «корректировка цены», «дополнительный трафик». Это редакционное правило проекта;
+  оно не меняет API, имена настроек и смысл возможностей.
+- При выпуске перенеси только реально вошедшие изменения из dev в `## vX.Y.Z — YYYY-MM-DD`,
+  сохрани невыпущенные пункты наверху и добавь ссылки на релиз. Дата — фактическая дата
+  выпуска в UTC из Release API, не дата тега, коммита или зеркалирования. При различии дат
+  для зеркал используй исходный `released_at` GitLab. Секции релизов идут от новых к старым;
+  опубликованную историю меняй только для проверенных фактических исправлений.
+- Одно связное изменение на коммит; для рефакторов предпочитай move-only диффы для ревью.
+- После любого изменения контракта регенерируй затронутые артефакты (раздел 1) в том же изменении.
+- Compatibility facades (`admin_api`, `subscription_webapp`, `subscription_service`) are compatibility-only layers.
+  Implementation code must import concrete `*_impl`/domain modules first; avoid adding new first-party dependencies on facade modules
+  unless a public compatibility contract requires it.
+
+## 9. Публикация документации из GitLab
+
+Документацию собирает только GitLab CI. Для push/web pipeline веток `dev` и `main`
+job **build-docs** один раз устанавливает зависимости, проверяет документацию и
+создаёт production-сборку на Node.js 24. Готовый `docs-site/dist/` передаётся как
+artifact в **publish-docs** того же pipeline. Секрет Pages доступен только окружению
+публикации; job сборки его не получает. GitHub workflow документации удалён.
+
+Закреплённый Wrangler загружает готовые файлы напрямую в существующие проекты:
+`dev` → `minishop-docs`, `main` → `minishop-docs-main`. Автоматические production
+и preview-сборки Pages Git-интеграции отключены у этих проектов и у прежнего
+`minishop-docs-github`, поэтому очередь Pages Builds и её callback больше не
+управляют публикацией. Домены и production-ветки сохраняются. Этот режим
+[поддерживается Cloudflare](https://developers.cloudflare.com/pages/configuration/git-integration/#disable-automatic-deployments).
+
+`/_build.json` создаётся только после успешной материализации всех страниц и должен
+содержать ожидаемые репозиторий, ветку и SHA. Перед загрузкой проверяется текущий
+HEAD ветки GitLab. Для конкретного deployment ID из ответа Wrangler Pages API
+должен подтвердить успешную загрузку того же SHA/ветки. Затем HTTP-ответы
+`/_build.json`, главной страницы и changelog сверяются с artifact по SHA-256
+по неизменяемому адресу и текущему production-адресу проекта. На распространение
+файлов отведено пять минут; job публикации ограничен 15 минутами. Проверка HEAD
+повторяется после публикации. Ошибки сборки, загрузки и проверки завершают job
+с ошибкой; внешние статусы приложения Cloudflare не переписываются.
+`resource_group` исключает одновременные публикации одной ветки.
+
+В GitLab CI/CD Variables нужны `CLOUDFLARE_API_TOKEN` (masked и hidden) с правом
+**Account → Cloudflare Pages → Edit** и `CLOUDFLARE_ACCOUNT_ID`. Ограничьте обе
+переменные environment scope `documentation/*`: окружение job публикации имеет имя
+`documentation/dev` или `documentation/main`. Если `dev` не защищена, переменные
+не должны иметь флаг protected, иначе job не получит их. Не передавайте токен
+сборкам, artifact или журналам. GitHub secrets и variables для документации
+больше не используются. Файлы `.node-version` в корне и `docs-site/` также выбирают
+Node.js 24 для локальной разработки.
+
+После временного сбоя повторите неудавшийся GitLab job публикации. Он использует
+готовый artifact того же pipeline и проверяет SHA заново. Если artifact истёк,
+запустите новый pipeline актуальной ветки. Старый SHA не может перезаписать
+документацию новой ревизии.

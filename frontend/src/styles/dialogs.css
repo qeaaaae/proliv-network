@@ -1,0 +1,329 @@
+.dialog-skeleton {
+  display: grid;
+  gap: 12px;
+}
+
+.dialog {
+  --dialog-gutter: 14px;
+  --dialog-padding-top: max(var(--dialog-gutter), var(--content-safe-area-top));
+  --dialog-padding-bottom: max(var(--dialog-gutter), var(--content-safe-area-bottom));
+  --dialog-available-height: calc(
+    100dvh - var(--dialog-padding-top) - var(--dialog-padding-bottom)
+  );
+  box-sizing: border-box;
+  position: fixed;
+  inset: 0;
+  z-index: 220;
+  display: grid;
+  align-items: center;
+  justify-items: center;
+  padding: var(--dialog-padding-top) max(var(--dialog-gutter), var(--content-safe-area-right))
+    var(--dialog-padding-bottom) max(var(--dialog-gutter), var(--content-safe-area-left));
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.dialog-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border: 0;
+  background: var(--overlay-scrim);
+  backdrop-filter: blur(10px);
+  cursor: pointer;
+}
+
+.dialog-card {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 16px;
+  width: min(100%, 520px);
+  max-height: min(86dvh, 760px, var(--dialog-available-height));
+  overflow: hidden;
+  overscroll-behavior: contain;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-dialog);
+  background: color-mix(in srgb, var(--panel) 96%, var(--bg));
+  color: var(--text);
+  box-shadow: var(--shadow-strong);
+}
+
+.dialog-body-scroll {
+  min-height: 0;
+  max-height: none;
+}
+
+.dialog-body-scroll > .scroll-area__viewport {
+  display: grid;
+  overscroll-behavior: contain;
+}
+
+.dialog-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.dialog-head-no-close {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.dialog-title-block {
+  min-width: 0;
+}
+
+.dialog-title-with-icon {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.dialog-title-icon {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  color: var(--accent);
+}
+
+.dialog-title-icon svg {
+  width: 23px;
+  height: 23px;
+}
+
+.dialog-head h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 19px;
+  line-height: 1.18;
+}
+
+.dialog-head p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.dialog-card .bottom-action {
+  margin-top: 2px;
+}
+
+.payment-dialog-card {
+  width: min(100%, 500px);
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.balance-topup-dialog {
+  max-height: min(760px, var(--dialog-available-height));
+}
+
+.balance-topup-dialog .payment-submit-button {
+  overflow: clip;
+}
+
+.payment-dialog-body {
+  display: grid;
+  gap: 8px;
+}
+
+.webapp-subscription-reissue-dialog {
+  border-color: var(--danger-border);
+}
+
+.webapp-subscription-reissue-dialog .dialog-title-with-icon {
+  padding: 12px 14px;
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-card);
+  background: var(--danger-soft);
+}
+
+.webapp-subscription-reissue-dialog .dialog-title-icon,
+.webapp-subscription-reissue-dialog .dialog-head h2 {
+  color: var(--danger-text);
+}
+
+.webapp-subscription-reissue-dialog .dialog-head p {
+  color: color-mix(in srgb, var(--danger-text) 72%, var(--muted));
+}
+
+.webapp-subscription-reissue-dialog .device-danger-button {
+  border-color: color-mix(in srgb, var(--danger) 62%, var(--border));
+  background: color-mix(in srgb, var(--danger) 82%, #000);
+  color: #fff;
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--danger) 20%, transparent);
+}
+
+.webapp-subscription-reissue-dialog .device-danger-button:hover:not(:disabled) {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.webapp-subscription-reissue-dialog .device-danger-button:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--danger) 24%, transparent),
+    0 10px 24px color-mix(in srgb, var(--danger) 20%, transparent);
+}
+
+.activation-success-dialog {
+  width: min(100%, 440px);
+  gap: 22px;
+  padding: 22px 20px 20px;
+}
+
+.activation-success-dialog .dialog-title-with-icon {
+  gap: 14px;
+}
+
+.activation-success-dialog .dialog-head p {
+  margin-top: 8px;
+  line-height: 1.52;
+}
+
+.activation-success-dialog-body {
+  display: grid;
+  justify-items: center;
+  padding-top: 2px;
+}
+
+.activation-success-dialog-body .btn {
+  width: 100%;
+}
+
+.payment-divider {
+  height: 1px;
+  width: 100%;
+  background: var(--border);
+}
+
+.checkout-promo-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(94px, auto);
+  gap: 8px;
+  align-items: center;
+  min-height: 46px;
+}
+
+.checkout-promo-input-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.checkout-promo-row .input.checkout-promo-input {
+  width: 100%;
+  min-width: 0;
+  padding-right: 38px;
+}
+
+.checkout-promo-row.is-applied .input.checkout-promo-input {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  color: var(--text);
+  font-weight: 750;
+}
+
+.checkout-promo-row.is-error .input.checkout-promo-input {
+  border-color: color-mix(in srgb, var(--danger) 72%, var(--border));
+}
+
+.checkout-promo-clear {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  color: var(--muted);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.checkout-promo-clear:hover,
+.checkout-promo-clear:focus-visible {
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+  color: var(--text);
+  outline: none;
+}
+
+.checkout-promo-action {
+  display: grid;
+  min-width: 0;
+  height: 46px;
+  align-items: stretch;
+}
+
+.checkout-promo-action .btn {
+  height: 46px;
+  min-height: 46px;
+}
+
+.checkout-promo-discount-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 176px;
+  min-width: 94px;
+  height: 46px;
+  padding: 0 12px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 54%, var(--border));
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.payment-submit-button {
+  border-color: color-mix(in srgb, var(--accent) 72%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 94%, white), var(--accent));
+  color: var(--accent-contrast);
+  box-shadow:
+    0 16px 38px color-mix(in srgb, var(--accent) 28%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent),
+    0 0 26px color-mix(in srgb, var(--accent) 42%, transparent);
+}
+
+.email-code-fullscreen {
+  box-sizing: border-box;
+  position: fixed;
+  inset: 0;
+  z-index: 220;
+  padding: var(--content-safe-area-top) var(--content-safe-area-right)
+    var(--content-safe-area-bottom) var(--content-safe-area-left);
+  background: var(--bg);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  animation: email-code-fullscreen-enter 0.2s ease-out both;
+}
+
+@keyframes email-code-fullscreen-enter {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@media (min-width: 720px) {
+  .dialog-card {
+    border-radius: var(--radius-dialog);
+    padding: 20px;
+  }
+}

@@ -1,0 +1,455 @@
+"""Contract tests for the Pally / PayPalych provider."""
+
+import asyncio
+import hashlib
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from urllib.parse import urlencode
+
+from bot.payment_providers.pally import PallyConfig, PallyService
+from bot.payment_providers.pally import service as pally_service
+
+
+def _md5_upper(value: str) -> str:
+    try:
+        digest = hashlib.md5(value.encode("utf-8"), usedforsecurity=False)
+    except TypeError:  # pragma: no cover
+        digest = hashlib.md5(value.encode("utf-8"))
+    return digest.hexdigest().upper()
+
+
+def _make_service(**config_overrides) -> PallyService:
+    config_values = {
+        "ENABLED": True,
+        "API_TOKEN": "api-token",
+        "SIGNATURE_TOKEN": "signature-token",
+        "SHOP_ID": "shop-xyz",
+    }
+    config_values.update(config_overrides)
+    service = object.__new__(PallyService)
+    service.config = PallyConfig(**config_values)
+    service.settings = SimpleNamespace(
+        DEFAULT_CURRENCY_SYMBOL="RUB",
+        WEBHOOK_BASE_URL="https://bot.example.com",
+        PAYMENT_REQUEST_TIMEOUT_SECONDS=30,
+        traffic_sale_mode=False,
+    )
+    service._default_return_url = "testbot"
+    return service
+
+
+class _FakeResponse:
+    def __init__(self, status=200, payload=None):
+        self.status = status
+        self._payload = (
+            payload
+            if payload is not None
+            else {
+                "success": True,
+                "bill_id": "bill-1",
+                "link_page_url": "https://pally.info/transfer/bill-1",
+                "status": "NEW",
+            }
+        )
+
+    async def text(self):
+        return json.dumps(self._payload)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+
+def _capture_session(captured, response=None):
+    session = SimpleNamespace()
+
+    def post(url, data=None, headers=None):
+        captured["url"] = url
+        captured["data"] = data
+        captured["headers"] = headers
+        return response or _FakeResponse()
+
+    def get(url, params=None, headers=None):
+        captured["get_url"] = url
+        captured["params"] = params
+        captured["get_headers"] = headers
+        return response or _FakeResponse(payload={"success": True, "id": "bill-1", "status": "NEW"})
+
+    session.post = post
+    session.get = get
+    return session
+
+
+class _FakeWebhookRequest:
+    def __init__(self, fields):
+        self._body = urlencode(fields).encode("utf-8")
+
+    async def read(self):
+        return self._body
+
+
+class _FakeDbSession:
+    def __init__(self):
+        self.commits = 0
+        self.rollbacks = 0
+
+    def __call__(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def commit(self):
+        self.commits += 1
+
+    async def rollback(self):
+        self.rollbacks += 1
+
+
+def _payment(**overrides):
+    values = {
+        "payment_id": 77,
+        "user_id": 42,
+        "status": "pending_pally",
+        "sale_mode": "subscription",
+        "purchased_hwid_devices": None,
+        "purchased_gb": None,
+        "subscription_duration_months": 1,
+        "amount": 100.0,
+        "currency": "RUB",
+        "user": None,
+        "provider_payment_id": "bill-1",
+        "provider_payment_url": "https://pally.info/transfer/bill-1",
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_create_bill_posts_form_with_bearer_auth(monkeypatch):
+    service = _make_service(PAYER_PAYS_COMMISSION=True, PAYMENT_METHOD="SBP", TTL_SECONDS=600)
+    captured = {}
+    monkeypatch.setattr(service, "_get_session", AsyncMock(return_value=_capture_session(captured)))
+
+    success, data = asyncio.run(
+        service.create_bill(
+            payment_db_id=77,
+            amount=100.0,
+            currency="RUB",
+            description="Subscription 1m",
+            language="ru",
+        )
+    )
+
+    assert success
+    assert data["bill_id"] == "bill-1"
+    assert captured["url"] == "https://pally.info/api/v1/bill/create"
+    assert captured["headers"]["Authorization"] == "Bearer api-token"
+    assert captured["data"]["amount"] == "100.00"
+    assert captured["data"]["shop_id"] == "shop-xyz"
+    assert captured["data"]["order_id"] == "77"
+    assert captured["data"]["type"] == "normal"
+    assert captured["data"]["currency_in"] == "RUB"
+    assert captured["data"]["payer_pays_commission"] == "1"
+    assert captured["data"]["payment_method"] == "SBP"
+    assert captured["data"]["ttl"] == "600"
+    assert captured["data"]["locale"] == "ru"
+
+
+def test_create_bill_rejects_unsupported_currency(monkeypatch):
+    service = _make_service()
+    monkeypatch.setattr(
+        service,
+        "_get_session",
+        AsyncMock(side_effect=AssertionError("must not reach API for unsupported currency")),
+    )
+
+    success, data = asyncio.run(service.create_bill(payment_db_id=1, amount=10.0, currency="JPY"))
+
+    assert not success
+    assert data["message"] == "unsupported_currency"
+
+
+def test_pally_enforces_configurable_rub_minimum_before_api(monkeypatch):
+    service = _make_service(MIN_PAYMENT_AMOUNT_RUB=30)
+    monkeypatch.setattr(
+        service,
+        "_get_session",
+        AsyncMock(side_effect=AssertionError("minimum must be enforced before the API call")),
+    )
+
+    success, data = asyncio.run(service.create_bill(payment_db_id=1, amount=2.0, currency="RUB"))
+
+    assert not success
+    assert data == {
+        "status": 400,
+        "message": "payment_amount_below_minimum",
+        "minimum_amount": "30.00",
+        "currency": "RUB",
+    }
+    assert pally_service._pally_payment_minimum_metadata(service.config, "RUB") == {
+        "min_amount": "30.00",
+        "min_currency": "RUB",
+    }
+    assert not pally_service._pally_payment_amount_supported(service.config, "RUB", 29.99)
+    assert pally_service._pally_payment_amount_supported(service.config, "RUB", 30)
+
+
+def test_pally_other_currency_minimums_are_independently_configurable():
+    config = PallyConfig(MIN_PAYMENT_AMOUNT_USD=5, MIN_PAYMENT_AMOUNT_EUR=0)
+
+    assert not pally_service._pally_payment_amount_supported(config, "USD", 4.99)
+    assert pally_service._pally_payment_amount_supported(config, "USD", 5)
+    assert pally_service._pally_payment_amount_supported(config, "EUR", 0.01)
+
+
+def test_signature_uses_outsum_invid_and_signature_token():
+    service = _make_service()
+    expected = _md5_upper("123.45:order-1:signature-token")
+
+    assert service.calculate_signature("123.45", "order-1") == expected
+    assert service.verify_signature("123.45", "order-1", expected.lower())
+
+
+def test_webhook_success_accepts_commission_adjusted_amount(monkeypatch):
+    session = _FakeDbSession()
+    payment = _payment()
+    service = _make_service(PAYER_PAYS_COMMISSION=True)
+    service.async_session_factory = session
+    service.bot = SimpleNamespace()
+    service.i18n = SimpleNamespace()
+    service.subscription_service = SimpleNamespace()
+    service.referral_service = SimpleNamespace()
+
+    async def lookup_payment(
+        _session, *, providers=None, order_id_raw=None, provider_payment_id=None
+    ):
+        assert _session is session
+        assert providers == "pally"
+        assert order_id_raw == "77"
+        assert provider_payment_id == "bill-1"
+        return payment
+
+    claim_mock = AsyncMock(return_value=payment)
+    finalize_mock = AsyncMock(return_value=SimpleNamespace())
+    monkeypatch.setattr(pally_service, "lookup_payment_by_order_or_provider_id", lookup_payment)
+    monkeypatch.setattr(pally_service.payment_dal, "claim_payment_finalization", claim_mock)
+    monkeypatch.setattr(pally_service, "finalize_successful_payment", finalize_mock)
+
+    signature = service.calculate_signature("102.50", "77")
+    response = asyncio.run(
+        service.webhook_route(
+            _FakeWebhookRequest(
+                {
+                    "InvId": "77",
+                    "OutSum": "102.50",
+                    "Commission": "2.50",
+                    "CurrencyIn": "RUB",
+                    "TrsId": "bill-1",
+                    "Status": "SUCCESS",
+                    "SignatureValue": signature,
+                }
+            )
+        )
+    )
+
+    assert response.status == 200
+    claim_mock.assert_awaited_once_with(
+        session,
+        77,
+        provider_payment_id="bill-1",
+    )
+    finalize_mock.assert_awaited_once()
+
+
+def test_amount_match_rejects_subcent_callback_amount():
+    service = _make_service()
+
+    assert not service._amount_matches_payment(
+        {"OutSum": "99.995"},
+        _payment(),
+        "success",
+    )
+
+
+def test_amount_match_keeps_documented_overpaid_policy():
+    service = _make_service()
+
+    assert service._amount_matches_payment(
+        {"OutSum": "101.00"},
+        _payment(),
+        "overpaid",
+    )
+
+
+def test_amount_match_rejects_unsigned_balance_and_commission_fields():
+    service = _make_service()
+
+    assert not service._amount_matches_payment(
+        {"OutSum": "1.00", "BalanceAmount": "100.00"},
+        _payment(),
+        "success",
+    )
+    assert not service._amount_matches_payment(
+        {"OutSum": "1.00", "Commission": "-99.00"},
+        _payment(),
+        "success",
+    )
+
+
+def test_webhook_rejects_currency_mismatch_before_claim(monkeypatch):
+    session = _FakeDbSession()
+    payment = _payment()
+    service = _make_service()
+    service.async_session_factory = session
+    claim_mock = AsyncMock(side_effect=AssertionError("currency mismatch must not be claimed"))
+    monkeypatch.setattr(
+        pally_service,
+        "lookup_payment_by_order_or_provider_id",
+        AsyncMock(return_value=payment),
+    )
+    monkeypatch.setattr(pally_service.payment_dal, "claim_payment_finalization", claim_mock)
+
+    signature = service.calculate_signature("100.00", "77")
+    response = asyncio.run(
+        service.webhook_route(
+            _FakeWebhookRequest(
+                {
+                    "InvId": "77",
+                    "OutSum": "100.00",
+                    "CurrencyIn": "USD",
+                    "TrsId": "bill-1",
+                    "Status": "SUCCESS",
+                    "SignatureValue": signature,
+                }
+            )
+        )
+    )
+
+    assert response.status == 400
+    assert response.text == "currency_mismatch"
+    claim_mock.assert_not_awaited()
+
+
+def test_webhook_rejects_wrong_signature(monkeypatch):
+    service = _make_service()
+    service.async_session_factory = _FakeDbSession()
+    monkeypatch.setattr(
+        pally_service,
+        "lookup_payment_by_order_or_provider_id",
+        AsyncMock(side_effect=AssertionError("invalid signature must stop before DB lookup")),
+    )
+
+    response = asyncio.run(
+        service.webhook_route(
+            _FakeWebhookRequest(
+                {
+                    "InvId": "77",
+                    "OutSum": "100.00",
+                    "TrsId": "bill-1",
+                    "Status": "SUCCESS",
+                    "SignatureValue": "bad",
+                }
+            )
+        )
+    )
+
+    assert response.status == 403
+
+
+def test_reuse_returns_url_for_pending_bill(monkeypatch):
+    service = _make_service()
+    monkeypatch.setattr(
+        service,
+        "get_bill_status",
+        AsyncMock(return_value=(True, {"id": "bill-1", "order_id": "77", "status": "NEW"})),
+    )
+
+    assert (
+        asyncio.run(service.try_reuse_pending_bill(_payment()))
+        == "https://pally.info/transfer/bill-1"
+    )
+
+
+def test_reuse_rejects_terminal_or_foreign_bill(monkeypatch):
+    service = _make_service()
+    payment = _payment()
+
+    monkeypatch.setattr(
+        service,
+        "get_bill_status",
+        AsyncMock(return_value=(True, {"id": "bill-1", "order_id": "77", "status": "SUCCESS"})),
+    )
+    assert asyncio.run(service.try_reuse_pending_bill(payment)) is None
+
+    monkeypatch.setattr(
+        service,
+        "get_bill_status",
+        AsyncMock(
+            return_value=(
+                True,
+                {"id": "bill-1", "order_id": "77", "status": "NEW", "active": False},
+            )
+        ),
+    )
+    assert asyncio.run(service.try_reuse_pending_bill(payment)) is None
+
+    monkeypatch.setattr(
+        service,
+        "get_bill_status",
+        AsyncMock(return_value=(True, {"id": "other", "order_id": "77", "status": "NEW"})),
+    )
+    assert asyncio.run(service.try_reuse_pending_bill(payment)) is None
+
+    monkeypatch.setattr(
+        service,
+        "get_bill_status",
+        AsyncMock(return_value=(True, {"id": "bill-1", "order_id": "99", "status": "NEW"})),
+    )
+    assert asyncio.run(service.try_reuse_pending_bill(payment)) is None
+
+
+def test_cancel_pending_bill_deactivates_only_a_new_bill(monkeypatch):
+    service = _make_service()
+    monkeypatch.setattr(
+        service,
+        "get_bill_status",
+        AsyncMock(
+            return_value=(
+                True,
+                {"id": "bill-1", "order_id": "77", "status": "NEW", "active": True},
+            )
+        ),
+    )
+    post = AsyncMock(return_value=(True, {"id": "bill-1", "status": "NEW", "activity": False}))
+    monkeypatch.setattr(service, "_post_form", post)
+
+    success, _data = asyncio.run(service.cancel_pending_bill("bill-1"))
+
+    assert success
+    post.assert_awaited_once_with(
+        "/bill/toggle_activity",
+        {"id": "bill-1", "active": "0"},
+    )
+
+
+def test_cancel_pending_bill_does_not_touch_finished_bill(monkeypatch):
+    service = _make_service()
+    monkeypatch.setattr(
+        service,
+        "get_bill_status",
+        AsyncMock(return_value=(True, {"id": "bill-1", "status": "SUCCESS"})),
+    )
+    post = AsyncMock()
+    monkeypatch.setattr(service, "_post_form", post)
+
+    success, data = asyncio.run(service.cancel_pending_bill("bill-1"))
+
+    assert not success
+    assert data["message"] == "bill_not_pending"
+    post.assert_not_awaited()

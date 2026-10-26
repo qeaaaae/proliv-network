@@ -1,0 +1,350 @@
+import contextlib
+import logging
+from datetime import datetime
+
+from aiogram import F, Router, types
+from aiogram.fsm.context import FSMContext
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from bot.keyboards.inline.user_keyboards import (
+    get_connect_and_main_keyboard,
+    get_main_menu_inline_keyboard,
+)
+from bot.middlewares.i18n import JsonI18n
+from bot.services.panel_api_service import PanelApiService
+from bot.services.subscription_service_impl.core import SubscriptionService
+from bot.services.telegram_account import require_telegram_account_id
+from bot.utils.callback_answer import callback_message
+from bot.utils.config_link import prepare_config_links
+from bot.utils.install_links import (
+    append_install_share_link_text,
+    ensure_user_install_guide_links,
+)
+from config.settings import Settings
+
+from .start import send_main_menu
+from .trial_captcha_handler import ensure_bot_trial_captcha
+from .trial_captcha_handler import router as captcha_router
+
+logger = logging.getLogger(__name__)
+
+router = Router(name="user_trial_router")
+router.include_router(captcha_router)
+
+
+async def request_trial_confirmation_handler(
+    callback: types.CallbackQuery,
+    settings: Settings,
+    i18n_data: dict,
+    subscription_service: SubscriptionService,
+    session: AsyncSession,
+    state: FSMContext | None = None,
+) -> None:
+    account_user_id = await require_telegram_account_id(session, callback.from_user.id)
+    user_id = account_user_id
+    current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
+    i18n: JsonI18n | None = i18n_data.get("i18n_instance")
+    _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
+
+    if not i18n or not callback.message:
+        with contextlib.suppress(Exception):
+            await callback.answer(_("error_occurred_try_again"), show_alert=True)
+        return
+
+    if settings.TRIAL_ENABLED and not await subscription_service.has_trial_blocking_subscription(
+        session, user_id
+    ):
+        pass
+
+    if not settings.TRIAL_ENABLED:
+        await callback_message(callback).edit_text(
+            _("trial_feature_disabled"),
+            reply_markup=get_main_menu_inline_keyboard(current_lang, i18n, settings, False),
+        )
+        with contextlib.suppress(Exception):
+            await callback.answer()
+        return
+
+    if settings.TRIAL_PAYMENT_ENABLED:
+        await callback_message(callback).edit_text(
+            _("trial_payment_required"),
+            reply_markup=get_main_menu_inline_keyboard(current_lang, i18n, settings, True),
+        )
+        with contextlib.suppress(Exception):
+            await callback.answer()
+        return
+
+    if await subscription_service.has_trial_blocking_subscription(session, user_id):
+        await callback_message(callback).edit_text(
+            _("trial_already_had_subscription_or_trial"),
+            reply_markup=get_main_menu_inline_keyboard(current_lang, i18n, settings, False),
+        )
+        with contextlib.suppress(Exception):
+            await callback.answer()
+        return
+
+    if not await ensure_bot_trial_captcha(callback, settings, user_id, i18n, current_lang, state):
+        return
+    activation_result = await subscription_service.activate_trial_subscription(session, user_id)
+
+    final_message_text_in_chat = ""
+    show_trial_button_after_action = False
+    config_link_display_for_trial = None
+    config_link_for_trial = None
+    connect_button_url_for_trial = None
+    install_share_url = None
+
+    if activation_result and activation_result.get("activated"):
+        with contextlib.suppress(Exception):
+            await callback.answer(_("trial_activated_alert"), show_alert=True)
+
+        end_date_obj = activation_result.get("end_date")
+        install_links = await ensure_user_install_guide_links(session, settings, user_id)
+        install_share_url = install_links.public_share_url
+        config_link_display_for_trial, connect_button_url_for_trial = await prepare_config_links(
+            settings,
+            activation_result.get("subscription_url"),
+            public_share_url=install_share_url,
+        )
+        config_link_for_trial = config_link_display_for_trial or _("config_link_not_available")
+
+        traffic_gb_val = activation_result.get("traffic_gb", settings.TRIAL_TRAFFIC_LIMIT_GB)
+        traffic_display = (
+            f"{traffic_gb_val} GB"
+            if traffic_gb_val and traffic_gb_val > 0
+            else _("traffic_unlimited")
+        )
+
+        final_message_text_in_chat = _(
+            "trial_activated_details_message",
+            days=activation_result.get("days", settings.TRIAL_DURATION_DAYS),
+            end_date=(
+                end_date_obj.strftime("%Y-%m-%d") if isinstance(end_date_obj, datetime) else "N/A"
+            ),
+            config_link=config_link_for_trial,
+            traffic_gb=traffic_display,
+        )
+
+        final_message_text_in_chat = append_install_share_link_text(
+            final_message_text_in_chat,
+            _,
+            install_share_url,
+        )
+
+        # Mark ad attribution trial if exists
+        try:
+            from db.dal import ad_dal as _ad_dal
+
+            await _ad_dal.mark_trial_activated(session, user_id)
+            await session.commit()
+        except Exception as e_mark:
+            await session.rollback()
+            logger.error("Failed to mark trial for ad attribution for user %s: %s", user_id, e_mark)
+    else:
+        message_key_from_service = (
+            activation_result.get("message_key", "trial_activation_failed")
+            if activation_result
+            else "trial_activation_failed"
+        )
+        final_message_text_in_chat = _(message_key_from_service)
+        with contextlib.suppress(Exception):
+            await callback.answer(final_message_text_in_chat, show_alert=True)
+        if (
+            settings.TRIAL_ENABLED
+            and not await subscription_service.has_trial_blocking_subscription(session, user_id)
+        ):
+            show_trial_button_after_action = True
+
+    reply_markup = (
+        get_connect_and_main_keyboard(
+            current_lang,
+            i18n,
+            settings,
+            config_link_display_for_trial,
+            connect_button_url=connect_button_url_for_trial,
+            install_share_url=install_share_url,
+        )
+        if activation_result and activation_result.get("activated")
+        else get_main_menu_inline_keyboard(
+            current_lang, i18n, settings, show_trial_button_after_action
+        )
+    )
+
+    try:
+        await callback_message(callback).edit_text(
+            final_message_text_in_chat,
+            parse_mode="HTML",
+            reply_markup=reply_markup,
+            disable_web_page_preview=True,
+        )
+    except Exception as e_edit:
+        logger.warning("Could not edit trial result message: %s. Sending new one.", e_edit)
+
+        if callback.message:
+            await callback_message(callback).answer(
+                final_message_text_in_chat,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
+
+
+@router.callback_query(F.data == "trial_action:confirm_activate")
+async def confirm_activate_trial_handler(
+    callback: types.CallbackQuery,
+    settings: Settings,
+    i18n_data: dict,
+    subscription_service: SubscriptionService,
+    panel_service: PanelApiService,
+    session: AsyncSession,
+    state: FSMContext | None = None,
+) -> None:
+    account_user_id = await require_telegram_account_id(session, callback.from_user.id)
+    user_id = account_user_id
+
+    current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
+    i18n: JsonI18n | None = i18n_data.get("i18n_instance")
+    _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
+
+    if not i18n or not callback.message:
+        with contextlib.suppress(Exception):
+            await callback.answer(_("error_occurred_try_again"), show_alert=True)
+        return
+
+    if not settings.TRIAL_ENABLED:
+        with contextlib.suppress(Exception):
+            await callback.answer(_("trial_feature_disabled"), show_alert=True)
+
+        await send_main_menu(
+            callback, settings, i18n_data, subscription_service, session, is_edit=True
+        )
+        return
+    if settings.TRIAL_PAYMENT_ENABLED:
+        with contextlib.suppress(Exception):
+            await callback.answer(_("trial_payment_required"), show_alert=True)
+        await send_main_menu(
+            callback, settings, i18n_data, subscription_service, session, is_edit=True
+        )
+        return
+    if await subscription_service.has_trial_blocking_subscription(session, user_id):
+        with contextlib.suppress(Exception):
+            await callback.answer(_("trial_already_had_subscription_or_trial"), show_alert=True)
+        await send_main_menu(
+            callback, settings, i18n_data, subscription_service, session, is_edit=True
+        )
+        return
+
+    if not await ensure_bot_trial_captcha(callback, settings, user_id, i18n, current_lang, state):
+        return
+    activation_result = await subscription_service.activate_trial_subscription(session, user_id)
+
+    final_message_text_in_chat = ""
+    show_trial_button_after_action = False
+    config_link_display_for_trial = None
+    config_link_for_trial = None
+    connect_button_url_for_trial = None
+    install_share_url = None
+
+    if activation_result and activation_result.get("activated"):
+        with contextlib.suppress(Exception):
+            await callback.answer(_("trial_activated_alert"), show_alert=True)
+
+        end_date_obj = activation_result.get("end_date")
+        install_links = await ensure_user_install_guide_links(session, settings, user_id)
+        install_share_url = install_links.public_share_url
+        config_link_display_for_trial, connect_button_url_for_trial = await prepare_config_links(
+            settings,
+            activation_result.get("subscription_url"),
+            public_share_url=install_share_url,
+        )
+        config_link_for_trial = config_link_display_for_trial or _("config_link_not_available")
+
+        traffic_gb_val = activation_result.get("traffic_gb", settings.TRIAL_TRAFFIC_LIMIT_GB)
+        traffic_display = (
+            f"{traffic_gb_val} GB"
+            if traffic_gb_val and traffic_gb_val > 0
+            else _("traffic_unlimited")
+        )
+
+        final_message_text_in_chat = _(
+            "trial_activated_details_message",
+            days=activation_result.get("days", settings.TRIAL_DURATION_DAYS),
+            end_date=(
+                end_date_obj.strftime("%Y-%m-%d") if isinstance(end_date_obj, datetime) else "N/A"
+            ),
+            config_link=config_link_for_trial,
+            traffic_gb=traffic_display,
+        )
+        final_message_text_in_chat = append_install_share_link_text(
+            final_message_text_in_chat,
+            _,
+            install_share_url,
+        )
+    else:
+        message_key_from_service = (
+            activation_result.get("message_key", "trial_activation_failed")
+            if activation_result
+            else "trial_activation_failed"
+        )
+        final_message_text_in_chat = _(message_key_from_service)
+        with contextlib.suppress(Exception):
+            await callback.answer(final_message_text_in_chat, show_alert=True)
+        if (
+            settings.TRIAL_ENABLED
+            and not await subscription_service.has_trial_blocking_subscription(session, user_id)
+        ):
+            show_trial_button_after_action = True
+
+    reply_markup = (
+        get_connect_and_main_keyboard(
+            current_lang,
+            i18n,
+            settings,
+            config_link_display_for_trial,
+            connect_button_url=connect_button_url_for_trial,
+            install_share_url=install_share_url,
+        )
+        if activation_result and activation_result.get("activated")
+        else get_main_menu_inline_keyboard(
+            current_lang, i18n, settings, show_trial_button_after_action
+        )
+    )
+
+    try:
+        await callback_message(callback).edit_text(
+            final_message_text_in_chat,
+            parse_mode="HTML",
+            reply_markup=reply_markup,
+            disable_web_page_preview=True,
+        )
+    except Exception as e_edit:
+        logger.warning("Could not edit trial result message: %s. Sending new one.", e_edit)
+
+        if callback.message:
+            await callback_message(callback).answer(
+                final_message_text_in_chat,
+                parse_mode="HTML",
+                reply_markup=reply_markup,
+                disable_web_page_preview=True,
+            )
+
+    if activation_result and activation_result.get("activated") and end_date_obj:
+        try:
+            from db.dal import ad_dal as _ad_dal
+
+            await _ad_dal.mark_trial_activated(session, user_id)
+            await session.commit()
+        except Exception as e_mark:
+            await session.rollback()
+            logger.error("Failed to mark trial for ad attribution for user %s: %s", user_id, e_mark)
+
+
+@router.callback_query(F.data == "main_action:cancel_trial")
+async def cancel_trial_activation(
+    callback: types.CallbackQuery,
+    settings: Settings,
+    i18n_data: dict,
+    subscription_service: SubscriptionService,
+    session: AsyncSession,
+) -> None:
+    await send_main_menu(callback, settings, i18n_data, subscription_service, session, is_edit=True)

@@ -1,0 +1,909 @@
+import hashlib
+import hmac
+import html
+import json
+import logging
+import re
+import secrets
+import subprocess
+import time
+from typing import Any
+from urllib.parse import quote
+
+from aiohttp import web
+from aiohttp.typedefs import Handler
+
+from bot.app.web.context import (
+    get_bot_username,
+    get_i18n,
+    get_settings,
+    get_webapp_settings_cache,
+)
+from bot.app.web.webapp_auth import verify_webapp_session_token
+from bot.middlewares.i18n import (
+    is_valid_locale_language_code,
+    locale_language_options,
+    normalize_locale_language_code,
+)
+from bot.services.legal_document_links import legal_document_links
+from config.settings import Settings
+from config.webapp_themes_config import (
+    public_themes_catalog_payload,
+)
+from db.dal import subscription_dal
+
+from .asset_paths import (
+    APP_DEEPLINK_TEMPLATE_PATH,
+    APP_ROOT,
+    TEMPLATE_PATH,
+)
+from .assets_branding import (
+    _close_shared_http_session,
+    _ensure_shared_http_session,
+    _fetch_webapp_logo,
+    _get_shared_http_session,
+    _hostname_resolves_to_public_address,
+    _is_proxyable_webapp_logo_url,
+    _load_or_fetch_webapp_logo,
+    _read_webapp_logo_from_disk,
+    _resolve_webapp_asset_url,
+    _resolve_webapp_favicon_url,
+    _resolve_webapp_logo_url,
+    _uploaded_webapp_logo_filename,
+    _uploaded_webapp_logo_response,
+    _warm_webapp_logo_cache,
+    _webapp_default_brand_file_response,
+    _webapp_default_favicon_file_response,
+    _webapp_favicon_file_response,
+    _webapp_generated_favicon_digest,
+    _webapp_logo_cache_key,
+    _webapp_logo_disk_paths,
+    _webapp_redirectable_favicon_url,
+    _webapp_root_favicon_target_filename,
+    _write_webapp_logo_to_disk,
+    webapp_current_favicon_route,
+    webapp_default_logo_route,
+    webapp_favicon_route,
+    webapp_logo_route,
+    webapp_uploaded_logo_route,
+)
+from .assets_static import (
+    _ASSET_NAME_CACHE,
+    APP_DEEPLINK_I18N_FALLBACKS,
+    APP_DEEPLINK_I18N_KEYS,
+    WEBAPP_BOOTSTRAP_I18N_KEYS,
+    WEBAPP_BOOTSTRAP_I18N_PREFIXES,
+    WEBAPP_I18N_SCOPES,
+    _get_cached_asset_name,
+    _gzip_body_cached,
+    _precompressed_template_asset_response,
+    _read_template_binary_cached,
+    _read_template_text_cached,
+    _request_accepts_encoding,
+    _resolve_webapp_admin_css_asset_name,
+    _resolve_webapp_admin_js_asset_name,
+    _resolve_webapp_css_asset_name,
+    _resolve_webapp_js_asset_name,
+    _serve_template_asset,
+    _set_cached_asset_name,
+    _stable_asset_name_with_version,
+    _strip_marked_block,
+    admin_css_asset_route,
+    admin_js_asset_route,
+    admin_js_chunk_asset_route,
+    css_asset_route,
+    health_route,
+    js_asset_route,
+    js_chunk_asset_route,
+    provider_logo_asset_route,
+    robots_txt_route,
+)
+from .assets_theme import (
+    _INITIAL_THEME_LOGO_SCALE_TOKENS,
+    _INITIAL_THEME_TOKEN_CSS_MAP,
+    _app_deeplink_theme_head_markup,
+    _favicon_head_markup,
+    _initial_theme_declarations,
+    _initial_theme_for_request,
+    _initial_theme_head_markup,
+    _initial_theme_tokens,
+    _normalize_etag_for_compare,
+    _not_modified_response,
+    _request_etag_matches,
+    _safe_theme_asset_relative_path,
+    _safe_theme_css_relative_path,
+    _safe_theme_relative_path,
+    _theme_asset_etag,
+    _theme_css_href_for_html,
+    _theme_text_response,
+    theme_asset_route,
+    theme_css_asset_route,
+)
+from .billing_tariff_access import request_tariff_access_code
+from .common import (
+    _json_error,
+    _normalize_language,
+    _resolve_telegram_bot_id,
+    _resolve_telegram_oauth_client_id,
+    _resolve_telegram_oauth_request_access,
+)
+from .constants import (
+    APP_REPOSITORY_URL,
+    DEV_MOCK_END_MARKER,
+    DEV_MOCK_START_MARKER,
+    WEBAPP_CONFIG_PLACEHOLDER,
+    WEBAPP_CSRF_COOKIE_NAME,
+    WEBAPP_CSRF_EXEMPT_PATHS,
+    WEBAPP_CSRF_HEADER_NAME,
+    WEBAPP_I18N_PLACEHOLDER,
+    WEBAPP_JS_PLACEHOLDER,
+    WEBAPP_SESSION_COOKIE_NAME,
+    WEBAPP_STATE_CHANGING_METHODS,
+)
+from .csrf_origin import browser_origin_allowed, browser_origin_present
+from .html_payload import image_preload_markup, json_script_payload
+from .response_helpers import json_response
+
+_TEXT_FILE_CACHE: dict[tuple[str, bool], tuple[int, int, str]] = {}
+_I18N_PAYLOAD_CACHE: dict[
+    tuple[int, str, str, tuple[tuple[str, int, int], ...]], dict[str, Any]
+] = {}
+_ASSET_NAME_CACHE_TTL_SECONDS = 30.0
+WEBAPP_HTML_CACHE_CONTROL = "no-store, no-cache, must-revalidate, max-age=0"
+WEBAPP_LEGACY_ASSET_CACHE_CONTROL = "no-store, no-cache, must-revalidate, max-age=0"
+_APP_VERSION_CACHE: str | None = None
+logger = logging.getLogger(__name__)
+
+
+@web.middleware
+async def _security_headers_middleware(
+    request: web.Request, handler: Handler
+) -> web.StreamResponse:
+    request["csp_nonce"] = secrets.token_urlsafe(16)
+    try:
+        response = await handler(request)
+    except web.HTTPException as exc:
+        response = exc
+    nonce = request.get("csp_nonce", "")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        (
+            "default-src 'self'; "
+            f"script-src 'self' 'nonce-{nonce}' https://telegram.org; "
+            "frame-src 'self' https://oauth.telegram.org; "
+            "frame-ancestors 'self' https://web.telegram.org https://t.me; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "  # noqa: E501
+            "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net data:; "
+            "img-src 'self' data: blob: https:; "
+            "connect-src 'self' https://oauth.telegram.org; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self'"
+        ),
+    )
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Robots-Tag", "noindex, nofollow, noarchive")
+    camera_sources = "self" if get_settings(request).QR_LOGIN_ENABLED else ""
+    response.headers.setdefault(
+        "Permissions-Policy",
+        (
+            f"accelerometer=(), autoplay=(), camera=({camera_sources}), display-capture=(), "
+            "encrypted-media=(), geolocation=(), gyroscope=(), magnetometer=(), "
+            "microphone=(), midi=(), payment=(), usb=()"
+        ),
+    )
+    return response
+
+
+_EDGE_TOKEN_EXACT_PATHS = {
+    "/open-app",
+    "/webapp-logo",
+    "/webapp-default-logo.webp",
+    "/favicon.ico",
+    "/apple-touch-icon.png",
+    "/apple-touch-icon-precomposed.png",
+    "/icon-192.png",
+    "/icon-512.png",
+}
+_EDGE_TOKEN_PREFIXES = (
+    "/api/",
+    "/s/",
+    "/auth/",
+    "/webapp-uploaded-logo/",
+    "/webapp-favicon/",
+    "/webapp-theme-css/",
+    "/webapp-theme-assets/",
+)
+
+
+def _webapp_edge_token_required(path: str) -> bool:
+    return path in _EDGE_TOKEN_EXACT_PATHS or any(
+        path.startswith(prefix) for prefix in _EDGE_TOKEN_PREFIXES
+    )
+
+
+@web.middleware
+async def _webapp_edge_token_middleware(
+    request: web.Request, handler: Handler
+) -> web.StreamResponse:
+    settings: Settings = get_settings(request)
+    expected_token = settings.MINISHOP_EDGE_TOKEN.strip()
+    if not expected_token or not _webapp_edge_token_required(request.path):
+        return await handler(request)
+
+    header_name = settings.MINISHOP_EDGE_TOKEN_HEADER.strip()
+    if not header_name:
+        header_name = "X-Minishop-Edge-Token"
+    received_token = request.headers.get(header_name, "")
+    if not hmac.compare_digest(received_token, expected_token):
+        return _json_error(403, "edge_token_required", "Forbidden")
+
+    return await handler(request)
+
+
+def _webapp_api_url(path: str) -> str:
+    normalized_path = "/" + str(path or "").lstrip("/")
+    if normalized_path == "/api":
+        normalized_path = ""
+    elif normalized_path.startswith("/api/"):
+        normalized_path = normalized_path[4:]
+    return f"/api{normalized_path}"
+
+
+def _webapp_shell_preload_markup(
+    js_asset_name: str,
+    share_token: str = "",
+    *,
+    admin_js_asset_name: str = "",
+    admin_css_asset_name: str = "",
+) -> str:
+    js_href = "/" + quote(str(js_asset_name or "").lstrip("/"), safe="/.-_")
+    lines = [f'<link rel="modulepreload" href="{js_href}">']
+    if admin_js_asset_name and admin_css_asset_name:
+        admin_js_href = "/" + quote(admin_js_asset_name.lstrip("/"), safe="/.-_?=")
+        admin_css_href = "/" + quote(admin_css_asset_name.lstrip("/"), safe="/.-_?=")
+        lines.extend(
+            (
+                f'<link rel="preload" href="{admin_css_href}" as="style">',
+                f'<link rel="modulepreload" href="{admin_js_href}">',
+            )
+        )
+    normalized_share_token = subscription_dal.normalize_install_share_token(share_token)
+    if normalized_share_token:
+        fetch_href = _webapp_api_url(
+            f"/subscription-guides/public/{quote(normalized_share_token, safe='')}",
+        )
+        lines.append(
+            f'<link rel="preload" href="{fetch_href}" as="fetch" '
+            'crossorigin="use-credentials" fetchpriority="high">'
+        )
+    return "\n".join(lines)
+
+
+@web.middleware
+async def _csrf_protection_middleware(request: web.Request, handler: Handler) -> web.StreamResponse:
+    settings: Settings = get_settings(request)
+    header = request.headers.get("Authorization", "")
+    prefix = "Bearer "
+    if header.startswith(prefix) and verify_webapp_session_token(
+        settings, header[len(prefix) :].strip()
+    ):
+        return await handler(request)
+
+    if request.method in WEBAPP_STATE_CHANGING_METHODS:
+        if not browser_origin_allowed(request, settings):
+            return _json_error(403, "csrf_failed", "Invalid request origin")
+        if not request.cookies.get(WEBAPP_SESSION_COOKIE_NAME):
+            return await handler(request)
+        if request.path in WEBAPP_CSRF_EXEMPT_PATHS and browser_origin_present(request):
+            return await handler(request)
+        csrf_cookie = request.cookies.get(WEBAPP_CSRF_COOKIE_NAME, "")
+        csrf_header = request.headers.get(WEBAPP_CSRF_HEADER_NAME, "")
+        if not csrf_cookie or not csrf_header or not hmac.compare_digest(csrf_header, csrf_cookie):
+            return _json_error(403, "csrf_failed", "Invalid CSRF token")
+
+    return await handler(request)
+
+
+def _get_cached_webapp_settings(request: web.Request) -> dict[str, Any]:
+    settings: Settings = get_settings(request)
+    cache = get_webapp_settings_cache(request)
+    now = time.monotonic()
+    if now - float(cache.get("ts", 0.0)) >= 60 or not cache.get("data"):
+        logo_url = _resolve_webapp_logo_url(settings)
+        payment_settings = settings.payment_settings
+        support_settings = settings.support_settings
+        privacy_policy_url, user_agreement_url = legal_document_links(settings)
+        cache["data"] = {
+            "logo_url": logo_url,
+            "favicon_url": _resolve_webapp_favicon_url(settings, logo_url),
+            "subscription_options": payment_settings.subscription_options,
+            "stars_subscription_options": payment_settings.stars_subscription_options,
+            "traffic_packages": payment_settings.traffic_packages,
+            "stars_traffic_packages": payment_settings.stars_traffic_packages,
+            "support_url": support_settings.link or "",
+            "server_status_url": settings.server_status_external_url or "",
+            "privacy_policy_url": privacy_policy_url,
+            "user_agreement_url": user_agreement_url,
+            "currency": payment_settings.default_currency_symbol or "RUB",
+            "email_auth_enabled": settings.email_auth_configured,
+            "notification_preferences_enabled": bool(
+                settings.USER_NOTIFICATION_PREFERENCES_ENABLED
+            ),
+            "auth_providers": settings.webapp_auth_providers,
+            "recommended_auth_providers": settings.webapp_recommended_auth_providers,
+            "wide_auth_providers": settings.webapp_wide_auth_providers,
+            "registration_invite_only_enabled": bool(
+                settings.registration_settings.invite_only_enabled
+            ),
+            "language": _normalize_language(settings.DEFAULT_LANGUAGE),
+        }
+        cache["ts"] = now
+    return cache["data"]
+
+
+def _resolve_app_version() -> str:
+    # Single source of truth shared with the telemetry worker so the admin
+    # sidebar and the install beacon always report the same version.
+    from bot.utils import app_version as app_version_module
+
+    global _APP_VERSION_CACHE
+
+    app_version_module.APP_ROOT = APP_ROOT
+    app_version_module._run_git_command = _run_git_command
+    app_version_module._APP_VERSION_CACHE = _APP_VERSION_CACHE
+    version = app_version_module.resolve_app_version()
+    _APP_VERSION_CACHE = app_version_module._APP_VERSION_CACHE
+    return version
+
+
+def _run_git_command(*args: str) -> str:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=APP_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=1.5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout.strip()
+
+
+async def _enforce_webapp_rate_limit(
+    request: web.Request,
+    *,
+    user_id: int,
+    action: str,
+) -> web.Response | None:
+    from .rate_limits import enforce_action_limit
+
+    return await enforce_action_limit(request, user_id=user_id, action=action)
+
+
+def _is_webapp_bootstrap_i18n_key(key: str) -> bool:
+    return key in WEBAPP_BOOTSTRAP_I18N_KEYS or key.startswith(WEBAPP_BOOTSTRAP_I18N_PREFIXES)
+
+
+def _normalize_i18n_scope(raw_scope: object) -> str:
+    scope = str(raw_scope or "webapp").strip().lower()
+    return scope if scope in WEBAPP_I18N_SCOPES else "webapp"
+
+
+def _i18n_cache_fingerprint(
+    locales_data: dict[str, Any],
+) -> tuple[tuple[str, int, int], ...]:
+    return tuple(
+        sorted(
+            (str(lang), id(messages), len(messages))
+            for lang, messages in locales_data.items()
+            if isinstance(messages, dict)
+        )
+    )
+
+
+WEBAPP_LANGUAGE_COOKIE = "minishop_lang"
+
+
+def _match_webapp_language(raw_language: object, locales_data: object) -> str:
+    if not raw_language or not isinstance(locales_data, dict):
+        return ""
+    language = normalize_locale_language_code(str(raw_language), prefer_known_base=False)
+    if not is_valid_locale_language_code(language):
+        return ""
+    if language in locales_data:
+        return language
+    base_language = language.split("-", 1)[0]
+    return base_language if base_language in locales_data else ""
+
+
+def _initial_webapp_language(
+    request: web.Request, locales_data: object, default_language: str
+) -> str:
+    query = getattr(request, "query", {}) or {}
+    cookies = getattr(request, "cookies", {}) or {}
+    headers = getattr(request, "headers", {}) or {}
+    accepted = str(headers.get("Accept-Language") or "").split(",")
+    for candidate in (
+        query.get("lang"),
+        cookies.get(WEBAPP_LANGUAGE_COOKIE),
+        *(entry.split(";", 1)[0].strip() for entry in accepted),
+        default_language,
+    ):
+        language = _match_webapp_language(candidate, locales_data)
+        if language:
+            return language
+    if isinstance(locales_data, dict) and locales_data:
+        return sorted(str(key) for key in locales_data)[0]
+    return _normalize_language(default_language)
+
+
+def _filter_webapp_i18n_payload(
+    locales_data: object, scope: str = "webapp", language: str = ""
+) -> dict[str, Any]:
+    if not isinstance(locales_data, dict):
+        return {}
+
+    normalized_scope = _normalize_i18n_scope(scope)
+    cache_key = (
+        id(locales_data),
+        normalized_scope,
+        language,
+        _i18n_cache_fingerprint(locales_data),
+    )
+    cached = _I18N_PAYLOAD_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    payload: dict[str, Any] = {}
+    for lang, messages in locales_data.items():
+        if language and str(lang) != language:
+            continue
+        if not isinstance(messages, dict):
+            continue
+        filtered: dict[str, Any] = {}
+        for key, value in messages.items():
+            key_text = str(key)
+            is_bootstrap_key = _is_webapp_bootstrap_i18n_key(key_text)
+            if (normalized_scope == "webapp" and is_bootstrap_key) or (
+                normalized_scope == "admin" and not is_bootstrap_key
+            ):
+                filtered[key_text] = value
+        payload[str(lang)] = filtered
+    if len(_I18N_PAYLOAD_CACHE) > 32:
+        _I18N_PAYLOAD_CACHE.clear()
+    _I18N_PAYLOAD_CACHE[cache_key] = payload
+    return payload
+
+
+def _cached_json_response(
+    request: web.Request,
+    payload: dict[str, Any],
+    *,
+    cache_control: str,
+    cache_namespace: str,
+) -> web.Response:
+    """Serialize once and serve a cached gzip variant for large bootstrap payloads."""
+
+    response = json_response(payload)
+    body = bytes(response.body or b"")
+    digest = hashlib.sha256(body).hexdigest()
+    etag = f'W/"{digest}"'
+    if _request_etag_matches(request, etag):
+        return _not_modified_response(
+            cache_control=cache_control,
+            etag=etag,
+            vary="Accept-Encoding",
+        )
+    if _request_accepts_encoding(request, "gzip"):
+        response.body = _gzip_body_cached(f"{cache_namespace}:{digest}", body)
+        response.headers["Content-Encoding"] = "gzip"
+        response.headers["Vary"] = "Accept-Encoding"
+    response.headers["Cache-Control"] = cache_control
+    response.headers["ETag"] = etag
+    return response
+
+
+def _build_webapp_bootstrap_payload(request: web.Request) -> dict[str, Any]:
+    settings: Settings = get_settings(request)
+    cached = _get_cached_webapp_settings(request)
+    webapp_settings = settings.webapp_settings
+    themes_catalog = settings.webapp_themes_catalog
+    primary_color = webapp_settings.primary_color or "#00fe7a"
+    # The public bootstrap must not change with an unauthenticated preview link.
+    # The client activates a preview only after loading an authenticated admin.
+    preview_key = ""
+    themes_payload = public_themes_catalog_payload(
+        themes_catalog,
+        primary_color,
+        enabled_only=True,
+    )
+    i18n_instance: object | None = get_i18n(request)
+    i18n_scope = _normalize_i18n_scope(request.query.get("i18n_scope") or "webapp")
+    if i18n_instance and hasattr(i18n_instance, "reload_overrides_from_file"):
+        i18n_instance.reload_overrides_from_file()
+    locales_data = getattr(i18n_instance, "locales_data", {}) if i18n_instance else {}
+    base_locales_data = getattr(i18n_instance, "base_locales_data", {}) if i18n_instance else {}
+    initial_language = _initial_webapp_language(
+        request, locales_data, str(cached["language"] or settings.DEFAULT_LANGUAGE)
+    )
+    # Import lazily to keep the asset module usable during the serializers'
+    # compatibility import cycle. These plans contain public catalog data only;
+    # user-specific quotes are still attached after authentication.
+    from .serializers import _serialize_plans
+
+    return {
+        "config": {
+            "maintenanceModeEnabled": bool(settings.MAINTENANCE_MODE_ENABLED),
+            "title": webapp_settings.title,
+            "primaryColor": webapp_settings.primary_color,
+            "userThemeModeEnabled": bool(webapp_settings.user_theme_mode_enabled),
+            "compactHomeEnabled": bool(webapp_settings.compact_home_enabled),
+            "adminThemeEffectsEnabled": bool(webapp_settings.admin_theme_effects_enabled),
+            "compactLoginEnabled": bool(webapp_settings.compact_login_enabled),
+            "checkoutAddonValueAnimationEnabled": bool(
+                webapp_settings.checkout_addon_value_animation_enabled
+            ),
+            "checkoutAddonEditorExpandedByDefault": bool(
+                webapp_settings.checkout_addon_editor_expanded_by_default
+            ),
+            "themesCatalog": themes_payload,
+            "themesDir": settings.WEBAPP_THEMES_DIR,
+            "themePreviewKey": preview_key,
+            "logoUrl": cached["logo_url"],
+            "faviconUrl": cached["favicon_url"],
+            "faviconUseCustom": bool(webapp_settings.favicon_use_custom),
+            "apiBase": "/api",
+            "adminJsAsset": f"/{_resolve_webapp_admin_js_asset_name()}",
+            "adminCssAsset": f"/{_resolve_webapp_admin_css_asset_name()}",
+            "telegramLoginBotUsername": get_bot_username(request),
+            "telegramLoginBotId": _resolve_telegram_bot_id(settings.BOT_TOKEN) or 0,
+            "telegramOAuthClientId": _resolve_telegram_oauth_client_id(settings) or 0,
+            "telegramOAuthRequestAccess": _resolve_telegram_oauth_request_access(settings),
+            "supportUrl": cached["support_url"],
+            "serverStatusUrl": cached["server_status_url"],
+            "serverStatusInternal": bool(
+                settings.SERVER_STATUS_ENABLED and settings.SERVER_STATUS_PROVIDER != "url"
+            ),
+            "serverStatusShowOnHome": bool(settings.SERVER_STATUS_SHOW_ON_HOME),
+            "privacyPolicyUrl": cached["privacy_policy_url"],
+            "userAgreementUrl": cached["user_agreement_url"],
+            "currency": cached["currency"],
+            "language": initial_language,
+            "languages": locale_language_options(
+                locales_data.keys(),
+                base_languages=base_locales_data.keys(),
+            ),
+            "emailAuthEnabled": cached["email_auth_enabled"],
+            "notificationPreferencesEnabled": cached["notification_preferences_enabled"],
+            "devMode": bool(settings.qa_auth_enabled),
+            "authProviders": cached["auth_providers"],
+            "recommendedAuthProviders": cached["recommended_auth_providers"],
+            "wideAuthProviders": cached["wide_auth_providers"],
+            "registrationInviteOnlyEnabled": cached["registration_invite_only_enabled"],
+            "checkoutPlans": _serialize_plans(
+                settings,
+                initial_language,
+                tariff_access_code=request_tariff_access_code(request),
+            ),
+            "appVersion": _resolve_app_version(),
+            "appRepositoryUrl": APP_REPOSITORY_URL,
+        },
+        "i18n": _filter_webapp_i18n_payload(locales_data, i18n_scope, initial_language),
+    }
+
+
+async def bootstrap_route(request: web.Request) -> web.Response:
+    return _cached_json_response(
+        request,
+        {"ok": True, **_build_webapp_bootstrap_payload(request)},
+        cache_control="private, no-cache",
+        cache_namespace="webapp-bootstrap",
+    )
+
+
+async def i18n_route(request: web.Request) -> web.Response:
+    i18n_instance: object | None = get_i18n(request)
+    if i18n_instance and hasattr(i18n_instance, "reload_overrides_from_file"):
+        i18n_instance.reload_overrides_from_file()
+    scope = _normalize_i18n_scope(request.query.get("scope") or "webapp")
+    locales_data = getattr(i18n_instance, "locales_data", {}) if i18n_instance else {}
+    requested_language = str(request.query.get("lang") or "")
+    language = _match_webapp_language(requested_language, locales_data)
+    if requested_language and not language:
+        return _json_error(400, "unsupported_language", "Unsupported language")
+    return _cached_json_response(
+        request,
+        {
+            "ok": True,
+            "scope": scope,
+            "i18n": _filter_webapp_i18n_payload(locales_data, scope, language),
+        },
+        cache_control="no-cache",
+        cache_namespace=f"webapp-i18n:{scope}:{language}",
+    )
+
+
+def _webapp_page_title(settings: Settings, suffix: str = "") -> str:
+    base = str(settings.WEBAPP_TITLE or "").strip() or "Subscription"
+    suffix = str(suffix or "").strip()
+    return f"{base} - {suffix}" if suffix else base
+
+
+def _webapp_preview_meta_markup(page_title: str) -> str:
+    escaped_title = html.escape(str(page_title or ""), quote=True)
+    return "\n".join(
+        [
+            f'<meta name="application-name" content="{escaped_title}">',
+            f'<meta name="apple-mobile-web-app-title" content="{escaped_title}">',
+            f'<meta property="og:title" content="{escaped_title}">',
+            '<meta property="og:type" content="website">',
+            f'<meta property="og:site_name" content="{escaped_title}">',
+            '<meta name="twitter:card" content="summary">',
+            f'<meta name="twitter:title" content="{escaped_title}">',
+        ]
+    )
+
+
+def _replace_webapp_title(html_text: str, page_title: str) -> str:
+    escaped_title = html.escape(str(page_title or ""), quote=False)
+    next_title = f"<title>{escaped_title}</title>"
+    replaced = re.sub(
+        r"<title\b[^>]*>.*?</title>",
+        next_title,
+        html_text,
+        count=1,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if replaced != html_text:
+        return replaced
+    return html_text.replace("</head>", f"{next_title}\n</head>", 1)
+
+
+def _replace_webapp_favicon(html_text: str, favicon_markup: str) -> str:
+    markup = str(favicon_markup or "").strip()
+    if not markup:
+        return html_text
+    replaced = re.sub(
+        r"<link\b(?=[^>]*\bid=[\"']app-favicon[\"'])[^>]*>",
+        markup,
+        html_text,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    if replaced != html_text:
+        return replaced
+    return html_text.replace("</head>", f"{markup}\n</head>", 1)
+
+
+def _apply_webapp_head_metadata(html_text: str, page_title: str, favicon_url: str = "") -> str:
+    html_text = _replace_webapp_title(html_text, page_title)
+    if 'property="og:title"' not in html_text and "property='og:title'" not in html_text:
+        meta_markup = _webapp_preview_meta_markup(page_title)
+        html_text = re.sub(
+            r"(<title\b[^>]*>.*?</title>)",
+            lambda match: f"{match.group(1)}\n{meta_markup}",
+            html_text,
+            count=1,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    return _replace_webapp_favicon(html_text, _favicon_head_markup(favicon_url))
+
+
+async def index_route(request: web.Request) -> web.Response:
+    settings: Settings = get_settings(request)
+    if not settings.WEBAPP_ENABLED:
+        raise web.HTTPNotFound(text="webapp_disabled")
+
+    html = _read_template_text_cached(TEMPLATE_PATH)
+    cached = _get_cached_webapp_settings(request)
+    themes_catalog = settings.webapp_themes_catalog
+    primary_color = settings.WEBAPP_PRIMARY_COLOR or "#00fe7a"
+    initial_theme = _initial_theme_for_request(request, themes_catalog)
+    bootstrap = _build_webapp_bootstrap_payload(request)
+    config = bootstrap["config"]
+    html = _strip_marked_block(html, DEV_MOCK_START_MARKER, DEV_MOCK_END_MARKER)
+    css_asset_name = _resolve_webapp_css_asset_name()
+    js_asset_name = _resolve_webapp_js_asset_name()
+    html = html.replace(
+        'href="/subscription_webapp.css"',
+        f'href="/{css_asset_name}"',
+        1,
+    )
+    is_admin_route = request.path == "/admin" or request.path.startswith("/admin/")
+    preload_markup = _webapp_shell_preload_markup(
+        js_asset_name,
+        str(getattr(request, "match_info", {}).get("share_token") or ""),
+        admin_js_asset_name=str(config["adminJsAsset"]) if is_admin_route else "",
+        admin_css_asset_name=str(config["adminCssAsset"]) if is_admin_route else "",
+    )
+    if preload_markup:
+        html = html.replace("</head>", f"{preload_markup}\n</head>", 1)
+    initial_theme_markup = _initial_theme_head_markup(request, initial_theme, primary_color)
+    if initial_theme_markup:
+        html = html.replace("</head>", f"{initial_theme_markup}\n</head>", 1)
+    html = _apply_webapp_head_metadata(html, _webapp_page_title(settings), cached["favicon_url"])
+    i18n_payload = bootstrap["i18n"]
+    nonce = request.get("csp_nonce", "")
+    html = html.replace(
+        WEBAPP_CONFIG_PLACEHOLDER,
+        (
+            f'<script id="webapp-config" type="application/json" nonce="{nonce}">'
+            + json_script_payload(config)
+            + "</script>"
+        ),
+    )
+    html = html.replace(
+        WEBAPP_I18N_PLACEHOLDER,
+        (
+            f'<script id="i18n" type="application/json" nonce="{nonce}">'
+            + json_script_payload(i18n_payload)
+            + "</script>"
+        ),
+    )
+    # The bundle is an ES module so screens the customer has not opened stay in
+    # their own chunks; module scripts defer by themselves.
+    html = html.replace(
+        WEBAPP_JS_PLACEHOLDER,
+        f'<script type="module" src="/{js_asset_name}"></script>',
+    )
+    brand_asset_url = cached["logo_url"]
+    if brand_asset_url:
+        html = html.replace(
+            "</head>",
+            (image_preload_markup(str(brand_asset_url)) + "\n</head>"),
+            1,
+        )
+    response = web.Response(text=html, content_type="text/html", charset="utf-8")
+    response.headers["Cache-Control"] = WEBAPP_HTML_CACHE_CONTROL
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
+async def app_deeplink_route(request: web.Request) -> web.Response:
+    settings: Settings = get_settings(request)
+    if not settings.WEBAPP_ENABLED:
+        raise web.HTTPNotFound(text="webapp_disabled")
+
+    nonce = html.escape(str(request.get("csp_nonce", "")), quote=True)
+    query = getattr(request, "query", {}) or {}
+    themes_catalog = settings.webapp_themes_catalog
+    primary_color = settings.WEBAPP_PRIMARY_COLOR or "#00fe7a"
+    initial_theme = (
+        _initial_theme_for_request(request, themes_catalog) if themes_catalog is not None else None
+    )
+    lang = _normalize_language(query.get("lang") or settings.DEFAULT_LANGUAGE)
+    messages = _app_deeplink_i18n_payload(request, lang)
+    page_title = _webapp_page_title(settings, messages["title"])
+    messages_json = json.dumps(
+        messages,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).replace("</", "<\\/")
+    favicon_url = _resolve_webapp_favicon_url(settings, _resolve_webapp_logo_url(settings))
+    html_text = (
+        _read_template_text_cached(APP_DEEPLINK_TEMPLATE_PATH)
+        .replace("__LANG__", html.escape(lang, quote=True))
+        .replace("__PAGE_TITLE__", html.escape(page_title, quote=False))
+        .replace("__NONCE__", nonce)
+        .replace("__MESSAGES_JSON__", messages_json)
+    )
+    initial_theme_markup = _app_deeplink_theme_head_markup(
+        request,
+        initial_theme,
+        themes_catalog,
+        primary_color,
+    )
+    if initial_theme_markup:
+        html_text = html_text.replace("</head>", f"{initial_theme_markup}\n</head>", 1)
+    html_text = _apply_webapp_head_metadata(html_text, page_title, favicon_url)
+    response = web.Response(text=html_text, content_type="text/html", charset="utf-8")
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _app_deeplink_i18n_payload(request: web.Request, lang: str) -> dict[str, str]:
+    i18n_instance: object | None = get_i18n(request)
+    gettext = getattr(i18n_instance, "gettext", None)
+    payload: dict[str, str] = {}
+    for payload_key, i18n_key in APP_DEEPLINK_I18N_KEYS.items():
+        fallback = APP_DEEPLINK_I18N_FALLBACKS[i18n_key]
+        value = ""
+        if callable(gettext):
+            try:
+                value = str(gettext(lang, i18n_key) or "")
+            except Exception as exc:
+                logger.debug("Failed to resolve open-app i18n key %s: %s", i18n_key, exc)
+        payload[payload_key] = value if value and value != i18n_key else fallback
+    return payload
+
+
+__all__ = [
+    "_ASSET_NAME_CACHE",
+    "_INITIAL_THEME_LOGO_SCALE_TOKENS",
+    "_INITIAL_THEME_TOKEN_CSS_MAP",
+    "_app_deeplink_theme_head_markup",
+    "_close_shared_http_session",
+    "_csrf_protection_middleware",
+    "_enforce_webapp_rate_limit",
+    "_ensure_shared_http_session",
+    "_favicon_head_markup",
+    "_fetch_webapp_logo",
+    "_get_cached_asset_name",
+    "_get_cached_webapp_settings",
+    "_get_shared_http_session",
+    "_gzip_body_cached",
+    "_hostname_resolves_to_public_address",
+    "_initial_theme_declarations",
+    "_initial_theme_for_request",
+    "_initial_theme_head_markup",
+    "_initial_theme_tokens",
+    "_is_proxyable_webapp_logo_url",
+    "_load_or_fetch_webapp_logo",
+    "_normalize_etag_for_compare",
+    "_not_modified_response",
+    "_precompressed_template_asset_response",
+    "_read_template_binary_cached",
+    "_read_template_text_cached",
+    "_read_webapp_logo_from_disk",
+    "_request_accepts_encoding",
+    "_request_etag_matches",
+    "_resolve_app_version",
+    "_resolve_webapp_admin_css_asset_name",
+    "_resolve_webapp_admin_js_asset_name",
+    "_resolve_webapp_asset_url",
+    "_resolve_webapp_css_asset_name",
+    "_resolve_webapp_favicon_url",
+    "_resolve_webapp_js_asset_name",
+    "_resolve_webapp_logo_url",
+    "_safe_theme_asset_relative_path",
+    "_safe_theme_css_relative_path",
+    "_safe_theme_relative_path",
+    "_security_headers_middleware",
+    "_serve_template_asset",
+    "_set_cached_asset_name",
+    "_stable_asset_name_with_version",
+    "_strip_marked_block",
+    "_theme_asset_etag",
+    "_theme_css_href_for_html",
+    "_theme_text_response",
+    "_uploaded_webapp_logo_filename",
+    "_uploaded_webapp_logo_response",
+    "_warm_webapp_logo_cache",
+    "_webapp_api_url",
+    "_webapp_default_brand_file_response",
+    "_webapp_default_favicon_file_response",
+    "_webapp_edge_token_middleware",
+    "_webapp_favicon_file_response",
+    "_webapp_generated_favicon_digest",
+    "_webapp_logo_cache_key",
+    "_webapp_logo_disk_paths",
+    "_webapp_redirectable_favicon_url",
+    "_webapp_root_favicon_target_filename",
+    "_webapp_shell_preload_markup",
+    "_write_webapp_logo_to_disk",
+    "admin_css_asset_route",
+    "admin_js_asset_route",
+    "admin_js_chunk_asset_route",
+    "app_deeplink_route",
+    "bootstrap_route",
+    "css_asset_route",
+    "health_route",
+    "i18n_route",
+    "index_route",
+    "js_asset_route",
+    "js_chunk_asset_route",
+    "provider_logo_asset_route",
+    "robots_txt_route",
+    "theme_asset_route",
+    "theme_css_asset_route",
+    "webapp_current_favicon_route",
+    "webapp_default_logo_route",
+    "webapp_favicon_route",
+    "webapp_logo_route",
+    "webapp_uploaded_logo_route",
+]

@@ -1,0 +1,682 @@
+import { DEVICE_NAME_MAX_LENGTH, normalizeDeviceName } from "../deviceNames";
+import { DEV_MOCK } from "../previewMock.js";
+import { jsonBody } from "../demoMockRuntime.js";
+import {
+  DEFAULT_DEMO_AUTH_EMAIL,
+  DEFAULT_DEMO_AUTH_PASSWORD,
+  applyDemoEmailAuthUser,
+  applyDemoEmailLink,
+  applyDemoTelegramAuthUser,
+  applyDemoTelegramLink,
+  demoAuthConfig,
+} from "./authDemo";
+import { defaultClone, type DemoRecord, type MockApiContext } from "./dataset";
+import { currentDemoBalance, spendDemoBalance } from "./balance";
+import { balanceRecurringEligible } from "../balanceUiPolicy";
+import { applyDemoDeviceTopup, demoDeviceTopupPlan } from "./deviceTopup";
+import type { AdminDemoFixtures } from "./adminFixtures";
+import { demoPaymentStatuses, isDeviceTopupSaleMode, nextDemoPaymentId } from "./state";
+import { issueReviewReferral } from "./issueReview";
+
+function demoCheckoutQuote(body: DemoRecord) {
+  const method = String(body.method || "").toLowerCase();
+  const stars = method.includes("stars");
+  const plan = ((DEV_MOCK.data.plans || []) as DemoRecord[]).find(
+    (item) =>
+      Number(item.months || 0) === Number(body.months || 0) &&
+      String(item.tariff_key || "") === String(body.tariff_key || "")
+  );
+  const baseAmount = Number(stars ? plan?.stars_price || 0 : plan?.price || 0);
+  const definitions = (plan?.checkout_addons || {}) as DemoRecord;
+  const selection = (body.checkout_addons || {}) as DemoRecord;
+  const selectedUnits: Record<string, number> = {
+    devices: Number(selection.device_count || 0),
+    traffic: Number(
+      selection.regular_limit_gb ?? (definitions.traffic as DemoRecord)?.base_units ?? 0
+    ),
+    premium_traffic: Number(
+      selection.premium_limit_gb ?? (definitions.premium_traffic as DemoRecord)?.base_units ?? 0
+    ),
+  };
+  const items: DemoRecord[] = [];
+  let addonsAmount = 0;
+  for (const [kind, units] of Object.entries(selectedUnits)) {
+    const definition = (definitions[kind] || {}) as DemoRecord;
+    const option = ((definition.options || []) as DemoRecord[]).find(
+      (item) =>
+        Math.abs(
+          Number(kind === "devices" ? item.extra_units || 0 : item.total_units || 0) - units
+        ) < 1e-9
+    );
+    if (!option) continue;
+    const amount = Number(stars ? option.stars_price || 0 : option.price || 0);
+    addonsAmount += amount;
+    items.push({ kind, ...option, amount });
+  }
+  const renewal = (plan?.hwid_renewal || {}) as DemoRecord;
+  const hwidRenewalAmount = body.renew_hwid_devices
+    ? Number(stars ? renewal.stars_price || 0 : renewal.price || 0)
+    : 0;
+  const subtotal = baseAmount + addonsAmount + hwidRenewalAmount;
+  return { stars, baseAmount, addonsAmount, subtotal, items };
+}
+
+/**
+ * User-facing fallback responses for the docs demo / preview. Always returns a
+ * value; unmatched paths resolve to `{ ok: false, error: "not_found" }`.
+ */
+export function webappFallbackResponse(
+  path: string,
+  cleanPath: string,
+  options: RequestInit,
+  context: MockApiContext,
+  fixtures: AdminDemoFixtures
+): unknown {
+  const {
+    clone = defaultClone,
+    currentLang = "ru",
+    normalizeLangCode = (value: unknown) => String(value || "ru"),
+  } = context;
+  const method = String(options.method || "GET").toUpperCase();
+  const { supportTickets, supportMessages, supportCounts, filterSupportTickets } = fixtures;
+
+  if (cleanPath === "/notification-preferences/unsubscribe") {
+    if (method === "POST") {
+      const body = jsonBody(options);
+      DEV_MOCK.data.user.notification_preferences = {
+        ...(DEV_MOCK.data.user.notification_preferences || {}),
+        marketing_email: body.marketing_email !== false,
+        system_email: body.system_email !== false,
+      };
+    }
+    return {
+      ok: true,
+      email: String(DEV_MOCK.data.user.notification_email || DEV_MOCK.data.user.email || ""),
+      language: String(DEV_MOCK.data.user.language_code || "ru"),
+      notification_preferences: clone(
+        DEV_MOCK.data.user.notification_preferences || {
+          marketing_email: false,
+          marketing_telegram: true,
+          system_email: true,
+          system_telegram: true,
+        }
+      ),
+    };
+  }
+
+  if (cleanPath === "/account/notification-preferences" && method === "POST") {
+    DEV_MOCK.data.user.notification_preferences = jsonBody(options);
+    return {
+      ok: true,
+      notification_preferences: clone(DEV_MOCK.data.user.notification_preferences),
+    };
+  }
+
+  if (cleanPath === "/support/tickets" && method === "POST") {
+    let payload: DemoRecord = {};
+    try {
+      payload = JSON.parse(String(options?.body || "{}")) as DemoRecord;
+    } catch (_error) {
+      void _error;
+    }
+    return {
+      ok: true,
+      ticket: {
+        ticket_id: 44,
+        user_id: 100200300,
+        subject: payload.subject || "Новое обращение",
+        category: payload.category || "other",
+        priority: payload.priority || "normal",
+        status: "awaiting_admin",
+        unread_user_count: 0,
+        unread_admin_count: 1,
+        last_message_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+      },
+    };
+  }
+  if (cleanPath === "/support/tickets") {
+    const params = new URLSearchParams(String(path || "").split("?")[1] || "");
+    const tickets = filterSupportTickets(supportTickets, params);
+    return {
+      ok: true,
+      tickets: clone(tickets),
+      total: tickets.length,
+      counts: supportCounts(),
+    };
+  }
+  if (cleanPath.startsWith("/support/tickets/")) {
+    const parts = cleanPath.split("/");
+    const ticketId = Number(parts[3]);
+    const ticket = clone(
+      supportTickets.find((item) => item.ticket_id === ticketId) || supportTickets[0]
+    );
+    if (parts[4] === "read") return { ok: true };
+    if (parts[4] === "typing") return { ok: true };
+    if (parts[4] === "messages") {
+      return {
+        ok: true,
+        ticket,
+        message: {
+          message_id: Date.now(),
+          ticket_id: ticket.ticket_id,
+          author_role: "user",
+          author_user_id: 100200300,
+          author_name: "Анна Смирнова",
+          body: (JSON.parse(String(options?.body || "{}")) as DemoRecord)?.body || "",
+          created_at: new Date().toISOString(),
+          read_by_user_at: null,
+          read_by_admin_at: null,
+        },
+      };
+    }
+    return {
+      ok: true,
+      ticket,
+      messages: clone(supportMessages[Number(ticket.ticket_id)] || []),
+      peer_typing: false,
+    };
+  }
+  if (cleanPath === "/support/unread") return { ok: true, unread: 1 };
+  if (cleanPath === "/subscription/auto-renew" && method === "POST") {
+    const body = jsonBody(options);
+    const enabled = Boolean(body.enabled);
+    DEV_MOCK.data.subscription = {
+      ...(DEV_MOCK.data.subscription || {}),
+      auto_renew_enabled: enabled,
+      auto_renew_available: true,
+      auto_renew_can_enable: true,
+      auto_renew_provider_label:
+        DEV_MOCK.data.subscription?.auto_renew_provider_label || "CloudPayments",
+      provider: DEV_MOCK.data.subscription?.provider || "cloudpayments",
+    };
+    if (["user_balance", "partner_balance"].includes(String(DEV_MOCK.data.subscription.provider))) {
+      DEV_MOCK.data.subscription.can_topup_regular_traffic = !enabled;
+      DEV_MOCK.data.subscription.can_topup_premium_traffic = !enabled;
+      DEV_MOCK.data.subscription.can_topup_traffic = !enabled;
+      DEV_MOCK.data.subscription.can_topup_devices = !enabled;
+    }
+    return {
+      ok: true,
+      auto_renew_enabled: enabled,
+      provider: DEV_MOCK.data.subscription.provider,
+      provider_label: DEV_MOCK.data.subscription.auto_renew_provider_label,
+    };
+  }
+  if (cleanPath === "/me") {
+    const demo = new URLSearchParams(window.location.search).get("gift_demo") || "";
+    // /me exposes id; user_id belongs to admin rows and must not mask consumers of the wrong field.
+    const { user_id: legacyUserId, ...user } = DEV_MOCK.data.user;
+    return clone({
+      ...DEV_MOCK.data,
+      referral: issueReviewReferral(DEV_MOCK.data.referral, currentLang),
+      user: { ...user, id: user.id ?? legacyUserId },
+      settings: {
+        ...DEV_MOCK.data.settings,
+        ...(new URLSearchParams(window.location.search).get("merge_demo") === "provider-only"
+          ? { email_auth_enabled: false }
+          : {}),
+        gifts_enabled:
+          DEV_MOCK.config.giftsEnabled !== false && !["disabled", "disabled-empty"].includes(demo),
+      },
+    });
+  }
+  if (cleanPath === "/balance" && method === "GET") return clone(currentDemoBalance());
+  if (cleanPath === "/balance/topup" && method === "POST") {
+    const body = jsonBody(options);
+    return {
+      ok: true,
+      action: "open_link",
+      payment_id: nextDemoPaymentId(),
+      payment_url: `https://example.com/demo-balance-topup?amount=${encodeURIComponent(String(body.amount || 0))}&method=${encodeURIComponent(String(body.method || "demo"))}`,
+      status: "pending",
+      paid: false,
+    };
+  }
+  if (cleanPath === "/status") {
+    return {
+      ok: true,
+      enabled: true,
+      status: "operational",
+      updatedAt: new Date().toISOString(),
+      stale: false,
+      externalUrl: "https://status.example.com",
+      sources: [{ provider: "uptime-kuma", status: "operational", error: null }],
+      incidents: [],
+      groups: [
+        {
+          id: "locations",
+          name: "Locations",
+          items: [
+            {
+              id: "nl-1",
+              name: "Amsterdam",
+              status: "online",
+              provider: "uptime-kuma",
+              latencyMs: 42,
+              uptime24h: 99.98,
+              lastCheck: new Date().toISOString(),
+            },
+            {
+              id: "de-1",
+              name: "Frankfurt",
+              status: "online",
+              provider: "uptime-kuma",
+              latencyMs: 51,
+              uptime24h: 100,
+              lastCheck: new Date().toISOString(),
+            },
+          ],
+        },
+      ],
+    };
+  }
+  if (path === "/subscription-guides") return clone(DEV_MOCK.data.subscription_guides);
+  if (cleanPath.startsWith("/subscription-guides/public/")) {
+    const shareToken = decodeURIComponent(cleanPath.split("/").pop() || "");
+    const subscription = clone(DEV_MOCK.data.subscription);
+    subscription.install_share_token = shareToken;
+    subscription.share_url = `${window.location.origin}/s/${shareToken}`;
+    return {
+      ...clone(DEV_MOCK.data.subscription_guides),
+      subscription,
+    };
+  }
+  if (path === "/auth/email/request") {
+    const authDemo = demoAuthConfig();
+    return { ok: true, email_code: authDemo.code };
+  }
+  if (path === "/auth/email/verify" || path === "/auth/email/magic") {
+    applyDemoEmailAuthUser();
+    return { ok: true, csrf_token: "local-preview-csrf" };
+  }
+  if (path === "/auth/email/password") {
+    const body = jsonBody(options);
+    const authDemo = demoAuthConfig();
+    const normalizedEmail = String(body.email || "")
+      .trim()
+      .toLowerCase();
+    const password = String(body.password || "");
+    if (
+      normalizedEmail === String(authDemo.email || DEFAULT_DEMO_AUTH_EMAIL).toLowerCase() &&
+      password === String(authDemo.password || DEFAULT_DEMO_AUTH_PASSWORD)
+    ) {
+      applyDemoEmailAuthUser();
+      return { ok: true, csrf_token: "local-preview-csrf" };
+    }
+    return { ok: false, error: "password_login_failed", fallback: "email_code" };
+  }
+  if (path === "/auth/token") {
+    const body = jsonBody(options);
+    applyDemoTelegramAuthUser((body.auth_data || {}) as DemoRecord);
+    return { ok: true, csrf_token: "local-preview-csrf" };
+  }
+  if (path === "/promo/apply") return { ok: true, end_date_text: "31.05.2026" };
+  if (path === "/promo/status") {
+    const body = jsonBody(options);
+    return {
+      ok: true,
+      status: "standalone",
+      code: String(body.code || "DEMO"),
+      message: "",
+      effect_summary: "+7 дней",
+      applies_to: "all",
+      min_subscription_months: null,
+      min_traffic_gb: null,
+      bonus_days: 7,
+      end_date_text: null,
+    };
+  }
+  if (
+    path === "/referral/welcome-bonus/claim" &&
+    String(options.method || "").toUpperCase() === "POST"
+  ) {
+    const days = Math.max(1, Number(DEV_MOCK.data.referral?.welcome_bonus_days || 3));
+    DEV_MOCK.data.subscription = {
+      ...DEV_MOCK.data.subscription,
+      active: true,
+      status: "ACTIVE",
+      remaining_text: `${days} д.`,
+      end_date_text: "05.05.2026 12:00",
+      days_left: days,
+      config_link: "https://sub.example.com/sub/referral-preview-token",
+      connect_url: "https://sub.example.com/connect/referral-preview-token",
+      panel_short_uuid: "referral-preview-token",
+      install_share_token: "referral-preview-share",
+      install_share_url: "https://app.example.com/s/referral-preview-share",
+      traffic_limit: "10 GB",
+      traffic_limit_bytes: 10737418240,
+      traffic_used: "0 B",
+      traffic_used_bytes: 0,
+    };
+    DEV_MOCK.data.referral = {
+      ...(DEV_MOCK.data.referral || {}),
+      welcome_bonus_requires_telegram: false,
+      welcome_bonus_block_reason: "",
+    };
+    return {
+      ok: true,
+      claimed: true,
+      end_date_text: "05.05.2026 12:00",
+    };
+  }
+  if (path === "/devices") return clone(DEV_MOCK.data.devices);
+  if (
+    path === "/devices/topup-options" &&
+    DEV_MOCK.data.subscription.auto_renew_enabled &&
+    ["user_balance", "partner_balance"].includes(String(DEV_MOCK.data.subscription.provider))
+  ) {
+    return { ok: false, error: "recurring_subscription_topup_forbidden" };
+  }
+  if (path === "/devices/topup-options")
+    return clone(DEV_MOCK.data.device_topup_options || { ok: true, plans: [] });
+  if (cleanPath === "/tariffs/topup-options") {
+    if (
+      DEV_MOCK.data.subscription.auto_renew_enabled &&
+      ["user_balance", "partner_balance"].includes(String(DEV_MOCK.data.subscription.provider))
+    ) {
+      return { ok: false, error: "recurring_subscription_topup_forbidden" };
+    }
+    const kind =
+      new URLSearchParams(String(path || "").split("?")[1] || "").get("kind") || "regular";
+    const payload = clone(DEV_MOCK.data.topup_options || { ok: true, plans: [] }) as DemoRecord & {
+      plans?: (DemoRecord & { sale_mode?: unknown })[];
+    };
+    payload.topup_kind = kind;
+    payload.plans = (payload.plans || []).filter((plan) =>
+      kind === "premium" ? plan.sale_mode === "premium_topup" : plan.sale_mode !== "premium_topup"
+    );
+    return payload;
+  }
+  if (path === "/tariffs/change-options")
+    return clone(DEV_MOCK.data.tariff_change_options || { ok: true, targets: [] });
+  if (path === "/devices/disconnect" && String(options.method || "").toUpperCase() === "POST") {
+    let payload: DemoRecord = {};
+    try {
+      payload = options?.body ? (JSON.parse(String(options.body)) as DemoRecord) : {};
+    } catch (_error) {
+      void _error;
+    }
+    const devicesHost = DEV_MOCK.data.devices as DemoRecord & {
+      devices: (DemoRecord & { token?: unknown })[];
+    };
+    devicesHost.devices = devicesHost.devices.filter((device) => device.token !== payload.token);
+    devicesHost.current_devices = devicesHost.devices.length;
+    return { ok: true };
+  }
+  if (path === "/devices/rename" && String(options.method || "").toUpperCase() === "POST") {
+    let payload: DemoRecord = {};
+    try {
+      payload = options?.body ? (JSON.parse(String(options.body)) as DemoRecord) : {};
+    } catch (_error) {
+      void _error;
+    }
+    const devicesHost = DEV_MOCK.data.devices as DemoRecord & {
+      devices: (DemoRecord & { token?: unknown })[];
+    };
+    const target = devicesHost.devices.find((device) => device.token === payload.token);
+    if (!target) return { ok: false, error: "device_not_found" };
+    const name = normalizeDeviceName(String(payload.name || ""));
+    if (Array.from(name).length > DEVICE_NAME_MAX_LENGTH)
+      return { ok: false, error: "device_name_too_long" };
+    target.default_name = String(target.default_name || target.display_name || "");
+    target.custom_name = name || null;
+    target.display_name = name || target.default_name;
+    return { ok: true, device: clone(target) };
+  }
+  if (path === "/trial/activate" && String(options.method || "").toUpperCase() === "POST") {
+    if (DEV_MOCK.data.settings?.trial_requires_oauth && !DEV_MOCK.data.user?.telegram_linked) {
+      return {
+        ok: false,
+        error: "trial_oauth_required",
+        message: "oauth_required",
+      };
+    }
+    DEV_MOCK.data.subscription = {
+      ...DEV_MOCK.data.subscription,
+      active: true,
+      status: "TRIAL",
+      remaining_text: "5 д. 0 ч.",
+      end_date_text: "05.05.2026 12:00",
+      days_left: 5,
+      config_link: "https://sub.example.com/sub/trial-preview-token",
+      connect_url: "https://sub.example.com/connect/trial-preview-token",
+      panel_short_uuid: "trial-preview-token",
+      install_share_token: "8f559061460e8fede78ef18dce887236",
+      install_share_url: "https://app.example.com/s/8f559061460e8fede78ef18dce887236",
+      traffic_limit: "10 GB",
+      traffic_limit_bytes: 10737418240,
+      traffic_used: "0 B",
+      traffic_used_bytes: 0,
+    };
+    DEV_MOCK.data.settings.trial_available = false;
+    return {
+      ok: true,
+      activated: true,
+      days: 5,
+      end_date_text: "05.05.2026 12:00",
+      traffic_gb: 10,
+      config_link: "https://sub.example.com/sub/trial-preview-token",
+      connect_url: "https://sub.example.com/connect/trial-preview-token",
+    };
+  }
+  if (path === "/auth/logout") return { ok: true };
+  if (path === "/account/language" && String(options.method || "").toUpperCase() === "POST") {
+    let payload: DemoRecord = {};
+    try {
+      payload = options?.body ? (JSON.parse(String(options.body)) as DemoRecord) : {};
+    } catch (_error) {
+      void _error;
+    }
+    const language = normalizeLangCode(payload?.language || currentLang);
+    DEV_MOCK.data.user.language_code = language;
+    DEV_MOCK.data.settings.subscription_purchase_description =
+      language === "en"
+        ? "By buying or renewing a subscription, you get access to a VPN/proxy service that helps protect your connection and keep your access stable."
+        : "Покупая или продлевая подписку, вы получаете доступ к VPN/прокси-сервису, который помогает защищать ваше соединение и поддерживать стабильный доступ к сети.";
+    return { ok: true, language };
+  }
+  if (path === "/account/email/request" && String(options.method || "").toUpperCase() === "POST") {
+    const authDemo = demoAuthConfig();
+    return { ok: true, email_code: authDemo.code };
+  }
+  if (path === "/account/email/verify" && String(options.method || "").toUpperCase() === "POST") {
+    applyDemoEmailLink(demoAuthConfig().email);
+    return { ok: true, csrf_token: "local-preview-csrf" };
+  }
+  if (
+    path === "/account/password/request" &&
+    String(options.method || "").toUpperCase() === "POST"
+  ) {
+    return { ok: true };
+  }
+  if (
+    path === "/account/password/confirm" &&
+    String(options.method || "").toUpperCase() === "POST"
+  ) {
+    DEV_MOCK.data.user.password_auth_enabled = true;
+    return { ok: true, password_auth_enabled: true };
+  }
+  if (path === "/account/telegram/link" && String(options.method || "").toUpperCase() === "POST") {
+    const body = jsonBody(options);
+    applyDemoTelegramLink((body.auth_data || {}) as DemoRecord);
+    return { ok: true, csrf_token: "local-preview-csrf" };
+  }
+  if (
+    path === "/account/telegram/notifications/probe" &&
+    String(options.method || "").toUpperCase() === "POST"
+  ) {
+    DEV_MOCK.data.user = {
+      ...(DEV_MOCK.data.user || {}),
+      telegram_notifications_status: "enabled",
+      telegram_notifications_enabled: true,
+      telegram_notifications_need_prompt: false,
+      telegram_notifications_start_link: "https://t.me/preview_bot?start=notifications",
+    };
+    return {
+      ok: true,
+      telegram_notifications: {
+        ok: true,
+        status: "enabled",
+        enabled: true,
+        start_link: "https://t.me/preview_bot?start=notifications",
+      },
+    };
+  }
+  if (
+    ["/subscription/quote", "/subscription/quote-promo"].includes(path) &&
+    String(options.method || "").toUpperCase() === "POST"
+  ) {
+    const body = jsonBody(options);
+    const quote = demoCheckoutQuote(body);
+    const promoCode = String(body.promo_code || "")
+      .trim()
+      .toUpperCase();
+    const discountPercent = promoCode ? 20 : 0;
+    const effective = Math.round(quote.subtotal * (1 - discountPercent / 100) * 100) / 100;
+    if (path.endsWith("quote-promo")) {
+      if (!promoCode) {
+        return { ok: true, valid: false };
+      }
+      return {
+        ok: true,
+        valid: true,
+        payable: true,
+        code: promoCode,
+        promo_code_id: 2026,
+        currency: quote.stars ? "XTR" : "RUB",
+        discount_percent: discountPercent,
+        base_amount: quote.subtotal,
+        effective_amount: effective,
+        base_stars: quote.stars ? quote.subtotal : null,
+        effective_stars: quote.stars ? Math.round(effective) : null,
+        discount_amount: quote.subtotal - effective,
+        effect_summary: "−20% на всю корзину",
+        applies_to: "all",
+        min_subscription_months: null,
+        min_traffic_gb: null,
+      };
+    }
+    return {
+      ok: true,
+      payable: true,
+      quote_key: JSON.stringify(body.checkout_addons || {}),
+      currency: quote.stars ? "XTR" : "RUB",
+      base_amount: quote.baseAmount,
+      addons_amount: quote.addonsAmount,
+      subtotal_amount: quote.subtotal,
+      discount_amount: quote.subtotal - effective,
+      effective_amount: effective,
+      base_stars: quote.stars ? quote.baseAmount : null,
+      addons_stars: quote.stars ? quote.addonsAmount : 0,
+      effective_stars: quote.stars ? Math.round(effective) : null,
+      renewal_amount: quote.baseAmount,
+      items: quote.items,
+    };
+  }
+  if (path === "/payments" && String(options.method || "").toUpperCase() === "POST") {
+    const body = jsonBody(options);
+    if (String(body.method || "").toLowerCase() === "balance" && body.balance_source) {
+      const sourceId = body.balance_source === "partner" ? "partner" : "user";
+      const recurring = Boolean(body.balance_auto_renew);
+      if (
+        recurring &&
+        (!currentDemoBalance().recurring_enabled ||
+          !balanceRecurringEligible(
+            { sale_mode: String(body.sale_mode || "subscription") },
+            Boolean(body.gift)
+          ))
+      ) {
+        return { ok: false, error: "balance_recurring_disabled" };
+      }
+      const quote = demoCheckoutQuote(body);
+      if (!spendDemoBalance(sourceId, quote.subtotal)) {
+        return { ok: false, error: "balance_insufficient" };
+      }
+      const provider = sourceId === "partner" ? "partner_balance" : "user_balance";
+      DEV_MOCK.data.subscription = {
+        ...DEV_MOCK.data.subscription,
+        active: true,
+        provider,
+        auto_renew_enabled: recurring,
+        auto_renew_available: recurring,
+        auto_renew_can_enable: recurring,
+        auto_renew_provider_label: sourceId === "partner" ? "Partner balance" : "Balance",
+        can_topup_regular_traffic: !recurring,
+        can_topup_premium_traffic: !recurring,
+        can_topup_traffic: !recurring,
+        can_topup_devices: !recurring,
+      };
+      const paymentId = nextDemoPaymentId();
+      demoPaymentStatuses.set(String(paymentId), {
+        status: "succeeded",
+        paid: true,
+        sale_mode: "subscription",
+        device_count: 0,
+        applied: true,
+      });
+      return { ok: true, action: "completed", payment_id: paymentId };
+    }
+    if (isDeviceTopupSaleMode(body.sale_mode)) {
+      const plan = demoDeviceTopupPlan(body);
+      const deviceCount = Number(
+        body.device_count || plan?.device_count || plan?.purchased_hwid_devices || body.months || 1
+      );
+      const paymentId = nextDemoPaymentId();
+      demoPaymentStatuses.set(String(paymentId), {
+        status: "pending_yookassa",
+        paid: false,
+        sale_mode: String(body.sale_mode || "hwid_devices"),
+        device_count: deviceCount,
+        applied: false,
+      });
+      return {
+        ok: true,
+        action: "invoice_sent",
+        payment_id: paymentId,
+      };
+    }
+    return {
+      ok: true,
+      action: "open_link",
+      payment_url: "https://example.com/payment-preview",
+      payment_id: 10001,
+    };
+  }
+  if (/^\/payments\/\d+$/.test(path) && String(options.method || "GET").toUpperCase() === "GET") {
+    const paymentId = String(path.split("/").pop());
+    const status = demoPaymentStatuses.get(paymentId);
+    if (status) {
+      if (!status.applied && isDeviceTopupSaleMode(status.sale_mode)) {
+        applyDemoDeviceTopup(status.device_count);
+        status.applied = true;
+      }
+      status.status = "succeeded";
+      status.paid = true;
+      return {
+        ok: true,
+        payment_id: Number(paymentId),
+        status: status.status,
+        paid: status.paid,
+      };
+    }
+    return {
+      ok: true,
+      payment_id: Number(path.split("/").pop()),
+      status: "pending_yookassa",
+      paid: false,
+    };
+  }
+  if (path === "/tariffs/change" && String(options.method || "").toUpperCase() === "POST") {
+    return { ok: true, tariff_key: "business" };
+  }
+  if (path === "/tariffs/change-payment" && String(options.method || "").toUpperCase() === "POST") {
+    return {
+      ok: true,
+      action: "open_link",
+      payment_url: "https://example.com/tariff-change-payment-preview",
+      payment_id: 10002,
+    };
+  }
+  return { ok: false, error: "not_found" };
+}

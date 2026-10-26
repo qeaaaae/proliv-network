@@ -1,0 +1,359 @@
+"""Billing option serializers for the subscription web app."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from aiohttp import web
+
+from bot.utils.locale_defaults import tariff_premium_title
+from config.settings import Settings
+from config.subscription_periods import days_to_legacy_months, with_period_days
+from config.tariffs_config import (
+    default_currency_key_for_settings,
+    default_payment_currency_code_for_settings,
+    payment_currency_code,
+)
+
+from .common import (
+    _format_days_title,
+    _format_number_for_payload,
+    _format_traffic_title,
+)
+from .serializers_tariff_limits import serialize_tariff_limits
+
+
+def _attach_payment_methods_to_plans(
+    settings: Settings,
+    plans: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    from bot.payment_providers import get_provider_spec
+
+    for plan in plans:
+        sale_mode = str(plan.get("sale_mode") or "subscription")
+        tariff_key = str(plan.get("tariff_key") or "").strip()
+        context_sale_mode = (
+            sale_mode if "@" in sale_mode or not tariff_key else f"{sale_mode}@{tariff_key}"
+        )
+        if plan.get("duration_days") is not None:
+            context_sale_mode = with_period_days(context_sale_mode, int(plan["duration_days"]))
+        available: list[str] = []
+        externally_managed: list[str] = []
+        checkout_addons_unavailable: list[str] = []
+        for method in settings.payment_methods_order:
+            method_id = str(method).strip().lower()
+            spec = get_provider_spec(method_id)
+            if not spec or not spec.is_usable_for_payment_context(
+                settings,
+                plan.get("period_key", plan.get("months")),
+                context_sale_mode,
+            ):
+                continue
+            available.append(method_id)
+            if spec.is_price_managed_externally(
+                settings,
+                plan.get("period_key", plan.get("months")),
+                context_sale_mode,
+            ):
+                externally_managed.append(method_id)
+            if plan.get("checkout_addons") and not spec.is_checkout_addon_supported(
+                settings,
+                plan.get("period_key", plan.get("months")),
+                context_sale_mode,
+            ):
+                checkout_addons_unavailable.append(method_id)
+        plan["available_payment_method_ids"] = available
+        if externally_managed:
+            plan["externally_managed_price_method_ids"] = externally_managed
+        if checkout_addons_unavailable:
+            plan["checkout_addons_unavailable_payment_method_ids"] = checkout_addons_unavailable
+    return plans
+
+
+def _serialize_trial_payment_plan(settings: Settings) -> dict[str, Any] | None:
+    if not settings.TRIAL_PAYMENT_ENABLED:
+        return None
+
+    default_currency = default_currency_key_for_settings(settings)
+    default_currency_code = payment_currency_code(default_currency)
+    price = max(0.0, float(settings.TRIAL_PAYMENT_PRICE or 0))
+    stars_price = max(0, int(settings.TRIAL_PAYMENT_STARS_PRICE or 0))
+    plan: dict[str, Any] = {
+        "id": "trial:activation",
+        "sale_mode": "trial",
+        "months": 1,
+        "duration_days": max(0, int(settings.TRIAL_DURATION_DAYS or 0)),
+        "traffic_gb": max(0.0, float(settings.TRIAL_TRAFFIC_LIMIT_GB or 0)),
+        "price": price,
+        "currency": default_currency_code,
+    }
+    if stars_price > 0:
+        plan["stars_price"] = stars_price
+
+    attached = _attach_payment_methods_to_plans(settings, [plan])[0]
+    from bot.payment_providers import get_provider_spec
+
+    attached["available_payment_method_ids"] = [
+        method_id
+        for method_id in attached.get("available_payment_method_ids", [])
+        if (
+            (spec := get_provider_spec(method_id)) is not None
+            and (stars_price > 0 if spec.price_source == "stars" else price > 0)
+        )
+    ]
+    return attached
+
+
+def _traffic_percent(used: int | None, limit: int | None) -> int:
+    used_val = int(used or 0)
+    limit_val = int(limit or 0)
+    if limit_val <= 0:
+        return 0
+    return max(0, min(100, round((used_val / limit_val) * 100)))
+
+
+def _serialize_topup_packages(
+    settings: Settings,
+    tariff: Any,
+    packages: Any | None,
+    lang: str,
+    *,
+    sale_mode: str = "topup",
+    title_prefix: str = "",
+) -> list[dict[str, Any]]:
+    default_currency = default_currency_key_for_settings(settings)
+    default_currency_code = payment_currency_code(default_currency)
+    currency_packages = {
+        float(package.gb): float(package.price)
+        for package in (packages.for_currency(default_currency) if packages else [])
+    }
+    stars_packages = {
+        float(package.gb): int(float(package.price))
+        for package in (packages.stars if packages else [])
+    }
+    plans: list[dict[str, Any]] = []
+    for traffic_gb in sorted(set(currency_packages) | set(stars_packages)):
+        price = currency_packages.get(traffic_gb)
+        stars_price = stars_packages.get(traffic_gb)
+        if price is None and (stars_price is None or int(stars_price) <= 0):
+            continue
+        traffic_value = float(traffic_gb)
+        plan: dict[str, Any] = {
+            "id": f"{tariff.key}:{sale_mode}:{_format_number_for_payload(traffic_value)}",
+            "tariff_key": tariff.key,
+            "tariff_name": tariff.name(lang),
+            "billing_model": tariff.billing_model,
+            "sale_mode": sale_mode,
+            "months": int(traffic_value) if traffic_value.is_integer() else traffic_value,
+            "traffic_gb": traffic_value,
+            "price": float(price or 0),
+            "currency": default_currency_code,
+            "title": f"{title_prefix}{_format_traffic_title(traffic_value, lang)}",
+            "subtitle": tariff_premium_title(tariff, lang)
+            if sale_mode == "premium_topup"
+            else tariff.name(lang),
+        }
+        if stars_price is not None and int(stars_price) > 0:
+            plan["stars_price"] = int(stars_price)
+        plans.append(plan)
+    return _attach_payment_methods_to_plans(settings, plans)
+
+
+def _serialize_hwid_device_packages(
+    settings: Settings,
+    tariff: Any,
+    packages: Any | None,
+    lang: str,
+) -> list[dict[str, Any]]:
+    default_currency = default_currency_key_for_settings(settings)
+    default_currency_code = payment_currency_code(default_currency)
+    currency_packages = {
+        int(package.count): float(package.price)
+        for package in (packages.for_currency(default_currency) if packages else [])
+    }
+    stars_packages = {
+        int(package.count): int(float(package.price))
+        for package in (packages.stars if packages else [])
+    }
+    plans: list[dict[str, Any]] = []
+    for count in sorted(set(currency_packages) | set(stars_packages)):
+        price = currency_packages.get(count)
+        stars_price = stars_packages.get(count)
+        if price is None and (stars_price is None or int(stars_price) <= 0):
+            continue
+        plan: dict[str, Any] = {
+            "id": f"{tariff.key}:hwid:{count}",
+            "tariff_key": tariff.key,
+            "tariff_name": tariff.name(lang),
+            "billing_model": tariff.billing_model,
+            "sale_mode": "hwid_devices",
+            "months": int(count),
+            "device_count": int(count),
+            "price": float(price or 0),
+            "currency": default_currency_code,
+            "title": f"+{count}",
+            "subtitle": tariff.name(lang),
+        }
+        if stars_price is not None and int(stars_price) > 0:
+            plan["stars_price"] = int(stars_price)
+        plans.append(plan)
+    return _attach_payment_methods_to_plans(settings, plans)
+
+
+def _serialize_tariff_change_target(
+    settings: Settings,
+    config: Any,
+    tariff: Any,
+    options: dict[str, Any],
+    lang: str,
+) -> dict[str, Any]:
+    default_currency = default_currency_key_for_settings(settings)
+    default_currency_code = payment_currency_code(default_currency)
+    actions: list[dict[str, Any]] = []
+    mode = str(options.get("mode") or "")
+    if mode == "period_to_period":
+        actions.append(
+            {
+                "mode": "recalc_days",
+                "kind": "free",
+                "title": "recalc_days",
+                "days_after": int(options.get("recalc_days") or 0),
+                "remaining_days": int(options.get("remaining_days") or 0),
+                "converted_hwid_value_rub": float(options.get("converted_hwid_value_rub") or 0),
+                "converted_hwid_days": int(options.get("converted_hwid_days") or 0),
+            }
+        )
+        paid_diff = float(options.get("paid_diff_rub") or 0)
+        if paid_diff > 0:
+            actions.append(
+                {
+                    "mode": "paid_diff",
+                    "kind": "payment",
+                    "title": "paid_diff",
+                    "price": paid_diff,
+                    "currency": default_currency_code,
+                }
+            )
+    elif mode == "period_to_traffic":
+        actions.append(
+            {
+                "mode": "convert_days_to_gb",
+                "kind": "free",
+                "title": "convert_days_to_gb",
+                "converted_gb": float(options.get("converted_gb") or 0),
+                "remaining_days": int(options.get("remaining_days") or 0),
+                "converted_hwid_value_rub": float(options.get("converted_hwid_value_rub") or 0),
+                "converted_hwid_gb": float(options.get("converted_hwid_gb") or 0),
+            }
+        )
+        actions.extend(
+            {
+                "mode": "buy_package",
+                "kind": "payment",
+                "title": f"+{package.gb:g} GB",
+                "traffic_gb": float(package.gb),
+                "price": float(package.price),
+                "currency": default_currency_code,
+            }
+            for package in (
+                tariff.traffic_packages.for_currency(default_currency)
+                if tariff.traffic_packages
+                else []
+            )
+        )
+    else:
+        for months in tariff.enabled_periods:
+            price = tariff.period_price(int(months), default_currency)
+            if price:
+                actions.append(
+                    {
+                        "mode": "buy_period",
+                        "kind": "payment",
+                        "months": days_to_legacy_months(tariff.period_duration_days(int(months))),
+                        "duration_days": tariff.period_duration_days(int(months)),
+                        "period_key": int(months),
+                        "title": _format_days_title(tariff.period_duration_days(int(months)), lang),
+                        "price": float(price),
+                        "currency": default_currency_code,
+                    }
+                )
+    for action in actions:
+        if action.get("kind") != "payment":
+            continue
+        action_mode = str(action.get("mode") or "")
+        if action_mode == "paid_diff":
+            sale_mode = "tariff_upgrade"
+            context_units: float | int = 1
+        elif action_mode == "buy_package":
+            sale_mode = "topup"
+            context_units = float(action.get("traffic_gb") or 0)
+        else:
+            sale_mode = "subscription"
+            context_units = int(action.get("period_key", action.get("months")) or 0)
+        payment_context = {
+            **action,
+            "sale_mode": sale_mode,
+            "months": context_units,
+            "tariff_key": tariff.key,
+        }
+        _attach_payment_methods_to_plans(settings, [payment_context])
+        for key in (
+            "available_payment_method_ids",
+            "externally_managed_price_method_ids",
+        ):
+            if key in payment_context:
+                action[key] = payment_context[key]
+    return {
+        "tariff_key": tariff.key,
+        "title": tariff.name(lang),
+        "description": tariff.description(lang),
+        "billing_model": tariff.billing_model,
+        "monthly_gb": tariff.monthly_gb,
+        **serialize_tariff_limits(settings, tariff, lang),
+        "traffic_packages": [
+            package.gb for package in tariff.traffic_packages.for_currency(default_currency)
+        ]
+        if tariff.billing_model == "traffic" and tariff.traffic_packages
+        else [],
+        "options": options,
+        "actions": actions,
+    }
+
+
+def _serialize_payment_methods(
+    settings: Settings,
+    app: web.Application,
+    lang: str = "ru",
+    *,
+    is_admin: bool = False,
+) -> list[dict[str, Any]]:
+    from bot.payment_providers import get_provider_spec, resolve_provider_presentation
+
+    methods: list[dict[str, Any]] = []
+    payment_currency = default_payment_currency_code_for_settings(settings)
+    for method in settings.payment_methods_order:
+        method = method.lower()
+        spec = get_provider_spec(method)
+        if (
+            spec
+            and spec.is_visible_for_user(settings, app, is_admin=is_admin)
+            and spec.is_usable_for_payment_currency(settings, payment_currency)
+        ):
+            presentation = resolve_provider_presentation(spec, settings, language=lang)
+            payload = {
+                "id": method,
+                "group": spec.payment_group,
+                "provider_id": spec.provider_id,
+                "name": presentation.webapp_label,
+                "icon": presentation.webapp_icon,
+                "balance_supported": not spec.manages_recurring
+                and spec.price_source != "stars"
+                and not spec.price_managed_externally,
+            }
+            if spec.price_managed_externally:
+                payload["price_managed_externally"] = True
+            minimum = spec.payment_minimum(settings, payment_currency)
+            if minimum:
+                payload.update(minimum)
+            methods.append(payload)
+    return methods

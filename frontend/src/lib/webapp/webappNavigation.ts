@@ -1,0 +1,124 @@
+import { activeTabForWebappSection } from "./sectionAvailability.js";
+
+type NavigationDeps = {
+  canUseInstallGuides: () => boolean;
+  closePaymentModal: () => void;
+  devicesEnabled: () => boolean;
+  loadDevices: () => void;
+  loadInstallGuides: () => void;
+  loadSupport: () => void;
+  openConnectLink: () => void;
+  partnerProgramEnabled: () => boolean;
+  referralProgramEnabled: () => boolean;
+  setActiveTab: (tab: string) => void;
+  setScreen: (screen: string) => void;
+  supportEnabled: () => boolean;
+  syncSectionPath: (section: string) => void;
+};
+
+export function createWebappNavigation({
+  canUseInstallGuides,
+  closePaymentModal,
+  devicesEnabled,
+  loadDevices,
+  loadInstallGuides,
+  loadSupport,
+  openConnectLink,
+  partnerProgramEnabled,
+  referralProgramEnabled,
+  setActiveTab,
+  setScreen,
+  supportEnabled,
+  syncSectionPath,
+}: NavigationDeps) {
+  function showSection(section: string, tab = section) {
+    closePaymentModal();
+    setActiveTab(tab);
+    setScreen(section);
+    syncSectionPath(section);
+  }
+
+  function goHome() {
+    showSection("home");
+  }
+
+  function goInstall() {
+    if (!canUseInstallGuides()) {
+      openConnectLink();
+      return false;
+    }
+    showSection("install", "home");
+    loadInstallGuides();
+    return true;
+  }
+
+  function goInvite() {
+    showSection("invite");
+    return true;
+  }
+
+  function goTrial() {
+    showSection("trial", "home");
+    return true;
+  }
+
+  function goPartner() {
+    if (!partnerProgramEnabled()) return false;
+    showSection(
+      "partner",
+      activeTabForWebappSection("partner", {
+        partnerSettingsVisible: referralProgramEnabled(),
+      })
+    );
+    return true;
+  }
+
+  function goDevices() {
+    if (!devicesEnabled()) return false;
+    showSection("devices");
+    loadDevices();
+    return true;
+  }
+
+  function goSupport() {
+    if (!supportEnabled()) return false;
+    showSection("support");
+    loadSupport();
+    return true;
+  }
+
+  function goSettings() {
+    showSection("settings");
+  }
+
+  function goNotifications() {
+    showSection("notifications", "settings");
+  }
+
+  function goPaymentHistory() {
+    showSection("payment-history", "settings");
+  }
+
+  function goSecurity() {
+    showSection("security", "settings");
+  }
+
+  function goStatus(parent: "home" | "settings" = "settings") {
+    showSection("status", parent);
+  }
+
+  return {
+    goDevices,
+    goHome,
+    goInstall,
+    goInvite,
+    goPartner,
+    goSettings,
+    goNotifications,
+    goPaymentHistory,
+    goSecurity,
+    goStatus,
+    goSupport,
+    goTrial,
+  };
+}

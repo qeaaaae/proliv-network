@@ -1,0 +1,517 @@
+import logging
+from datetime import UTC, datetime
+from typing import Any
+
+from aiohttp import web
+from sqlalchemy import func as sa_func
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased, sessionmaker
+
+from bot.app.web.context import (
+    get_bot_username,
+    get_optional_subscription_service,
+    get_panel_service,
+    get_referral_service,
+    get_session_factory,
+    get_settings,
+)
+from bot.app.web.webapp.common import _ensure_cached_telegram_avatar
+from bot.app.web.webapp.notification_preference_schemas import NotificationPreferencesOut
+from bot.services.panel_activity import (
+    _panel_user_connection_activity,
+    connection_activity_from_snapshot,
+    record_subscription_panel_activity,
+)
+from bot.services.referral_service import ReferralService
+from bot.services.user_balance_service import UserBalanceService
+from bot.utils.install_links import ensure_user_install_guide_share_url
+from bot.utils.traffic_reset import panel_traffic_limit_strategy
+from config.settings import Settings
+from db.dal import (
+    message_log_dal,
+    partner_dal,
+    payment_dal,
+    subscription_dal,
+    user_dal,
+    user_reads_dal,
+)
+from db.dal.user_relationships_dal import has_user_relationships
+from db.models import Payment, Subscription, User, UserTelegramAvatar
+
+from .auth import _require_admin_user_id
+from .common import (
+    _admin_subscription_traffic_strategy_fallback,
+    _build_admin_webapp_referral_link,
+    _decorate_admin_subscription_traffic_strategy,
+    _error,
+    _ok,
+    _serialize_payment,
+    _serialize_subscription,
+)
+from .panel_links import build_panel_user_admin_url
+from .schemas import AdminTelegramNotificationsOut, AdminUserTrialOut
+from .squad_override_schemas import AdminPanelSquadOverridesOut
+from .user_device_summary import build_admin_user_hwid_devices
+from .users_common import _bulk_user_avatar_keys, _serialize_admin_user_with_avatar
+
+logger = logging.getLogger(__name__)
+
+
+async def admin_user_avatar_route(request: web.Request) -> web.Response:
+    """Serve the cached Telegram avatar for any user (admin-only).
+
+    Mirrors ``/api/account/avatar`` but takes a ``user_id`` from the URL
+    and uses admin auth. Regular thumbnail requests only read the cached blob.
+    The explicit ``quality=full`` viewer request refreshes it from the largest
+    Telegram profile photo and falls back to the existing cache on failure.
+    """
+
+    _require_admin_user_id(request)
+    target_id = int(request.match_info["user_id"])
+    full_quality = request.query.get("quality") == "full"
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        if full_quality:
+            user = await user_dal.get_user_by_id(session, target_id)
+            if not user:
+                raise web.HTTPNotFound(text="user_not_found")
+            avatar = await _ensure_cached_telegram_avatar(
+                request,
+                session,
+                user,
+                force_refresh=True,
+            )
+            await session.commit()
+        else:
+            avatar = await session.get(UserTelegramAvatar, target_id)
+
+    if not avatar:
+        raise web.HTTPNotFound(text="avatar_not_cached")
+
+    etag = (
+        f'W/"avatar-{target_id}-{int(avatar.updated_at.timestamp())}"'
+        if avatar.updated_at
+        else None
+    )
+    if etag and request.headers.get("If-None-Match") == etag:
+        return web.Response(status=304, headers={"ETag": etag})
+
+    response = web.Response(
+        body=bytes(avatar.image_bytes),
+        content_type=avatar.content_type or "image/jpeg",
+    )
+    response.headers["Cache-Control"] = "private, max-age=3600"
+    if etag:
+        response.headers["ETag"] = etag
+    return response
+
+
+async def _bulk_active_subscriptions_for_users(
+    session: AsyncSession, user_ids: list[int]
+) -> dict[int, Subscription]:
+    """Active subscription row per user (for admin list premium traffic column)."""
+
+    if not user_ids:
+        return {}
+    now = datetime.now(UTC)
+    stmt = (
+        select(Subscription)
+        .where(
+            Subscription.user_id.in_(user_ids),
+            Subscription.is_active.is_(True),
+            Subscription.end_date > now,
+        )
+        .order_by(
+            Subscription.user_id.asc(),
+            Subscription.end_date.desc(),
+            Subscription.subscription_id.desc(),
+        )
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    out: dict[int, Subscription] = {}
+    for sub in rows:
+        uid = int(sub.user_id)
+        if uid not in out:
+            out[uid] = sub
+    return out
+
+
+async def _bulk_user_payment_summaries(
+    session: AsyncSession,
+    user_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    if not user_ids:
+        return {}
+
+    stmt = (
+        select(
+            Payment.user_id,
+            sa_func.coalesce(sa_func.sum(Payment.amount), 0.0),
+            sa_func.count(Payment.payment_id),
+            sa_func.max(Payment.currency),
+        )
+        .where(
+            Payment.user_id.in_(user_ids),
+            Payment.status == "succeeded",
+            Payment.funding_source == "external",
+        )
+        .group_by(Payment.user_id)
+    )
+    rows = (await session.execute(stmt)).all()
+    return {
+        int(user_id): {
+            "total_amount": float(total_amount or 0),
+            "count": int(payments_count or 0),
+            "currency": currency,
+        }
+        for user_id, total_amount, payments_count, currency in rows
+    }
+
+
+async def _bulk_user_referral_counts(
+    session: AsyncSession,
+    user_ids: list[int],
+) -> dict[int, int]:
+    if not user_ids:
+        return {}
+
+    referred_user = aliased(User)
+    stmt = (
+        select(referred_user.referred_by_id, sa_func.count(referred_user.user_id))
+        .where(referred_user.referred_by_id.in_(user_ids))
+        .group_by(referred_user.referred_by_id)
+    )
+    rows = (await session.execute(stmt)).all()
+    return {int(user_id): int(count or 0) for user_id, count in rows}
+
+
+def _serialize_trial_summary(user: User, trial_subs: list[Subscription]) -> dict[str, Any]:
+    return AdminUserTrialOut.from_orm_trial(user, trial_subs).model_dump(mode="json")
+
+
+async def admin_user_detail_route(request: web.Request) -> web.Response:
+    _require_admin_user_id(request)
+    identifier = request.match_info["user_id"]
+    async_session_factory: sessionmaker = get_session_factory(request)
+    settings: Settings = get_settings(request)
+
+    async with async_session_factory() as session:
+        user = (
+            await session.scalar(select(User).where(User.minishop_id == identifier.lower()))
+            if identifier.startswith("ms_")
+            else await user_dal.get_user_by_id(session, int(identifier))
+        )
+        if not user:
+            return _error(404, "not_found", "User not found")
+
+        target_id = int(user.user_id)
+
+        active_sub = await subscription_dal.get_active_subscription_by_user_id(
+            session, target_id, user.panel_user_uuid
+        )
+        latest_subs_stmt = (
+            select(Subscription)
+            .where(Subscription.user_id == target_id)
+            .order_by(Subscription.start_date.desc().nullslast())
+            .limit(20)
+        )
+        latest_subs = (await session.execute(latest_subs_stmt)).scalars().all()
+        trial_subs_stmt = (
+            select(Subscription)
+            .where(
+                Subscription.user_id == target_id,
+                sa_func.lower(sa_func.coalesce(Subscription.provider, "")) == "trial",
+            )
+            .order_by(Subscription.start_date.asc().nullslast(), Subscription.end_date.asc())
+        )
+        trial_subs = (await session.execute(trial_subs_stmt)).scalars().all()
+        total_paid = await payment_dal.get_user_total_paid(session, target_id)
+        recent_payments_stmt = (
+            select(Payment)
+            .where(Payment.user_id == target_id)
+            .order_by(Payment.created_at.desc())
+            .limit(20)
+        )
+        recent_payments = (await session.execute(recent_payments_stmt)).scalars().all()
+        log_count = await message_log_dal.count_user_message_logs(session, target_id)
+        balance_payload = await UserBalanceService(settings).snapshot(
+            session,
+            user_id=target_id,
+            include_history=True,
+        )
+        inviter = await user_dal.get_referrer_for_user(session, user)
+        invitees_total = await user_dal.count_users_referred_by(session, target_id)
+        has_relationships = await has_user_relationships(session, target_id)
+        partner_client = await partner_dal.get_client_with_profile_for_user(session, target_id)
+        partner_attribution: dict[str, Any] | None = None
+        if partner_client is not None:
+            client, partner_profile = partner_client
+            partner_user_id = (
+                int(partner_profile.user_id) if partner_profile.user_id is not None else None
+            )
+            partner_display_label = str(partner_profile.display_label_snapshot)
+            if partner_user_id is not None:
+                partner_labels = await user_reads_dal.get_user_labels(session, [partner_user_id])
+                _partner_username, live_partner_name = partner_labels.get(
+                    partner_user_id, (None, None)
+                )
+                partner_display_label = live_partner_name or partner_display_label
+            partner_attribution = {
+                "partner_id": int(partner_profile.partner_id),
+                "partner_user_id": partner_user_id,
+                "display_label": partner_display_label,
+                "public_client_id": str(client.public_client_id),
+                "source": str(client.source),
+                "attributed_at": client.attributed_at.isoformat(),
+            }
+        avatar_user_ids = [target_id]
+        if inviter is not None:
+            avatar_user_ids.append(int(inviter.user_id))
+        avatar_keys = await _bulk_user_avatar_keys(session, avatar_user_ids)
+
+        # Referral links — both the bot deep-link and the webapp deep-link.
+        referral_code: str | None = None
+        try:
+            referral_code = await user_dal.ensure_referral_code(session, user)
+            await session.commit()
+        except Exception as exc_ref:  # pragma: no cover — defensive
+            logger.warning("Failed to ensure referral code for user %s: %s", target_id, exc_ref)
+            await session.rollback()
+
+        install_share_url: str | None = None
+        if active_sub is not None:
+            try:
+                install_share_url = await ensure_user_install_guide_share_url(
+                    session,
+                    settings,
+                    target_id,
+                    local_subscription=active_sub,
+                )
+                await session.commit()
+            except Exception as exc_install:  # pragma: no cover - defensive
+                logger.warning(
+                    "Failed to build install guide share link for user %s: %s",
+                    target_id,
+                    exc_install,
+                )
+                await session.rollback()
+
+    referral_service: ReferralService | None = get_referral_service(request)
+    bot_username = get_bot_username(request)
+    referral_bot_link: str | None = None
+    if referral_service and bot_username and referral_code:
+        try:
+            async with async_session_factory() as session:
+                referral_bot_link = await referral_service.generate_referral_link(
+                    session, bot_username, target_id
+                )
+        except Exception as exc_link:  # pragma: no cover
+            logger.warning("Failed to build bot referral link for %s: %s", target_id, exc_link)
+    referral_webapp_link = _build_admin_webapp_referral_link(
+        settings.SUBSCRIPTION_MINI_APP_URL,
+        referral_code,
+    )
+
+    # Subscription page URL — the raw panel `subscriptionUrl` that the user
+    # imports into their VPN client. May be missing if the user has never
+    # been provisioned on the panel.
+    subscription_url: str | None = None
+    last_vpn_connected_at: str | None = None
+    vpn_connection_status = "unknown"
+    if active_sub is not None:
+        snapshot_activity = connection_activity_from_snapshot(
+            getattr(active_sub, "last_connected_at", None)
+        )
+        vpn_connection_status = str(snapshot_activity.get("status") or "unknown")
+        last_vpn_connected_at = snapshot_activity.get("last_connected_at")
+    traffic_limit_strategy: str | None = None
+    panel_strategy_available = False
+    panel_data: dict[str, Any] | None = None
+    panel_uuid = getattr(user, "panel_user_uuid", None) or getattr(
+        active_sub,
+        "panel_user_uuid",
+        None,
+    )
+    panel_user_url = build_panel_user_admin_url(
+        settings.PANEL_API_URL, panel_uuid, settings.PANEL_PUBLIC_URL
+    )
+    subscription_service = get_optional_subscription_service(request)
+    panel_service = get_panel_service(request) or getattr(
+        subscription_service, "panel_service", None
+    )
+    if panel_uuid and panel_service is not None:
+        try:
+            panel_data = await panel_service.get_user_by_uuid(panel_uuid)
+            if panel_data:
+                panel_user_url = (
+                    build_panel_user_admin_url(
+                        settings.PANEL_API_URL, panel_data.get("id"), settings.PANEL_PUBLIC_URL
+                    )
+                    or panel_user_url
+                )
+                subscription_url = panel_data.get("subscriptionUrl") or None
+                vpn_activity = _panel_user_connection_activity(panel_data)
+                live_connected_at = vpn_activity.get("last_connected_at")
+                if live_connected_at:
+                    last_vpn_connected_at = live_connected_at
+                    vpn_connection_status = str(vpn_activity.get("status") or "connected")
+                elif last_vpn_connected_at:
+                    vpn_connection_status = "connected"
+                else:
+                    vpn_connection_status = str(vpn_activity.get("status") or "unknown")
+                if active_sub is not None:
+                    async with async_session_factory() as session:
+                        await record_subscription_panel_activity(
+                            session,
+                            active_sub,
+                            panel_data,
+                        )
+                        await session.commit()
+                    traffic_limit_strategy = panel_traffic_limit_strategy(
+                        panel_data,
+                        _admin_subscription_traffic_strategy_fallback(settings, active_sub),
+                    )
+                    panel_strategy_available = True
+        except Exception as exc_panel:  # pragma: no cover
+            logger.warning(
+                "Failed to fetch panel details for user %s (uuid=%s): %s",
+                target_id,
+                panel_uuid,
+                exc_panel,
+            )
+
+    if (
+        settings.SUBSCRIPTION_GATEWAY_ENABLED
+        and settings.SUBSCRIPTION_LINK_MODE == "minishop"
+        and install_share_url
+        and panel_data
+        and active_sub is not None
+        and str(getattr(active_sub, "install_share_panel_short_uuid", "") or "")
+        == str(panel_data.get("shortUuid") or "")
+    ):
+        subscription_url = install_share_url
+
+    serialized_user = _serialize_admin_user_with_avatar(user, avatar_keys)
+    serialized_inviter = (
+        _serialize_admin_user_with_avatar(inviter, avatar_keys) if inviter is not None else None
+    )
+    trial_payload = _serialize_trial_summary(user, trial_subs)
+    hwid_devices = await build_admin_user_hwid_devices(
+        panel_service=panel_service,
+        panel_user_uuid=panel_uuid,
+        panel_user_snapshot=panel_data,
+        active_subscription=active_sub,
+        settings=settings,
+    )
+    active_subscription_payload = _serialize_subscription(active_sub) if active_sub else None
+    if active_subscription_payload is not None:
+        _decorate_admin_subscription_traffic_strategy(
+            active_subscription_payload,
+            settings,
+            active_sub,
+            traffic_limit_strategy=traffic_limit_strategy,
+            panel_available=panel_strategy_available,
+        )
+    panel_squad_overrides: dict[str, Any] | None = None
+    summary_builder = getattr(subscription_service, "panel_squad_overrides_summary", None)
+    if callable(summary_builder):
+        try:
+            async with async_session_factory() as session:
+                summary = await summary_builder(
+                    session,
+                    user_id=target_id,
+                    panel_user_uuid=panel_uuid,
+                    subscription=active_sub,
+                    panel_user_snapshot=panel_data,
+                    panel_snapshot_available=panel_data is not None,
+                    discover_panel_overrides=panel_data is not None,
+                )
+                panel_squad_overrides = AdminPanelSquadOverridesOut.model_validate(
+                    summary
+                ).model_dump(mode="json")
+                await session.commit()
+        except Exception as exc_overrides:  # pragma: no cover - defensive admin enrichment
+            logger.warning(
+                "Failed to build panel squad overrides for user %s: %s",
+                target_id,
+                exc_overrides,
+            )
+
+    return _ok(
+        {
+            "user": serialized_user,
+            "active_subscription": active_subscription_payload,
+            "subscriptions": [_serialize_subscription(s) for s in (latest_subs or [])],
+            "trial": trial_payload,
+            "total_paid": float(total_paid),
+            "recent_payments": [_serialize_payment(p) for p in recent_payments],
+            "log_count": int(log_count or 0),
+            "balance": {"ok": True, **balance_payload},
+            "subscription_url": subscription_url,
+            "panel_user_url": panel_user_url,
+            "install_share_url": install_share_url,
+            "last_vpn_connected_at": last_vpn_connected_at,
+            "vpn_connection_status": vpn_connection_status,
+            "hwid_devices": hwid_devices.model_dump(mode="json"),
+            "telegram_notifications": AdminTelegramNotificationsOut.from_orm_user(user).model_dump(
+                mode="json"
+            ),
+            "notification_preferences": NotificationPreferencesOut.from_user(user).model_dump(
+                mode="json"
+            ),
+            "panel_squad_overrides": panel_squad_overrides,
+            "partner_attribution": partner_attribution,
+            "has_relationships": has_relationships,
+            "referral": {
+                "code": referral_code,
+                "bot_link": referral_bot_link,
+                "webapp_link": referral_webapp_link,
+                "inviter": serialized_inviter,
+                "invitees_total": int(invitees_total or 0),
+            },
+        }
+    )
+
+
+async def admin_user_referrals_route(request: web.Request) -> web.Response:
+    _require_admin_user_id(request)
+    target_id = int(request.match_info["user_id"])
+    page = max(0, int(request.query.get("page", 0) or 0))
+    page_size = min(100, max(1, int(request.query.get("page_size", 25) or 25)))
+    sort = str(request.query.get("sort") or "registration_desc").lower()
+    async_session_factory: sessionmaker = get_session_factory(request)
+
+    async with async_session_factory() as session:
+        user = await user_dal.get_user_by_id(session, target_id)
+        if not user:
+            return _error(404, "not_found", "User not found")
+
+        inviter = await user_dal.get_referrer_for_user(session, user)
+        invitees_total = await user_dal.count_users_referred_by(session, target_id)
+        invitees = await user_dal.get_users_referred_by(
+            session,
+            target_id,
+            limit=page_size,
+            offset=page * page_size,
+            sort=sort,
+        )
+        avatar_user_ids = [target_id, *(int(u.user_id) for u in invitees)]
+        if inviter is not None:
+            avatar_user_ids.append(int(inviter.user_id))
+        avatar_keys = await _bulk_user_avatar_keys(session, avatar_user_ids)
+
+    return _ok(
+        {
+            "user": _serialize_admin_user_with_avatar(user, avatar_keys),
+            "inviter": _serialize_admin_user_with_avatar(inviter, avatar_keys)
+            if inviter is not None
+            else None,
+            "invitees": [
+                _serialize_admin_user_with_avatar(invitee, avatar_keys) for invitee in invitees
+            ],
+            "total": int(invitees_total or 0),
+            "page": page,
+            "page_size": page_size,
+        }
+    )

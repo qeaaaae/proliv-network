@@ -1,0 +1,842 @@
+import json
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+
+from bot.app.web import subscription_webapp
+from bot.handlers.user import referral
+from bot.handlers.user.subscription.core import (
+    _format_premium_usage_limit,
+    _with_subscription_purchase_description,
+)
+from bot.keyboards.inline.user_keyboards import (
+    get_bot_interface_inline_keyboard,
+    get_connect_and_main_keyboard,
+    get_information_links_keyboard,
+    get_language_selection_keyboard,
+    get_main_menu_inline_keyboard,
+    get_payment_method_keyboard,
+    get_referral_link_keyboard,
+    get_subscribe_only_markup,
+    get_subscription_options_keyboard,
+    get_tariff_catalog_keyboard,
+    get_tariff_periods_keyboard,
+    get_yk_autopay_choice_keyboard,
+    payment_methods_back_callback,
+    payment_options_back_callback,
+    tariff_purchase_back_callback,
+)
+from bot.middlewares.i18n import LOCALE_KEY_ALIASES, JsonI18n
+from bot.utils.install_links import bot_install_guides_enabled, install_guide_share_links_enabled
+from config.tariffs_config import TariffsConfig
+from tests.support.settings_stub import settings_stub
+
+
+class JsonI18nStub:
+    def __init__(self):
+        self.translations = json.loads(Path("locales/en.json").read_text(encoding="utf-8"))
+
+    def gettext(self, lang, key, **kwargs):
+        key = LOCALE_KEY_ALIASES.get(key, key)
+        text = self.translations[key]
+        return text.format(**kwargs) if kwargs else text
+
+
+class UserBotMenuTests(unittest.TestCase):
+    def setUp(self):
+        self.i18n = JsonI18nStub()
+        self.settings = settings_stub(
+            SUBSCRIPTION_MINI_APP_URL="https://app.example.com/",
+            SUPPORT_LINK="https://t.me/support",
+            PRIVACY_POLICY_URL="https://example.com/privacy",
+            USER_AGREEMENT_URL="https://example.com/agreement",
+            TRIAL_ENABLED=True,
+            SERVER_STATUS_URL="",
+            SUBSCRIPTION_GUIDES_ENABLED=True,
+            SUBSCRIPTION_GUIDES_BOT_MENU_ENABLED=False,
+            TELEGRAM_BOT_MENU_DISABLED=False,
+            SUBSCRIPTION_PAGE_CONFIG_PANEL_ENABLED=True,
+            SUBSCRIPTION_PAGE_CONFIG_JSON_OVERRIDE_ENABLED=False,
+            SUBSCRIPTION_PAGE_CONFIG_JSON="",
+            PANEL_API_URL="https://panel.example.com",
+            PANEL_API_KEY="token",
+            ADMIN_IDS=[42],
+        )
+
+    def _callback_data(self, markup):
+        return [
+            button.callback_data
+            for row in markup.inline_keyboard
+            for button in row
+            if button.callback_data
+        ]
+
+    def _url_buttons(self, markup):
+        return [
+            (button.text, button.url)
+            for row in markup.inline_keyboard
+            for button in row
+            if button.url
+        ]
+
+    def test_main_menu_exposes_bot_menu_and_information(self):
+        markup = get_main_menu_inline_keyboard("en", self.i18n, self.settings)
+
+        callbacks = self._callback_data(markup)
+
+        self.assertIn("main_action:bot_interface", callbacks)
+        self.assertIn("main_action:info", callbacks)
+
+    def test_main_menu_hides_bot_menu_when_user_menu_disabled(self):
+        self.settings.TELEGRAM_BOT_MENU_DISABLED = True
+        markup = get_main_menu_inline_keyboard(
+            "en",
+            self.i18n,
+            self.settings,
+            user_id=100,
+        )
+
+        callbacks = self._callback_data(markup)
+
+        self.assertNotIn("main_action:bot_interface", callbacks)
+        self.assertIn("main_action:info", callbacks)
+
+    def test_main_menu_hides_bot_menu_for_admin_when_user_menu_disabled(self):
+        self.settings.TELEGRAM_BOT_MENU_DISABLED = True
+        markup = get_main_menu_inline_keyboard(
+            "en",
+            self.i18n,
+            self.settings,
+            user_id=42,
+        )
+
+        self.assertNotIn("main_action:bot_interface", self._callback_data(markup))
+
+    def test_subscribe_only_markup_uses_mini_app_renewal_deeplink_when_bot_menu_disabled(self):
+        self.settings.TELEGRAM_BOT_MENU_DISABLED = True
+        markup = get_subscribe_only_markup(
+            "en",
+            self.i18n,
+            self.settings,
+            tariff_key="premium",
+        )
+
+        button = markup.inline_keyboard[0][0]
+
+        self.assertIsNone(button.callback_data)
+        self.assertEqual(
+            button.web_app.url, "https://app.example.com/?renew=1&renew_tariff=premium"
+        )
+
+    def test_subscribe_only_markup_omits_bot_callback_without_mini_app(self):
+        self.settings.TELEGRAM_BOT_MENU_DISABLED = True
+        self.settings.SUBSCRIPTION_MINI_APP_URL = ""
+        markup = get_subscribe_only_markup("en", self.i18n, self.settings)
+
+        self.assertIsNone(markup)
+
+    def test_server_status_link_appears_in_bot_menus_when_configured(self):
+        self.settings.SERVER_STATUS_ENABLED = True
+        self.settings.SERVER_STATUS_PROVIDER = "url"
+        self.settings.SERVER_STATUS_URL = "https://status.example.com"
+        expected = (
+            self.i18n.gettext("en", "menu_server_status_button"),
+            "https://status.example.com",
+        )
+
+        main_markup = get_main_menu_inline_keyboard("en", self.i18n, self.settings)
+        bot_markup = get_bot_interface_inline_keyboard("en", self.i18n, self.settings)
+
+        self.assertIn(expected, self._url_buttons(main_markup))
+        self.assertIn(expected, self._url_buttons(bot_markup))
+
+    def test_server_status_link_is_hidden_when_disabled_or_embedded(self):
+        self.settings.SERVER_STATUS_URL = "https://status.example.com"
+        expected = (
+            self.i18n.gettext("en", "menu_server_status_button"),
+            "https://status.example.com",
+        )
+
+        for enabled, provider in ((False, "url"), (True, "uptime-kuma")):
+            with self.subTest(enabled=enabled, provider=provider):
+                self.settings.SERVER_STATUS_ENABLED = enabled
+                self.settings.SERVER_STATUS_PROVIDER = provider
+                main_markup = get_main_menu_inline_keyboard("en", self.i18n, self.settings)
+                bot_markup = get_bot_interface_inline_keyboard("en", self.i18n, self.settings)
+
+                self.assertNotIn(expected, self._url_buttons(main_markup))
+                self.assertNotIn(expected, self._url_buttons(bot_markup))
+
+    def test_support_telegram_shortcuts_are_normalized_in_bot_menus(self):
+        expected = (
+            self.i18n.gettext("en", "menu_support_button"),
+            "https://t.me/help_center_bot",
+        )
+
+        for raw in ("@help_center_bot", "t.me/help_center_bot"):
+            with self.subTest(raw=raw):
+                self.settings.SUPPORT_LINK = raw
+                main_markup = get_main_menu_inline_keyboard("en", self.i18n, self.settings)
+                bot_markup = get_bot_interface_inline_keyboard("en", self.i18n, self.settings)
+
+                self.assertIn(expected, self._url_buttons(main_markup))
+                self.assertIn(expected, self._url_buttons(bot_markup))
+
+    def test_invalid_support_link_cannot_remove_other_menu_buttons(self):
+        self.settings.SUPPORT_LINK = "not a link"
+
+        markup = get_main_menu_inline_keyboard("en", self.i18n, self.settings)
+
+        self.assertFalse(
+            any(
+                button.text == self.i18n.gettext("en", "menu_support_button")
+                for row in markup.inline_keyboard
+                for button in row
+            )
+        )
+        self.assertIn("main_action:bot_interface", self._callback_data(markup))
+        self.assertIn("main_action:info", self._callback_data(markup))
+
+    def test_main_menu_shows_trial_button_as_mini_app_deeplink_when_available(self):
+        markup = get_main_menu_inline_keyboard(
+            "en",
+            self.i18n,
+            self.settings,
+            show_trial_button=True,
+        )
+
+        trial_button = markup.inline_keyboard[0][0]
+
+        self.assertEqual(trial_button.text, self.i18n.gettext("en", "menu_activate_trial_button"))
+        self.assertIsNone(trial_button.callback_data)
+        self.assertEqual(trial_button.web_app.url, "https://app.example.com/trial")
+
+    def test_main_menu_trial_button_falls_back_to_bot_callback_without_mini_app(self):
+        self.settings.SUBSCRIPTION_MINI_APP_URL = ""
+        markup = get_main_menu_inline_keyboard(
+            "en",
+            self.i18n,
+            self.settings,
+            show_trial_button=True,
+        )
+
+        trial_button = markup.inline_keyboard[0][0]
+
+        self.assertEqual(trial_button.callback_data, "main_action:request_trial")
+        self.assertIsNone(trial_button.web_app)
+
+    def test_custom_buttons_are_last_and_use_native_targets(self):
+        self.settings.MENU_BUTTONS_JSON = json.dumps(
+            [
+                {
+                    "id": "website",
+                    "kind": "external",
+                    "target": "https://example.com/news",
+                    "webapp_icon": "Globe2",
+                    "telegram_emoji": "📰",
+                    "labels": {"ru": "Новости", "en": "News"},
+                },
+                {
+                    "id": "community",
+                    "kind": "telegram",
+                    "target": "https://t.me/example_group",
+                    "webapp_icon": "Users",
+                    "telegram_emoji": "✈️",
+                    "labels": {"ru": "Сообщество", "en": "Community"},
+                },
+                {
+                    "id": "devices",
+                    "kind": "webapp",
+                    "target": "devices",
+                    "webapp_icon": "Smartphone",
+                    "telegram_emoji": "📱",
+                    "labels": {"ru": "Устройства", "en": "Devices"},
+                },
+                {
+                    "id": "about",
+                    "kind": "page",
+                    "target": "/company/about",
+                    "webapp_icon": "Info",
+                    "telegram_emoji": "ℹ️",
+                    "labels": {"ru": "О сервисе", "en": "About"},
+                },
+            ]
+        )
+
+        markup = get_main_menu_inline_keyboard("en", self.i18n, self.settings)
+        custom_rows = markup.inline_keyboard[-4:]
+
+        self.assertEqual(custom_rows[0][0].text, "📰 News")
+        self.assertEqual(custom_rows[0][0].url, "https://example.com/news")
+        self.assertEqual(custom_rows[1][0].text, "✈️ Community")
+        self.assertEqual(custom_rows[1][0].url, "https://t.me/example_group")
+        self.assertEqual(custom_rows[2][0].text, "📱 Devices")
+        self.assertEqual(custom_rows[2][0].web_app.url, "https://app.example.com/devices")
+        self.assertEqual(custom_rows[3][0].text, "ℹ️ About")
+        self.assertEqual(custom_rows[3][0].web_app.url, "https://app.example.com/company/about")
+
+    def test_webapp_custom_button_is_skipped_without_mini_app(self):
+        self.settings.SUBSCRIPTION_MINI_APP_URL = ""
+        self.settings.MENU_BUTTONS_JSON = json.dumps(
+            [
+                {
+                    "id": "devices",
+                    "kind": "webapp",
+                    "target": "devices",
+                    "webapp_icon": "Smartphone",
+                    "telegram_emoji": "",
+                    "labels": {"ru": "Устройства", "en": "Devices"},
+                }
+            ]
+        )
+
+        markup = get_main_menu_inline_keyboard("en", self.i18n, self.settings)
+
+        self.assertFalse(
+            any(button.text == "Devices" for row in markup.inline_keyboard for button in row)
+        )
+
+    def test_custom_buttons_respect_bot_visibility(self):
+        self.settings.MENU_BUTTONS_JSON = json.dumps(
+            [
+                {
+                    "id": "webapp_only",
+                    "kind": "external",
+                    "target": "https://example.com/webapp",
+                    "webapp_icon": "ExternalLink",
+                    "telegram_emoji": "",
+                    "labels": {"ru": "Только Web App", "en": "Web App only"},
+                    "show_in_bot": False,
+                    "show_in_webapp": True,
+                },
+                {
+                    "id": "bot_only",
+                    "kind": "external",
+                    "target": "https://example.com/bot",
+                    "webapp_icon": "ExternalLink",
+                    "telegram_emoji": "",
+                    "labels": {"ru": "Только бот", "en": "Bot only"},
+                    "show_in_bot": True,
+                    "show_in_webapp": False,
+                },
+            ]
+        )
+
+        markup = get_main_menu_inline_keyboard("en", self.i18n, self.settings)
+        texts = [button.text for row in markup.inline_keyboard for button in row]
+
+        self.assertNotIn("Web App only", texts)
+        self.assertIn("Bot only", texts)
+
+    def test_bot_interface_trial_button_uses_mini_app_deeplink_when_available(self):
+        markup = get_bot_interface_inline_keyboard(
+            "en",
+            self.i18n,
+            self.settings,
+            show_trial_button=True,
+        )
+
+        trial_button = markup.inline_keyboard[0][0]
+
+        self.assertEqual(trial_button.web_app.url, "https://app.example.com/trial")
+
+    def test_bot_interface_buttons_return_to_bot_interface(self):
+        markup = get_bot_interface_inline_keyboard("en", self.i18n, self.settings)
+
+        callbacks = self._callback_data(markup)
+
+        self.assertIn("main_action:bot_subscribe", callbacks)
+        self.assertIn("main_action:bot_my_subscription", callbacks)
+        self.assertIn("main_action:bot_referral", callbacks)
+        self.assertIn("main_action:bot_info", callbacks)
+        self.assertIn("main_action:back_to_main", callbacks)
+
+    def test_bot_interface_opens_payment_history_inside_mini_app(self):
+        self.settings.SUBSCRIPTION_MINI_APP_URL = "https://app.example.com/webapp?lang=en"
+        markup = get_bot_interface_inline_keyboard("en", self.i18n, self.settings)
+        [button] = [
+            button
+            for row in markup.inline_keyboard
+            for button in row
+            if button.text == self.i18n.gettext("en", "menu_payment_history_button")
+        ]
+        self.assertIsNotNone(button.web_app)
+        self.assertEqual(
+            button.web_app.url, "https://app.example.com/webapp/settings/payments?lang=en"
+        )
+        self.assertIsNone(button.callback_data)
+        self.assertIsNone(button.url)
+
+    def test_bot_interface_hides_payment_history_without_mini_app(self):
+        self.settings.SUBSCRIPTION_MINI_APP_URL = ""
+        markup = get_bot_interface_inline_keyboard("en", self.i18n, self.settings)
+        self.assertNotIn(
+            self.i18n.gettext("en", "menu_payment_history_button"),
+            [button.text for row in markup.inline_keyboard for button in row],
+        )
+
+    def test_bot_interface_hides_only_referral_action_for_partner_mode(self):
+        markup = get_bot_interface_inline_keyboard(
+            "en",
+            self.i18n,
+            self.settings,
+            referral_program_enabled=False,
+        )
+
+        callbacks = self._callback_data(markup)
+
+        self.assertNotIn("main_action:bot_referral", callbacks)
+        self.assertIn("main_action:bot_apply_promo", callbacks)
+
+    def test_connect_keyboard_uses_subscription_url_when_bot_guides_disabled(self):
+        markup = get_connect_and_main_keyboard(
+            "en",
+            self.i18n,
+            self.settings,
+            "https://sb.example.com/user",
+            connect_button_url=None,
+        )
+
+        self.assertEqual(markup.inline_keyboard[0][0].url, "https://sb.example.com/user")
+        self.assertIsNone(markup.inline_keyboard[0][0].web_app)
+
+    def test_install_share_links_do_not_require_bot_guides_button(self):
+        self.assertFalse(bot_install_guides_enabled(self.settings))
+        self.assertTrue(install_guide_share_links_enabled(self.settings))
+
+    def test_connect_keyboard_opens_install_guide_when_bot_guides_enabled(self):
+        self.settings.SUBSCRIPTION_GUIDES_BOT_MENU_ENABLED = True
+        markup = get_connect_and_main_keyboard(
+            "en",
+            self.i18n,
+            self.settings,
+            "https://sb.example.com/user",
+            install_share_url="https://app.example.com/s/8f559061460e8fede78ef18dce887236",
+        )
+
+        self.assertIsNone(markup.inline_keyboard[0][0].url)
+        self.assertEqual(
+            markup.inline_keyboard[0][0].web_app.url,
+            "https://app.example.com/install",
+        )
+        self.assertEqual(
+            markup.inline_keyboard[1][0].url,
+            "https://app.example.com/s/8f559061460e8fede78ef18dce887236",
+        )
+
+    def test_nested_bot_menu_keyboards_can_target_bot_interface_back(self):
+        subscription_markup = get_subscription_options_keyboard(
+            {1: 100},
+            "RUB",
+            "en",
+            self.i18n,
+            back_callback="main_action:bot_interface",
+        )
+        referral_markup = get_referral_link_keyboard(
+            "en",
+            self.i18n,
+            back_callback="main_action:bot_interface",
+        )
+        info_markup = get_information_links_keyboard(
+            "en",
+            self.i18n,
+            "https://example.com/privacy",
+            "https://example.com/agreement",
+            back_callback="main_action:bot_interface",
+        )
+        language_markup = get_language_selection_keyboard(
+            self.i18n,
+            "en",
+            back_callback="main_action:bot_interface",
+        )
+
+        self.assertIn("main_action:bot_interface", self._callback_data(subscription_markup))
+        self.assertIn("main_action:bot_interface", self._callback_data(referral_markup))
+        self.assertIn("main_action:bot_interface", self._callback_data(info_markup))
+        self.assertIn("set_lang_ru:bot", self._callback_data(language_markup))
+        self.assertIn("subscribe_period:1:bot", self._callback_data(subscription_markup))
+
+    def test_subscription_purchase_description_is_prepended_before_period_selection(self):
+        settings = settings_stub(
+            subscription_purchase_description=lambda language: f"Description {language}"
+        )
+
+        self.assertEqual(
+            _with_subscription_purchase_description(
+                "Choose period",
+                settings,
+                "en",
+                include=True,
+            ),
+            "Description en\n\nChoose period",
+        )
+        self.assertEqual(
+            _with_subscription_purchase_description(
+                "Choose traffic",
+                settings,
+                "en",
+                include=False,
+            ),
+            "Choose traffic",
+        )
+
+    def test_premium_usage_limit_uses_byte_fields_when_display_fields_missing(self):
+        gib = 1024**3
+        active = {
+            "premium_used": None,
+            "premium_limit": None,
+            "premium_used_bytes": int(1.25 * gib),
+            "premium_limit_bytes": 26 * gib,
+        }
+
+        text = _format_premium_usage_limit(active)
+
+        self.assertEqual(text, "1.25 GB of 26.00 GB")
+        self.assertNotIn("None", text)
+
+    def test_payment_navigation_context_keeps_bot_menu_source(self):
+        settings = settings_stub(
+            payment_methods_order=[],
+            PLATEGA_ENABLED=False,
+            PLATEGA_SBP_ENABLED=False,
+            PLATEGA_CRYPTO_ENABLED=False,
+        )
+        markup = get_payment_method_keyboard(
+            1,
+            100,
+            None,
+            "RUB",
+            "en",
+            self.i18n,
+            settings,
+            sale_mode="subscription|bot",
+        )
+
+        self.assertIn("main_action:bot_subscribe", self._callback_data(markup))
+        self.assertEqual(
+            payment_methods_back_callback("1", "subscription|bot"),
+            "subscribe_period:1:bot",
+        )
+
+    def test_payment_navigation_context_ignores_hwid_renewal_token(self):
+        self.assertEqual(
+            payment_options_back_callback("subscription@basic|bot|hwid_renewal"),
+            "tariff:select:basic:bot",
+        )
+        self.assertEqual(
+            payment_methods_back_callback("1", "subscription@basic|bot|hwid_renewal"),
+            "tariff:period:basic:1:bot",
+        )
+
+    def test_payment_method_keyboard_adds_hwid_renewal_toggle(self):
+        settings = settings_stub(payment_methods_order=[])
+        quote = {"device_count": 2, "price": 50}
+
+        selected = get_payment_method_keyboard(
+            1,
+            100,
+            None,
+            "RUB",
+            "en",
+            self.i18n,
+            settings,
+            sale_mode="subscription@basic|bot",
+            hwid_renewal_quote=quote,
+            hwid_renewal_selected=True,
+        )
+        disabled = get_payment_method_keyboard(
+            1,
+            100,
+            None,
+            "RUB",
+            "en",
+            self.i18n,
+            settings,
+            sale_mode="subscription@basic|bot",
+            hwid_renewal_quote=quote,
+            hwid_renewal_selected=False,
+        )
+
+        self.assertIn("tariff:period:basic:d30:bot:no_hwid", self._callback_data(selected))
+        self.assertIn("tariff:period:basic:d30:bot:hwid", self._callback_data(disabled))
+
+    def test_yookassa_saved_card_choice_keeps_sale_mode_after_page_token(self):
+        markup = get_yk_autopay_choice_keyboard(
+            1,
+            100,
+            "en",
+            self.i18n,
+            has_saved_cards=True,
+            sale_mode="subscription@basic|hwid_renewal",
+        )
+
+        self.assertIn(
+            "pay_yk_saved_list:1:100:0:subscription@basic|hwid_renewal",
+            self._callback_data(markup),
+        )
+
+    def test_tariff_catalog_localizes_minimum_prices(self):
+        i18n = JsonI18n(path="locales")
+        package = SimpleNamespace(price=70.5, gb=10.5)
+        for lang, prefix in (("ru", "от"), ("en", "from")):
+            for billing_model in ("period", "traffic"):
+                for legacy in (False, True):
+                    with self.subTest(lang=lang, billing_model=billing_model, legacy=legacy):
+                        prices = (
+                            {
+                                "min_period_price_rub": lambda: 70.5,
+                                "min_traffic_package_rub": lambda: package,
+                            }
+                            if legacy
+                            else {
+                                "min_period_price": lambda _currency: 70.5,
+                                "min_traffic_package": lambda _currency: package,
+                            }
+                        )
+                        tariff = SimpleNamespace(
+                            key="basic",
+                            billing_model=billing_model,
+                            name=lambda _lang: "Plan",
+                            **prices,
+                        )
+                        keyboard = get_tariff_catalog_keyboard(
+                            [tariff], lang, i18n, callback_context="bot"
+                        )
+                        button = keyboard.inline_keyboard[0][0]
+                        suffix = " / 10.5 GB" if billing_model == "traffic" else ""
+                        self.assertEqual(button.text, f"Plan {prefix} 70.5{suffix}")
+                        self.assertEqual(button.callback_data, "tariff:select:basic:bot")
+
+    def test_tariff_back_buttons_return_to_previous_level(self):
+        tariff = SimpleNamespace(
+            key="basic",
+            billing_model="period",
+            enabled_periods=[1],
+            name=lambda _lang: "Basic",
+            description=lambda _lang: "Basic plan",
+            min_period_price_rub=lambda: 100,
+            period_price=lambda months, currency: (
+                100 if months == 1 and currency == "rub" else None
+            ),
+        )
+        settings = SimpleNamespace(DEFAULT_CURRENCY_SYMBOL="RUB")
+
+        catalog = get_tariff_catalog_keyboard(
+            [tariff],
+            "en",
+            self.i18n,
+            back_callback="main_action:bot_interface",
+        )
+        periods = get_tariff_periods_keyboard(
+            tariff,
+            "en",
+            self.i18n,
+            settings,
+            back_callback=tariff_purchase_back_callback("bot"),
+            callback_context="bot",
+        )
+
+        self.assertIn("tariff:select:basic:bot", self._callback_data(catalog))
+        self.assertIn("main_action:bot_interface", self._callback_data(catalog))
+        self.assertIn("tariff:period:basic:d30:bot", self._callback_data(periods))
+        self.assertIn("main_action:bot_interface", self._callback_data(periods))
+        self.assertEqual(tariff_purchase_back_callback("bot"), "main_action:bot_interface")
+        self.assertEqual(tariff_purchase_back_callback(None), "main_action:subscribe")
+        self.assertEqual(
+            payment_options_back_callback("subscription@basic|bot"),
+            "tariff:select:basic:bot",
+        )
+        self.assertEqual(
+            payment_methods_back_callback("1", "subscription@basic|bot"),
+            "tariff:period:basic:1:bot",
+        )
+
+    def test_personal_promo_updates_renewal_price_and_can_be_disabled(self):
+        tariff = SimpleNamespace(
+            key="basic",
+            billing_model="period",
+            enabled_periods=[1],
+            period_price=lambda months, currency: (
+                100 if months == 1 and currency == "rub" else None
+            ),
+        )
+        settings = settings_stub(DEFAULT_CURRENCY="RUB", DEFAULT_CURRENCY_SYMBOL="₽")
+        quote = SimpleNamespace(
+            promo_code_id=17,
+            effective_amount=75,
+        )
+
+        applied = get_tariff_periods_keyboard(
+            tariff,
+            "en",
+            self.i18n,
+            settings,
+            callback_context="bot",
+            promo_quotes={1: quote},
+            promo_available=True,
+            promo_enabled=True,
+            promo_toggle_callback="tariff:select:basic:bot:pd",
+        )
+        applied_buttons = [button for row in applied.inline_keyboard for button in row]
+        self.assertIn("100 → 75", applied_buttons[0].text)
+        self.assertEqual(applied_buttons[0].callback_data, "tariff:period:basic:d30:bot:p17")
+        self.assertTrue(any("Cancel promo code" in button.text for button in applied_buttons))
+
+        disabled = get_tariff_periods_keyboard(
+            tariff,
+            "en",
+            self.i18n,
+            settings,
+            callback_context="bot",
+            promo_quotes={1: quote},
+            promo_available=True,
+            promo_enabled=False,
+            promo_toggle_callback="tariff:select:basic:bot",
+        )
+        disabled_buttons = [button for row in disabled.inline_keyboard for button in row]
+        self.assertNotIn("→", disabled_buttons[0].text)
+        self.assertEqual(disabled_buttons[0].callback_data, "tariff:period:basic:d30:bot:pd")
+        self.assertTrue(any("Apply discount" in button.text for button in disabled_buttons))
+
+    def test_traffic_buttons_never_include_personal_promo_controls(self):
+        markup = get_subscription_options_keyboard(
+            {10: 50},
+            "RUB",
+            "en",
+            self.i18n,
+            traffic_mode=True,
+            callback_context="bot",
+            promo_quotes={10: SimpleNamespace(promo_code_id=17, effective_amount=25)},
+            promo_available=True,
+            promo_enabled=True,
+            promo_toggle_callback="main_action:bot_subscribe:pd",
+        )
+        buttons = [button for row in markup.inline_keyboard for button in row]
+
+        self.assertEqual(buttons[0].callback_data, "subscribe_period:10:bot")
+        self.assertFalse(any("promo" in str(button.callback_data) for button in buttons))
+
+    def test_webapp_referral_link_uses_ref_query_and_is_normalized(self):
+        link = referral._build_webapp_referral_link(
+            "https://app.example.com/invite?utm=channel",
+            "AbC123xYz",
+        )
+
+        self.assertEqual(
+            link,
+            "https://app.example.com/invite?utm=channel&ref=uAbC123xYz",
+        )
+        self.assertEqual(subscription_webapp._normalize_referral_param("uAbC123xYz"), "ABC123XYZ")
+        self.assertEqual(
+            subscription_webapp._normalize_referral_param("ref_uAbC123xYz"), "ABC123XYZ"
+        )
+
+    def test_referral_text_places_web_link_after_telegram_link(self):
+        text = self.i18n.gettext(
+            "en",
+            "referral_program_info_new",
+            referral_link="https://t.me/bot?start=ref_uABC123XYZ",
+            webapp_link_section=self.i18n.gettext(
+                "en",
+                "referral_webapp_link_line",
+                webapp_referral_link="https://app.example.com/?ref=uABC123XYZ",
+            ),
+            bonus_details="bonus",
+            invited_count=1,
+            purchased_count=0,
+        )
+
+        self.assertLess(text.index("Telegram link:"), text.index("Web link:"))
+        self.assertLess(text.index("Web link:"), text.index("Invitation bonuses:"))
+
+    def test_single_tariff_referral_text_uses_period_rows_without_tariff_name(self):
+        settings = SimpleNamespace(
+            tariffs_config=TariffsConfig.model_validate(
+                {
+                    "default_tariff": "standard",
+                    "tariffs": [
+                        {
+                            "key": "standard",
+                            "names": {"en": "Standard"},
+                            "descriptions": {},
+                            "squad_uuids": ["standard"],
+                            "billing_model": "period",
+                            "monthly_gb": 100,
+                            "prices_rub": {"2": 400, "4": 800},
+                            "prices_stars": {},
+                            "referral_bonus_days_inviter": {"2": 5, "4": 10},
+                            "referral_bonus_days_referee": {"2": 1, "4": 2},
+                            "enabled_periods": [2, 4],
+                            "enabled": True,
+                        }
+                    ],
+                }
+            ),
+            subscription_options={},
+            referral_bonus_inviter={},
+            referral_bonus_referee={},
+        )
+
+        text = referral._build_referral_bonus_details_text(
+            settings,
+            lambda key, **kwargs: self.i18n.gettext("en", key, **kwargs),
+            "en",
+        )
+
+        self.assertIn("For a friend's 2-month subscription", text)
+        self.assertIn("For a friend's 4-month subscription", text)
+        self.assertNotIn("Standard", text)
+
+    def test_multiple_tariff_referral_text_uses_tariff_ranges(self):
+        settings = SimpleNamespace(
+            tariffs_config=TariffsConfig.model_validate(
+                {
+                    "default_tariff": "standard",
+                    "tariffs": [
+                        {
+                            "key": "standard",
+                            "names": {"en": "Standard"},
+                            "descriptions": {},
+                            "squad_uuids": ["standard"],
+                            "billing_model": "period",
+                            "monthly_gb": 100,
+                            "prices_rub": {"2": 400, "4": 800},
+                            "prices_stars": {},
+                            "referral_bonus_days_inviter": {"2": 5, "4": 10},
+                            "referral_bonus_days_referee": {"2": 1, "4": 2},
+                            "enabled_periods": [2, 4],
+                            "enabled": True,
+                        },
+                        {
+                            "key": "premium",
+                            "names": {"en": "Premium"},
+                            "descriptions": {},
+                            "squad_uuids": ["premium"],
+                            "billing_model": "period",
+                            "monthly_gb": 500,
+                            "prices_rub": {"1": 700, "3": 1800},
+                            "prices_stars": {},
+                            "referral_bonus_days_inviter": {"1": 8, "3": 24},
+                            "referral_bonus_days_referee": {"1": 3, "3": 9},
+                            "enabled_periods": [1, 3],
+                            "enabled": True,
+                        },
+                    ],
+                }
+            ),
+            subscription_options={},
+            referral_bonus_inviter={},
+            referral_bonus_referee={},
+        )
+
+        text = referral._build_referral_bonus_details_text(
+            settings,
+            lambda key, **kwargs: self.i18n.gettext("en", key, **kwargs),
+            "en",
+        )
+
+        self.assertIn("Standard", text)
+        self.assertIn("Premium", text)
+        self.assertIn("from 5 to 10 days", text)
+        self.assertIn("from 8 to 24 days", text)
+        self.assertNotIn("2-month subscription", text)
