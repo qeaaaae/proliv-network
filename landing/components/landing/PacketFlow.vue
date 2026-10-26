@@ -38,18 +38,25 @@ function draw(ctx: CanvasRenderingContext2D, w: number, h: number, t: number) {
     ctx.fillRect(p.x - 1.4, p.y - 1.4, 2.8, 2.8)
   }
 
-  // fan-out burst after the wire ends: expanding dots to the right
-  for (let i = 0; i < 14; i++) {
-    const u = 0.86 + i * 0.011
-    const spread = (i - 6.5) * 3.2
-    const p = pathPoint(Math.min(u, 0.985), w, h)
-    const a = Math.max(0, 0.5 - i * 0.035) * (0.5 + 0.5 * Math.sin(time * 2 + i))
-    ctx.fillStyle = `rgba(125, 211, 252, ${a.toFixed(3)})`
-    const s = 2.2 + (i % 3) * 0.9
-    ctx.fillRect(p.x - s / 2, p.y + spread - s / 2, s, s)
-  }
+  // endpoint node where the wire terminates - small square beacon, pulsing ring
+  const end = pathPoint(0.98, w, h)
+  ctx.fillStyle = 'rgba(125, 211, 252, 0.9)'
+  ctx.fillRect(end.x - 3, end.y - 3, 6, 6)
+  const ring = (time * 0.7) % 1
+  const ringR = 6 + ring * 16
+  const ringA = 0.5 * (1 - ring)
+  ctx.strokeStyle = `rgba(125, 211, 252, ${ringA.toFixed(3)})`
+  ctx.lineWidth = 1.5
+  ctx.strokeRect(end.x - ringR / 2, end.y - ringR / 2, ringR, ringR)
 
-  // packets riding the wire with easing - accelerate through the bump
+  // packets riding the wire; past the node they burst into a spark fan
+  const burstDirs = [
+    [1, 0],
+    [1, -0.55],
+    [1, 0.55],
+    [0.65, -1],
+    [0.65, 1],
+  ]
   for (const pk of packets) {
     const u = (time * pk.speed + pk.off) % 1
     const p = pathPoint(u, w, h)
@@ -58,11 +65,21 @@ function draw(ctx: CanvasRenderingContext2D, w: number, h: number, t: number) {
       const tu = u - k * 0.006
       if (tu < 0) continue
       const tp = pathPoint(tu, w, h)
-      const a = (0.95 - k * 0.18) * (u > 0.985 ? 0 : 1)
+      const a = (0.95 - k * 0.18) * (u > 0.96 ? 0 : 1)
       const s = pk.size - k * 0.4
       if (a <= 0 || s <= 0) continue
       ctx.fillStyle = `rgba(125, 211, 252, ${a.toFixed(3)})`
       ctx.fillRect(tp.x - s / 2, tp.y + pk.lane - s / 2, s, s)
+    }
+    // burst sparks after reaching the node
+    if (u > 0.96) {
+      const e = (u - 0.96) / 0.04
+      for (const [dx, dy] of burstDirs) {
+        const sa = (1 - e) * 0.9
+        ctx.fillStyle = `rgba(125, 211, 252, ${sa.toFixed(3)})`
+        const ss = Math.max(1.4, pk.size * (1 - e * 0.6))
+        ctx.fillRect(end.x + dx * e * 42 - ss / 2, end.y + dy * e * 34 - ss / 2, ss, ss)
+      }
     }
   }
 }
