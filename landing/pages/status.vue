@@ -1,6 +1,12 @@
 <script setup lang="ts">
 useHead({ title: 'Статус - Proliv Network' })
 
+interface GeoRow {
+  cc: string
+  flag: string
+  list: string
+}
+
 interface Service {
   name: string
   flag?: string
@@ -9,14 +15,38 @@ interface Service {
   uptime: string
   // 48 half-hour slots over the last 24h; 'ok' | 'down' | 'degraded'
   slots: string[]
+  // demo geo-detection per service, replaced by node geocheck.sh output later
+  geo?: { seen: GeoRow[]; unavailable: string; cdn: string }
 }
 
 const SLOTS = 48
 const ok = () => Array.from({ length: SLOTS }, () => 'ok')
 
 const locations: Service[] = [
-  { name: 'Эстония · Таллин', flag: 'ee', state: 'Работает', uptime: '100%', slots: ok() },
-  { name: 'Великобритания · Лондон', flag: 'gb', state: 'Работает', uptime: '100%', slots: ok() },
+  {
+    name: 'Эстония · Таллин',
+    flag: 'ee',
+    state: 'Работает',
+    uptime: '100%',
+    slots: ok(),
+    geo: {
+      seen: [{ cc: 'EE', flag: 'ee', list: 'ifconfig.co, ipquery.io, Google, YouTube, JetBrains' }],
+      unavailable: 'нет',
+      cdn: 'Cloudflare EE · YouTube EE · Netflix EE',
+    },
+  },
+  {
+    name: 'Великобритания · Лондон',
+    flag: 'gb',
+    state: 'Работает',
+    uptime: '100%',
+    slots: ok(),
+    geo: {
+      seen: [{ cc: 'GB', flag: 'gb', list: 'ifconfig.co, ipquery.io, Google, YouTube, JetBrains' }],
+      unavailable: 'нет',
+      cdn: 'Cloudflare GB · YouTube GB · Netflix GB',
+    },
+  },
 ]
 
 const services: Service[] = [
@@ -64,6 +94,22 @@ const services: Service[] = [
             <div class="uptime-axis">
               <span>24 часа назад</span>
               <span>Сейчас</span>
+            </div>
+            <div v-if="s.geo" class="geo">
+              <p class="geo-label">Видят страну:</p>
+              <p v-for="row in s.geo.seen" :key="row.cc" class="geo-line">
+                <img class="geo-flag" :src="`/images/flags/${row.flag}.svg`" :alt="row.cc" width="18" height="13">
+                <b>{{ row.cc }}:</b>
+                <span>{{ row.list }}</span>
+              </p>
+              <p class="geo-line">
+                <span class="geo-tag">Недоступно:</span>
+                <span>{{ s.geo.unavailable }}</span>
+              </p>
+              <p class="geo-line">
+                <span class="geo-tag">CDN:</span>
+                <span>{{ s.geo.cdn }}</span>
+              </p>
             </div>
           </li>
         </ul>
@@ -318,6 +364,47 @@ const services: Service[] = [
   margin-top: 8px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.geo {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  font-family: ui-monospace, 'Cascadia Mono', Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.geo-label {
+  margin-bottom: 4px;
+  color: var(--fg-secondary);
+}
+
+.geo-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-secondary);
+}
+
+.geo-line b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.geo-flag {
+  flex: none;
+  border-radius: 3px;
+  object-fit: cover;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+
+.geo-tag {
+  flex: none;
+  min-width: 98px;
+  color: var(--muted);
 }
 
 .status-note {
