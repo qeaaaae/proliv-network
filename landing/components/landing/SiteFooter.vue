@@ -53,7 +53,7 @@ const documents = [
 
     <div class="footer-bottom">
       <div class="footer-legal">
-        <span>ИП — реквизиты появятся после регистрации</span>
+        <span>Саткевич Рафаэль Владимирович, ИНН 730102011151</span>
         <span>© 2026 Proliv Network</span>
       </div>
       <ul class="payment-marks" aria-label="Способы оплаты">
