@@ -131,16 +131,6 @@ section[id] {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
-  transition:
-    transform 0.45s var(--ease-out),
-    border-color 0.45s ease,
-    box-shadow 0.45s ease;
-}
-
-.card:hover {
-  transform: translateY(-4px);
-  border-color: rgba(125, 211, 252, 0.32);
-  box-shadow: 0 26px 70px -30px rgba(125, 211, 252, 0.35);
 }
 
 .landing-block {

@@ -63,14 +63,6 @@ import LocationScene from './LocationScene.vue'
   position: absolute;
   inset: 0 0 auto;
   height: 74%;
-  transition:
-    filter 0.5s ease,
-    transform 0.7s var(--ease-out);
-}
-
-.location:hover :deep(.location-scene) {
-  filter: brightness(1.3);
-  transform: scale(1.02);
 }
 
 .location-meta {
@@ -178,11 +170,6 @@ import LocationScene from './LocationScene.vue'
 .strip-more {
   margin-left: 6px;
   color: var(--accent);
-  transition: transform 0.3s var(--ease-out);
-}
-
-.status-strip:hover .strip-more {
-  transform: translateX(4px);
 }
 
 @media (max-width: 620px) {

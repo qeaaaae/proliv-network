@@ -54,18 +54,6 @@
   border-top: 1px solid var(--line);
 }
 
-.route-path {
-  transition: text-shadow 0.3s ease;
-}
-
-.route:hover .route-leader {
-  filter: brightness(1.6);
-}
-
-.route:hover .route-path {
-  text-shadow: 0 0 30px rgba(125, 211, 252, 0.5);
-}
-
 .route-name,
 .route-path {
   font-family: var(--font-display);
@@ -115,10 +103,11 @@
   left: 0;
   width: 54px;
   background:
-    radial-gradient(circle, #fff 2.4px, transparent 3px) 50px 0 / 54px 10px no-repeat,
-    radial-gradient(circle, var(--accent) 2.1px, transparent 2.7px) 34px 0 / 54px 10px no-repeat,
-    radial-gradient(circle, rgba(125, 211, 252, 0.7) 1.8px, transparent 2.4px) 20px 0 / 54px 10px no-repeat,
-    radial-gradient(circle, rgba(125, 211, 252, 0.45) 1.5px, transparent 2.1px) 8px 0 / 54px 10px
+    linear-gradient(#fff, #fff) 50px 1px / 7px 7px no-repeat,
+    linear-gradient(var(--accent), var(--accent)) 35px 2px / 5px 5px no-repeat,
+    linear-gradient(rgba(125, 211, 252, 0.7), rgba(125, 211, 252, 0.7)) 21px 3px / 4px 4px
+      no-repeat,
+    linear-gradient(rgba(125, 211, 252, 0.4), rgba(125, 211, 252, 0.4)) 9px 3px / 3px 3px
       no-repeat;
   filter: drop-shadow(0 0 5px rgba(125, 211, 252, 0.7));
   animation: route-packet 2.8s linear infinite;
