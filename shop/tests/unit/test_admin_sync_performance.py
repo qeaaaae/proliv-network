@@ -1,0 +1,1102 @@
+import asyncio
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from bot.handlers.admin.sync_admin import (
+    _absorb_duplicate_panel_identity,
+    _coerce_panel_telegram_id,
+    _description_contains_email,
+    _description_matches,
+    _description_without_email,
+    _format_panel_update_changes,
+    _identity_panel_update_reasons,
+    _merge_local_duplicate_panel_user_if_needed,
+    _panel_description_for_user,
+    _panel_identity_fields_update_payload,
+    _panel_identity_matches_user,
+    _panel_identity_needs_full_fetch,
+    _panel_identity_needs_legacy_description_cleanup,
+    _panel_identity_payload_with_expiry,
+    _panel_identity_view_for_comparison,
+    _panel_update_changes,
+    _perform_sync_impl,
+    _should_update_lifetime_used_traffic,
+    _subscription_update_delta,
+)
+from bot.handlers.admin.sync_admin_common import _subscription_update_reason_labels
+from bot.handlers.admin.sync_admin_identity import _select_existing_subscription_for_panel_sync
+from bot.handlers.admin.sync_admin_summary import localized_sync_details
+from bot.middlewares.i18n import JsonI18n
+from db.models import Subscription
+
+
+def test_description_match_ignores_whitespace_shape():
+    assert _description_matches("email@example.com username", "email@example.com\nusername")
+
+
+def test_description_match_accepts_cp1251_mojibake_from_panel():
+    desired = "user@example.com\nalice\nАлексей\nЧерников"
+    panel_value = "user@example.com\nalice\nÀëåêñåé\n×åðíèêîâ"
+
+    assert _description_matches(panel_value, desired)
+
+
+def test_description_match_rejects_different_identity_after_mojibake_repair():
+    desired = "user@example.com\nalice\nАлексей"
+    panel_value = "other@example.com\nalice\nÀëåêñåé"
+
+    assert not _description_matches(panel_value, desired)
+
+
+def test_panel_telegram_id_is_coerced_to_int():
+    assert _coerce_panel_telegram_id("12345") == 12345
+    assert _coerce_panel_telegram_id("") is None
+
+
+def test_panel_sync_adopts_active_subscription_without_panel_link() -> None:
+    imported = SimpleNamespace(panel_subscription_uuid=None)
+
+    selected = _select_existing_subscription_for_panel_sync(
+        user_id=42,
+        panel_uuid="panel-user",
+        panel_subscription_uuid="panel-short-uuid",
+        previous_panel_uuid=None,
+        subscriptions_by_panel_uuid={},
+        active_subscriptions_by_user_panel={(42, "panel-user"): imported},
+        subscriptions_by_user_panel={(42, "panel-user"): imported},
+    )
+
+    assert selected is imported
+
+
+def test_panel_sync_does_not_adopt_different_linked_subscription() -> None:
+    linked = SimpleNamespace(panel_subscription_uuid="another-short-uuid")
+
+    selected = _select_existing_subscription_for_panel_sync(
+        user_id=42,
+        panel_uuid="panel-user",
+        panel_subscription_uuid="panel-short-uuid",
+        previous_panel_uuid=None,
+        subscriptions_by_panel_uuid={},
+        active_subscriptions_by_user_panel={(42, "panel-user"): linked},
+        subscriptions_by_user_panel={(42, "panel-user"): linked},
+    )
+
+    assert selected is None
+
+
+@pytest.mark.parametrize("active", [True, False])
+def test_panel_sync_recovers_numeric_user_with_legacy_subscription_link(active: bool) -> None:
+    linked = Subscription(panel_subscription_uuid="58cbe42c-729a-43cc-a61a-24ec11fa9f8a")
+    selected = _select_existing_subscription_for_panel_sync(
+        user_id=42,
+        panel_uuid="42",
+        panel_subscription_uuid="native-short-link",
+        previous_panel_uuid=None,
+        subscriptions_by_panel_uuid={},
+        active_subscriptions_by_user_panel={(42, "42"): linked} if active else {},
+        subscriptions_by_user_panel={(42, "42"): linked},
+        numeric_generation=True,
+    )
+    assert selected is linked
+
+
+@pytest.mark.parametrize("numeric_generation", [True, False])
+@pytest.mark.parametrize("ambiguous", [True, False])
+def test_panel_sync_recovers_only_unambiguous_legacy_identity(
+    numeric_generation: bool, ambiguous: bool
+) -> None:
+    old_uuid = "3b54e1e6-b4d2-4f35-970d-454919f45b31"
+    linked = Subscription(panel_subscription_uuid="58cbe42c-729a-43cc-a61a-24ec11fa9f8a")
+    owned = {old_uuid: linked}
+    if ambiguous:
+        owned["another-panel-account"] = Subscription()
+    selected = _select_existing_subscription_for_panel_sync(
+        user_id=42,
+        panel_uuid="42",
+        panel_subscription_uuid="native-short-link",
+        previous_panel_uuid=None,
+        subscriptions_by_panel_uuid={},
+        active_subscriptions_by_user_panel={},
+        subscriptions_by_user_panel={(42, old_uuid): linked},
+        subscriptions_by_user={42: owned, 43: {old_uuid: Subscription()}},
+        numeric_generation=numeric_generation,
+    )
+    assert selected is (linked if numeric_generation and not ambiguous else None)
+
+
+@pytest.mark.parametrize(
+    ("panel_uuid", "old_link", "new_link", "numeric_generation"),
+    [
+        ("42", "another-short-link", "native-short-link", True),
+        ("42", "58cbe42c-729a-43cc-a61a-24ec11fa9f8a", "native-short-link", False),
+        ("42", "58cbe42c-729a-43cc-a61a-24ec11fa9f8a", "native-short-link", True),
+        ("legacy-panel", "58cbe42c-729a-43cc-a61a-24ec11fa9f8a", "native-short-link", True),
+        (
+            "42",
+            "58cbe42c-729a-43cc-a61a-24ec11fa9f8a",
+            "3b54e1e6-b4d2-4f35-970d-454919f45b31",
+            True,
+        ),
+    ],
+)
+def test_panel_sync_limits_legacy_link_recovery_to_numeric_upgrade(
+    panel_uuid: str, old_link: str, new_link: str, numeric_generation: bool
+) -> None:
+    linked = Subscription(panel_subscription_uuid=old_link)
+    selected = _select_existing_subscription_for_panel_sync(
+        user_id=42,
+        panel_uuid=panel_uuid,
+        panel_subscription_uuid=new_link,
+        previous_panel_uuid=None,
+        subscriptions_by_panel_uuid={},
+        active_subscriptions_by_user_panel={(42, panel_uuid): linked},
+        subscriptions_by_user_panel={(42, panel_uuid): linked},
+        numeric_generation=numeric_generation,
+    )
+    expected = (
+        linked
+        if panel_uuid == "42"
+        and numeric_generation
+        and new_link == ("native-short-link")
+        and old_link != "another-short-link"
+        else None
+    )
+    assert selected is expected
+
+
+def test_panel_description_for_user_excludes_email():
+    user = SimpleNamespace(
+        email="linked@example.com",
+        username="alice",
+        first_name="Alice",
+        last_name="Smith",
+    )
+
+    assert _panel_description_for_user(user) == "alice\nAlice\nSmith"
+
+
+def test_panel_description_for_user_filters_broken_lines():
+    user = SimpleNamespace(
+        email="linked@example.com",
+        username="alice??",
+        first_name="????",
+        last_name="Smith",
+    )
+
+    assert _panel_description_for_user(user) == "alice??\nSmith"
+
+
+def test_panel_update_change_summary_is_compact_and_field_based():
+    changes = _panel_update_changes(
+        {
+            "description": "old@example.com\nalice",
+            "email": "old@example.com",
+            "telegramId": "41",
+        },
+        {
+            "uuid": "panel-user-uuid",
+            "description": "alice",
+            "email": "new@example.com",
+            "telegramId": 42,
+        },
+    )
+
+    assert [field for field, _old, _new in changes] == [
+        "description",
+        "email",
+        "telegramId",
+    ]
+    assert _identity_panel_update_reasons(
+        changes,
+        description_has_email=True,
+    ) == [
+        "remove_email_from_description",
+        "description_mismatch",
+        "email_mismatch",
+        "telegramId_mismatch",
+    ]
+    summary = _format_panel_update_changes(changes)
+    assert "\n" not in summary
+    assert "description:len=21:old@example.com\\nalice->len=5:alice" in summary
+    assert "telegramId:41->42" in summary
+
+
+def test_description_contains_email_detects_legacy_panel_description():
+    assert _description_contains_email(
+        "Linked@Example.com\nalice\nAlice",
+        "linked@example.com",
+    )
+    assert not _description_contains_email("alice\nAlice", "linked@example.com")
+
+
+def test_description_without_email_preserves_panel_text():
+    assert (
+        _description_without_email(
+            "linked@example.com\nalice\nAlice",
+            "linked@example.com",
+        )
+        == "alice\nAlice"
+    )
+    assert _description_without_email("linked@example.com", "linked@example.com") == ""
+
+
+def test_panel_identity_match_accepts_list_description_without_email():
+    user = SimpleNamespace(
+        email="linked@example.com",
+        telegram_id=42,
+        username="alice",
+        first_name="Alice",
+        last_name=None,
+    )
+    panel_user = {
+        "description": "alice\nAlice",
+        "email": "linked@example.com",
+        "telegramId": 42,
+    }
+
+    assert _panel_identity_matches_user(
+        panel_user,
+        user,
+        _panel_description_for_user(user),
+    )
+
+
+def test_panel_identity_payload_with_expiry_excludes_description_updates():
+    expire_at = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
+    user = SimpleNamespace(
+        email="linked@example.com",
+        telegram_id=42,
+        username="alice",
+        first_name="Alice",
+        last_name=None,
+    )
+
+    payload = _panel_identity_payload_with_expiry(user, expire_at=expire_at)
+
+    assert "description" not in payload
+    assert payload["email"] == "linked@example.com"
+    assert payload["telegramId"] == 42
+
+
+def test_panel_identity_fields_update_payload_excludes_description():
+    user = SimpleNamespace(
+        email="linked@example.com",
+        telegram_id=42,
+        username="alice",
+        first_name="Alice",
+        last_name=None,
+    )
+
+    assert _panel_identity_fields_update_payload(user) == {
+        "email": "linked@example.com",
+        "telegramId": 42,
+    }
+
+
+def test_panel_identity_detects_legacy_full_description_cleanup_need():
+    user = SimpleNamespace(
+        email="linked@example.com",
+        telegram_id=42,
+        username="alice",
+        first_name="Alice",
+        last_name=None,
+    )
+    panel_user = {
+        "description": "alice\nAlice",
+        "email": "linked@example.com",
+        "telegramId": 42,
+    }
+
+    assert _panel_identity_needs_legacy_description_cleanup(
+        panel_user,
+        user,
+        _panel_description_for_user(user),
+    )
+
+
+def test_panel_identity_detects_email_only_legacy_cleanup_need():
+    user = SimpleNamespace(
+        email="linked@example.com",
+        telegram_id=None,
+        username=None,
+        first_name=None,
+        last_name=None,
+    )
+    panel_user = {
+        "description": "",
+        "email": "linked@example.com",
+    }
+
+    assert _panel_identity_needs_legacy_description_cleanup(
+        panel_user,
+        user,
+        _panel_description_for_user(user),
+    )
+
+
+def test_panel_identity_match_treats_missing_list_email_as_unknown():
+    user = SimpleNamespace(
+        email="linked@example.com",
+        telegram_id=42,
+    )
+    panel_user = {
+        "description": "alice",
+        "telegramId": 42,
+    }
+
+    assert _panel_identity_matches_user(
+        panel_user,
+        user,
+        "alice",
+    )
+
+
+def test_panel_identity_match_treats_missing_full_email_as_mismatch():
+    user = SimpleNamespace(
+        email="linked@example.com",
+        telegram_id=42,
+    )
+    panel_user = {
+        "description": "alice",
+        "telegramId": 42,
+    }
+
+    assert not _panel_identity_matches_user(
+        panel_user,
+        user,
+        "alice",
+        missing_identity_fields_match=False,
+    )
+
+
+def test_panel_identity_match_rejects_different_returned_email():
+    user = SimpleNamespace(
+        email="linked@example.com",
+        telegram_id=42,
+    )
+    panel_user = {
+        "description": "alice",
+        "email": "other@example.com",
+        "telegramId": 42,
+    }
+
+    assert not _panel_identity_matches_user(
+        panel_user,
+        user,
+        "alice",
+    )
+
+
+def test_panel_identity_needs_full_fetch_for_missing_or_blank_identity_fields():
+    user = SimpleNamespace(
+        email="linked@example.com",
+        telegram_id=42,
+    )
+
+    assert _panel_identity_needs_full_fetch({"telegramId": 42}, user)
+    assert _panel_identity_needs_full_fetch({"email": "", "telegramId": 42}, user)
+    assert _panel_identity_needs_full_fetch({"email": "linked@example.com"}, user)
+    assert not _panel_identity_needs_full_fetch(
+        {"email": "linked@example.com", "telegramId": "42"},
+        user,
+    )
+
+
+def test_panel_identity_view_fetches_full_user_when_list_email_missing():
+    panel_service = SimpleNamespace(
+        get_user_by_uuid=AsyncMock(
+            return_value={
+                "uuid": "panel-1",
+                "description": "linked@example.com\nalice",
+                "email": "linked@example.com",
+                "telegramId": 42,
+            }
+        )
+    )
+    user = SimpleNamespace(
+        email="linked@example.com",
+        telegram_id=42,
+    )
+
+    panel_user, missing_fields_match = asyncio.run(
+        _panel_identity_view_for_comparison(
+            panel_service,
+            "panel-1",
+            {
+                "uuid": "panel-1",
+                "description": "linked@example.com\nalice",
+                "telegramId": 42,
+            },
+            user,
+        )
+    )
+
+    assert panel_user["email"] == "linked@example.com"
+    assert not missing_fields_match
+    panel_service.get_user_by_uuid.assert_awaited_once_with("panel-1")
+
+
+def test_panel_identity_view_fetches_full_user_to_clean_legacy_description_email():
+    panel_service = SimpleNamespace(
+        get_user_by_uuid=AsyncMock(
+            return_value={
+                "uuid": "panel-1",
+                "description": "linked@example.com\nalice\nAlice",
+                "email": "linked@example.com",
+                "telegramId": 42,
+            }
+        )
+    )
+    user = SimpleNamespace(
+        email="linked@example.com",
+        telegram_id=42,
+        username="alice",
+        first_name="Alice",
+        last_name=None,
+    )
+
+    panel_user, missing_fields_match = asyncio.run(
+        _panel_identity_view_for_comparison(
+            panel_service,
+            "panel-1",
+            {
+                "uuid": "panel-1",
+                "description": "alice\nAlice",
+                "email": "linked@example.com",
+                "telegramId": 42,
+            },
+            user,
+            _panel_description_for_user(user),
+        )
+    )
+
+    assert panel_user["description"] == "linked@example.com\nalice\nAlice"
+    assert not missing_fields_match
+    assert not _panel_identity_matches_user(
+        panel_user,
+        user,
+        _panel_description_for_user(user),
+        missing_identity_fields_match=missing_fields_match,
+    )
+    panel_service.get_user_by_uuid.assert_awaited_once_with("panel-1")
+
+
+def test_subscription_update_delta_skips_unchanged_fields():
+    end_date = datetime(2026, 5, 20, 12, 0, tzinfo=UTC)
+    subscription = Subscription(
+        user_id=1,
+        panel_user_uuid="panel-1",
+        panel_subscription_uuid="sub-1",
+        end_date=end_date,
+        is_active=True,
+        status_from_panel="ACTIVE",
+    )
+
+    assert (
+        _subscription_update_delta(
+            subscription,
+            {
+                "user_id": 1,
+                "panel_user_uuid": "panel-1",
+                "end_date": end_date + timedelta(milliseconds=500),
+                "is_active": True,
+                "status_from_panel": "ACTIVE",
+            },
+        )
+        == {}
+    )
+
+
+def test_subscription_update_delta_returns_only_changed_fields():
+    end_date = datetime(2026, 5, 20, 12, 0, tzinfo=UTC)
+    subscription = Subscription(
+        user_id=1,
+        panel_user_uuid="panel-1",
+        panel_subscription_uuid="sub-1",
+        end_date=end_date,
+        is_active=True,
+        status_from_panel="ACTIVE",
+    )
+
+    assert _subscription_update_delta(
+        subscription,
+        {
+            "user_id": 2,
+            "panel_user_uuid": "panel-1",
+            "end_date": end_date + timedelta(seconds=2),
+            "is_active": False,
+            "status_from_panel": "EXPIRED",
+        },
+    ) == {
+        "user_id": 2,
+        "end_date": end_date + timedelta(seconds=2),
+        "is_active": False,
+        "status_from_panel": "EXPIRED",
+    }
+
+
+def test_subscription_update_reason_labels_separate_connection_activity():
+    assert _subscription_update_reason_labels({"last_connected_at": object()}) == [
+        "subscription_last_connected_at_updated"
+    ]
+    assert _subscription_update_reason_labels(
+        {
+            "end_date": object(),
+            "last_connected_at": object(),
+        }
+    ) == [
+        "subscription_updated",
+        "subscription_last_connected_at_updated",
+    ]
+
+
+def test_lifetime_traffic_update_waits_for_time_window_for_small_delta():
+    now = datetime(2026, 5, 20, 12, 0, tzinfo=UTC)
+    settings = SimpleNamespace(
+        PANEL_SYNC_LIFETIME_TRAFFIC_MIN_INTERVAL_SECONDS=3600,
+        PANEL_SYNC_LIFETIME_TRAFFIC_MIN_DELTA_BYTES=100 * 1024 * 1024,
+    )
+    user = SimpleNamespace(
+        lifetime_used_traffic_bytes=10 * 1024 * 1024,
+        lifetime_used_traffic_synced_at=now - timedelta(minutes=15),
+    )
+
+    assert not _should_update_lifetime_used_traffic(
+        user,
+        11 * 1024 * 1024,
+        now=now,
+        settings=settings,
+    )
+    assert _should_update_lifetime_used_traffic(
+        user,
+        11 * 1024 * 1024,
+        now=now + timedelta(hours=1),
+        settings=settings,
+    )
+
+
+def test_lifetime_traffic_update_allows_large_delta_and_skips_duplicate_panel_identity():
+    now = datetime(2026, 5, 20, 12, 0, tzinfo=UTC)
+    settings = SimpleNamespace(
+        PANEL_SYNC_LIFETIME_TRAFFIC_MIN_INTERVAL_SECONDS=3600,
+        PANEL_SYNC_LIFETIME_TRAFFIC_MIN_DELTA_BYTES=100 * 1024 * 1024,
+    )
+    user = SimpleNamespace(
+        lifetime_used_traffic_bytes=10 * 1024 * 1024,
+        lifetime_used_traffic_synced_at=now,
+    )
+
+    assert _should_update_lifetime_used_traffic(
+        user,
+        200 * 1024 * 1024,
+        now=now,
+        settings=settings,
+    )
+    assert not _should_update_lifetime_used_traffic(
+        user,
+        0,
+        now=now + timedelta(hours=2),
+        settings=settings,
+        is_duplicate_panel_identity=True,
+    )
+
+
+def test_duplicate_panel_user_requires_explicit_merge():
+    session = SimpleNamespace()
+    existing_user = SimpleNamespace(user_id=42)
+    duplicate_user = SimpleNamespace(user_id=77)
+
+    with (
+        patch(
+            "bot.handlers.admin.sync_admin_identity.user_dal.get_user_by_panel_uuid",
+            AsyncMock(return_value=duplicate_user),
+        ),
+        patch("bot.handlers.admin.sync_admin_identity.user_dal.merge_users", AsyncMock()) as merge,
+    ):
+        result = asyncio.run(
+            _merge_local_duplicate_panel_user_if_needed(
+                session,
+                existing_user=existing_user,
+                duplicate_panel_uuid="panel-duplicate",
+            )
+        )
+
+    assert result == (existing_user, False)
+    merge.assert_not_awaited()
+
+
+def test_sync_failure_status_is_committed_after_rollback():
+    panel_service = SimpleNamespace(
+        get_all_panel_users=AsyncMock(side_effect=RuntimeError("panel unavailable"))
+    )
+    session = SimpleNamespace(rollback=AsyncMock(), commit=AsyncMock())
+    update_status = AsyncMock()
+
+    with patch(
+        "bot.handlers.admin.sync_admin_runner.panel_sync_dal.update_panel_sync_status",
+        update_status,
+    ):
+        result = asyncio.run(
+            _perform_sync_impl(
+                panel_service=panel_service,
+                session=session,
+                settings=SimpleNamespace(),
+                i18n_instance=SimpleNamespace(),
+            )
+        )
+
+    assert result["status"] == "failed"
+    session.rollback.assert_awaited_once()
+    update_status.assert_awaited_once()
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [{"email": "new@example.test"}, {"telegramId": 123456789}],
+    ids=["email", "telegram"],
+)
+def test_panel_sync_imports_new_user_and_subscription_without_verifying_email(identity):
+    panel_uuid = "new-panel-user"
+    panel_user = {
+        "uuid": panel_uuid,
+        "shortUuid": "new-subscription",
+        **identity,
+        "status": "ACTIVE",
+        "expireAt": "2027-01-01T00:00:00Z",
+    }
+    panel_service = SimpleNamespace(get_all_panel_users=AsyncMock(return_value=[panel_user]))
+    user = SimpleNamespace(
+        user_id=1_000_000_000_050,
+        panel_user_uuid=panel_uuid,
+        panel_origin=None,
+        panel_username=None,
+        minishop_id="ms_new",
+        telegram_id=identity.get("telegramId"),
+        email=identity.get("email"),
+        email_verified_at=None,
+        username=None,
+        first_name=None,
+        last_name=None,
+        lifetime_used_traffic_bytes=None,
+    )
+    created_sub = SimpleNamespace(
+        subscription_id=1,
+        user_id=user.user_id,
+        panel_user_uuid=panel_uuid,
+        is_active=True,
+        end_date=datetime(2027, 1, 1, tzinfo=UTC),
+    )
+
+    @asynccontextmanager
+    async def nested_transaction():
+        yield
+
+    session = SimpleNamespace(
+        begin_nested=nested_transaction,
+        execute=AsyncMock(),
+        scalar=AsyncMock(return_value=None),
+        commit=AsyncMock(),
+        rollback=AsyncMock(),
+    )
+
+    async def create_user_result(_session, user_data, *, registered_via):
+        user.panel_origin = user_data["panel_origin"]
+        return user, True
+
+    create_user = AsyncMock(side_effect=create_user_result)
+    upsert_subscription = AsyncMock(return_value=created_sub)
+    sync_indexes = {
+        "users_by_telegram_id": {},
+        "users_by_user_id": {},
+        "users_by_panel_uuid": {},
+        "users_by_email": {},
+        "subscriptions_by_panel_uuid": {},
+        "active_subscriptions_by_user_panel": {},
+        "subscriptions_by_user_panel": {},
+    }
+
+    with (
+        patch(
+            "bot.handlers.admin.sync_admin_runner.capture_subscription_snapshot",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "bot.handlers.admin.sync_admin_runner.acquire_subscription_background_sync_lock",
+            AsyncMock(),
+        ),
+        patch(
+            "bot.handlers.admin.sync_admin_runner._prefetch_sync_indexes",
+            AsyncMock(return_value=sync_indexes),
+        ),
+        patch("bot.handlers.admin.sync_admin_identity.user_dal.create_user", create_user),
+        patch(
+            "bot.handlers.admin.sync_admin_runner._panel_identity_view_for_comparison",
+            AsyncMock(return_value=(panel_user, True)),
+        ),
+        patch(
+            "bot.handlers.admin.sync_admin_runner._panel_identity_matches_user",
+            return_value=True,
+        ),
+        patch(
+            "bot.handlers.admin.sync_admin_runner.subscription_dal.upsert_subscription",
+            upsert_subscription,
+        ),
+        patch(
+            "bot.handlers.admin.sync_admin_runner.panel_sync_dal.update_panel_sync_status",
+            AsyncMock(),
+        ),
+    ):
+        result = asyncio.run(
+            _perform_sync_impl(
+                panel_service=panel_service,
+                session=session,
+                settings=SimpleNamespace(
+                    PANEL_API_URL="https://panel.example.test/api",
+                    DEFAULT_LANGUAGE="ru",
+                    user_traffic_limit_bytes=0,
+                ),
+                i18n_instance=JsonI18n("locales", default="ru"),
+            )
+        )
+
+    assert result["status"] == "completed", result["errors"]
+    assert result["users_created"] == 1
+    assert result["subs_synced"] == 1
+    assert create_user.await_args.kwargs["registered_via"] == "panel_sync"
+    imported = create_user.await_args.args[1]
+    assert imported["email"] == identity.get("email")
+    assert imported["telegram_id"] == identity.get("telegramId")
+    assert "email_verified_at" not in imported
+    assert imported["panel_user_uuid"] == panel_uuid
+    assert upsert_subscription.await_args.args[1]["user_id"] == user.user_id
+    assert upsert_subscription.await_args.args[1]["panel_subscription_uuid"] == "new-subscription"
+
+
+@pytest.mark.parametrize("has_login_identity", [True, False])
+def test_panel_sync_reports_unimportable_users_without_creating_accounts(has_login_identity):
+    panel_user = {"uuid": "other-panel-user"}
+    if has_login_identity:
+        panel_user["email"] = "owner@example.test"
+    panel_service = SimpleNamespace(get_all_panel_users=AsyncMock(return_value=[panel_user]))
+    session = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+    sync_indexes = {
+        "users_by_telegram_id": {},
+        "users_by_user_id": {},
+        "users_by_panel_uuid": {},
+        "users_by_email": {"owner@example.test": SimpleNamespace(user_id=42)},
+        "subscriptions_by_panel_uuid": {},
+        "active_subscriptions_by_user_panel": {},
+        "subscriptions_by_user_panel": {},
+    }
+    create_user = AsyncMock()
+    with (
+        patch(
+            "bot.handlers.admin.sync_admin_runner.capture_subscription_snapshot",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "bot.handlers.admin.sync_admin_runner.acquire_subscription_background_sync_lock",
+            AsyncMock(),
+        ),
+        patch(
+            "bot.handlers.admin.sync_admin_runner._prefetch_sync_indexes",
+            AsyncMock(return_value=sync_indexes),
+        ),
+        patch("bot.handlers.admin.sync_admin_identity.user_dal.create_user", create_user),
+        patch(
+            "bot.handlers.admin.sync_admin_runner.panel_sync_dal.update_panel_sync_status",
+            AsyncMock(),
+        ),
+    ):
+        result = asyncio.run(
+            _perform_sync_impl(
+                panel_service=panel_service,
+                session=session,
+                settings=SimpleNamespace(DEFAULT_LANGUAGE="ru"),
+                i18n_instance=JsonI18n("locales", default="ru"),
+            )
+        )
+
+    if has_login_identity:
+        assert result["status"] == "completed_with_errors"
+        assert "manual review required" in result["errors"][0]
+    else:
+        assert result["status"] == "completed"
+        assert result["errors"] == []
+        assert result["users_processed"] == 1
+        assert result["users_created"] == 0
+        assert result["subs_synced"] == 0
+        assert "без Telegram ID и email: 1" in result["details"]
+    create_user.assert_not_awaited()
+
+
+def test_panel_sync_does_not_import_panel_user_claiming_existing_email_alias():
+    panel_service = SimpleNamespace(
+        get_all_panel_users=AsyncMock(
+            return_value=[{"uuid": "other-panel-user", "email": "alias@example.test"}]
+        )
+    )
+    session = SimpleNamespace(
+        scalar=AsyncMock(return_value=42), commit=AsyncMock(), rollback=AsyncMock()
+    )
+    sync_indexes = {
+        "users_by_telegram_id": {},
+        "users_by_user_id": {},
+        "users_by_panel_uuid": {},
+        "users_by_email": {},
+        "subscriptions_by_panel_uuid": {},
+        "active_subscriptions_by_user_panel": {},
+        "subscriptions_by_user_panel": {},
+    }
+    create_user = AsyncMock()
+    with (
+        patch(
+            "bot.handlers.admin.sync_admin_runner.capture_subscription_snapshot",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "bot.handlers.admin.sync_admin_runner.acquire_subscription_background_sync_lock",
+            AsyncMock(),
+        ),
+        patch(
+            "bot.handlers.admin.sync_admin_runner._prefetch_sync_indexes",
+            AsyncMock(return_value=sync_indexes),
+        ),
+        patch("bot.handlers.admin.sync_admin_identity.user_dal.create_user", create_user),
+        patch(
+            "bot.handlers.admin.sync_admin_runner.panel_sync_dal.update_panel_sync_status",
+            AsyncMock(),
+        ),
+    ):
+        result = asyncio.run(
+            _perform_sync_impl(
+                panel_service=panel_service,
+                session=session,
+                settings=SimpleNamespace(DEFAULT_LANGUAGE="ru"),
+                i18n_instance=JsonI18n("locales", default="ru"),
+            )
+        )
+
+    assert result["status"] == "completed_with_errors"
+    assert "manual review required" in result["errors"][0]
+    create_user.assert_not_awaited()
+
+
+def test_panel_sync_commits_between_bounded_user_batches():
+    panel_service = SimpleNamespace(
+        get_all_panel_users=AsyncMock(
+            return_value=[
+                {"uuid": ""},
+                {"uuid": ""},
+            ]
+        )
+    )
+    session = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
+    sync_indexes = {
+        "users_by_telegram_id": {},
+        "users_by_user_id": {},
+        "users_by_panel_uuid": {},
+        "users_by_email": {},
+        "subscriptions_by_panel_uuid": {},
+        "active_subscriptions_by_user_panel": {},
+        "subscriptions_by_user_panel": {},
+        "panel_uuids_by_telegram_id": {},
+    }
+    checkpoint = AsyncMock()
+
+    with (
+        patch(
+            "bot.handlers.admin.sync_admin_runner.PANEL_SYNC_TRANSACTION_BATCH_SIZE",
+            1,
+        ),
+        patch(
+            "bot.handlers.admin.sync_admin_runner.acquire_subscription_background_sync_lock",
+            AsyncMock(),
+        ),
+        patch(
+            "bot.handlers.admin.sync_admin_runner._prefetch_sync_indexes",
+            AsyncMock(return_value=sync_indexes),
+        ),
+        patch(
+            "bot.handlers.admin.sync_admin_runner.commit_subscription_background_sync_batch",
+            checkpoint,
+        ),
+        patch(
+            "bot.handlers.admin.sync_admin_runner.panel_sync_dal.update_panel_sync_status",
+            AsyncMock(),
+        ),
+    ):
+        result = asyncio.run(
+            _perform_sync_impl(
+                panel_service=panel_service,
+                session=session,
+                settings=SimpleNamespace(DEFAULT_LANGUAGE="en"),
+                i18n_instance=JsonI18n("locales", default="en"),
+            )
+        )
+
+    assert result["users_processed"] == 2
+    checkpoint.assert_awaited_once_with(session)
+    session.commit.assert_awaited_once_with()
+
+
+def test_sync_summary_translates_error_count():
+    i18n = JsonI18n("locales", default="ru")
+
+    for language, expected in (
+        ("ru", "Ошибок синхронизации: 2"),
+        ("en", "Synchronization errors: 2"),
+    ):
+        details = localized_sync_details(
+            i18n,
+            language,
+            panel_records_checked=1,
+            users_found_in_db=1,
+            users_created=0,
+            users_updated=0,
+            subscriptions_synced_count=0,
+            subscriptions_created=0,
+            subscriptions_updated=0,
+            users_without_telegram_id=0,
+            users_not_found_in_db=0,
+            error_count=2,
+        )
+
+        assert expected in details
+        assert "admin_sync_errors" not in details
+
+    for language, expected in (
+        ("ru", "Пропущено записей только из панели без Telegram ID и email: 12"),
+        ("en", "Panel-only records skipped without Telegram ID or email: 12"),
+    ):
+        details = localized_sync_details(
+            i18n,
+            language,
+            panel_records_checked=12,
+            users_found_in_db=0,
+            users_created=0,
+            users_updated=0,
+            subscriptions_synced_count=0,
+            subscriptions_created=0,
+            subscriptions_updated=0,
+            users_without_telegram_id=12,
+            users_not_found_in_db=12,
+            users_skipped_no_identity=12,
+            error_count=0,
+        )
+
+        assert expected in details
+        assert "admin_sync_skipped_no_identity" not in details
+        assert "❌" not in details
+
+
+def test_absorb_duplicate_panel_identity_extends_kept_user_and_deletes_duplicate():
+    now = datetime.now(UTC)
+    target_sub = SimpleNamespace(
+        subscription_id=10,
+        user_id=42,
+        panel_user_uuid="panel-keep",
+        panel_subscription_uuid="sub-keep",
+        end_date=now - timedelta(days=2),
+        is_active=False,
+        status_from_panel="EXPIRED",
+    )
+    duplicate_sub = SimpleNamespace(
+        subscription_id=11,
+        user_id=42,
+        panel_user_uuid="panel-duplicate",
+        panel_subscription_uuid="sub-duplicate",
+        end_date=now + timedelta(days=30),
+        is_active=True,
+        skip_notifications=False,
+        status_from_panel="ACTIVE",
+    )
+    panel_service = SimpleNamespace(
+        update_user_details_on_panel=AsyncMock(return_value={"uuid": "panel-keep"}),
+        delete_user_from_panel=AsyncMock(return_value=True),
+    )
+    session = SimpleNamespace(execute=AsyncMock(), refresh=AsyncMock(), commit=AsyncMock())
+    settings = SimpleNamespace(user_traffic_limit_bytes=0)
+    user = SimpleNamespace(
+        user_id=42,
+        panel_user_uuid="panel-keep",
+        telegram_id=969808056,
+        email="paid@example.com",
+        username="alice",
+        first_name="Alice",
+        last_name=None,
+    )
+
+    async def update_subscription(_session, subscription_id, update_data):
+        sub = target_sub if subscription_id == target_sub.subscription_id else duplicate_sub
+        for key, value in update_data.items():
+            setattr(sub, key, value)
+        return sub
+
+    with (
+        patch(
+            "bot.handlers.admin.sync_admin.subscription_dal.get_subscription_by_panel_subscription_uuid",
+            AsyncMock(
+                side_effect=lambda _session, uuid: {
+                    "sub-keep": target_sub,
+                    "sub-duplicate": duplicate_sub,
+                }.get(uuid)
+            ),
+        ),
+        patch(
+            "bot.handlers.admin.sync_admin.subscription_dal.update_subscription",
+            AsyncMock(side_effect=update_subscription),
+        ),
+    ):
+        result = asyncio.run(
+            _absorb_duplicate_panel_identity(
+                session,
+                panel_service=panel_service,
+                existing_user=user,
+                keep_panel_uuid="panel-keep",
+                keep_panel_user={
+                    "uuid": "panel-keep",
+                    "subscriptionUuid": "sub-keep",
+                    "status": "EXPIRED",
+                    "expireAt": (now - timedelta(days=2)).isoformat(),
+                },
+                duplicate_panel_user={
+                    "uuid": "panel-duplicate",
+                    "subscriptionUuid": "sub-duplicate",
+                    "telegramId": 969808056,
+                    "status": "ACTIVE",
+                    "expireAt": (now + timedelta(days=30)).isoformat(),
+                },
+                settings=settings,
+                subscriptions_by_panel_uuid={
+                    "sub-keep": target_sub,
+                    "sub-duplicate": duplicate_sub,
+                },
+                active_subscriptions_by_user_panel={},
+            )
+        )
+
+    assert result["resolved"]
+    assert result["subscriptions_updated"] == 2
+    assert target_sub.is_active
+    assert target_sub.status_from_panel == "ACTIVE_EXTENDED_BY_PANEL_DUPLICATE_MERGE"
+    assert target_sub.panel_user_uuid == "panel-keep"
+    assert target_sub.end_date > now + timedelta(days=29)
+    assert not duplicate_sub.is_active
+    assert duplicate_sub.skip_notifications
+    assert duplicate_sub.status_from_panel == "MERGED_PANEL_DUPLICATE"
+    panel_service.update_user_details_on_panel.assert_awaited_once()
+    update_uuid, update_payload = panel_service.update_user_details_on_panel.await_args.args[:2]
+    assert update_uuid == "panel-keep"
+    assert update_payload["status"] == "ACTIVE"
+    assert update_payload["telegramId"] == 969808056
+    panel_service.delete_user_from_panel.assert_awaited_once_with(
+        "panel-duplicate",
+        log_response=False,
+    )

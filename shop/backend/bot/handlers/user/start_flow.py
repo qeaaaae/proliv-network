@@ -1,0 +1,676 @@
+import logging
+import re
+from datetime import UTC, datetime
+
+from aiogram import F, types
+from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.utils.text_decorations import html_decoration as hd
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from bot.infra import events
+from bot.infra.event_payloads import ReferralBonusGrantedPayload
+from bot.middlewares.i18n import JsonI18n
+from bot.services.behavior_events import BotStartedSource, emit_bot_started
+from bot.services.partner_program_service import PartnerProgramService
+from bot.services.referral_service import ReferralService
+from bot.services.referral_welcome_trial import referral_welcome_bonus_joins_trial
+from bot.services.registration_invite_gate import (
+    evaluate_registration_invite,
+    referral_program_enabled,
+)
+from bot.services.subscription_service_impl.core import SubscriptionService
+from bot.services.telegram_notifications import TELEGRAM_NOTIFICATIONS_ENABLED
+from bot.utils.callback_answer import (
+    message_bot,
+    message_from_user,
+)
+from bot.utils.install_links import (
+    append_install_share_link_text,
+    ensure_user_install_guide_links,
+)
+from bot.utils.mini_app_url import subscription_mini_app_checkout_code_url
+from bot.utils.text_sanitizer import sanitize_display_name, sanitize_username
+from config.settings import Settings
+from config.tariffs_config import referral_welcome_bonus_tariff_key_for_settings
+from db.dal import subscription_dal, user_dal
+from db.models import User
+
+from .start_channel import ensure_required_channel_subscription
+from .start_common import (
+    _resolve_referrer_from_start_ref,
+    router,
+)
+from .start_menus import send_main_menu
+
+logger = logging.getLogger(__name__)
+
+
+def _start_argument(message: types.Message) -> str | None:
+    text = str(getattr(message, "text", "") or "").strip()
+    if not text.startswith("/start"):
+        return None
+    _, separator, argument = text.partition(" ")
+    if not separator:
+        return None
+    value = argument.strip()
+    return value or None
+
+
+def _bot_started_source(
+    *,
+    ref_match: re.Match | None,
+    partner_match: re.Match | None,
+    promo_match: re.Match | None,
+    page_ref_match: re.Match | None,
+    ad_param_match: re.Match | None,
+    ticket_match: re.Match | None,
+    notifications_match: re.Match | None,
+) -> BotStartedSource:
+    if ref_match or partner_match or page_ref_match:
+        return "referral"
+    if promo_match:
+        return "promo"
+    if ad_param_match:
+        return "ad"
+    if ticket_match:
+        return "ticket"
+    if notifications_match:
+        return "notifications"
+    return "direct"
+
+
+@router.message(CommandStart())
+@router.message(CommandStart(magic=F.args.regexp(r"^ref_([A-Za-z0-9_-]{1,64})$").as_("ref_match")))
+@router.message(
+    CommandStart(magic=F.args.regexp(r"^p_([A-Za-z0-9_-]{8,64})$").as_("partner_match"))
+)
+@router.message(
+    CommandStart(magic=F.args.regexp(r"^promo_([A-Za-z0-9_-]{1,100})$").as_("promo_match"))
+)
+@router.message(
+    CommandStart(magic=F.args.regexp(r"^admin_user_(ms_[0-9a-f]{32}|\d+)$").as_("admin_user_match"))
+)
+@router.message(CommandStart(magic=F.args.regexp(r"^ticket_(\d+)$").as_("ticket_match")))
+@router.message(CommandStart(magic=F.args.regexp(r"^notifications$").as_("notifications_match")))
+@router.message(CommandStart(magic=F.args.regexp(r"^page_ref$").as_("page_ref_match")))
+@router.message(
+    CommandStart(
+        magic=F.args.regexp(
+            r"^(?!ref_|p_|promo_|admin_user_|ticket_|notifications$|page_ref$|webapp_auth_)([A-Za-z0-9_\-]{2,64})$"
+        ).as_("ad_param_match")
+    )
+)
+async def start_command_handler(
+    message: types.Message,
+    state: FSMContext,
+    settings: Settings,
+    i18n_data: dict,
+    subscription_service: SubscriptionService,
+    referral_service: ReferralService,
+    session: AsyncSession,
+    ref_match: re.Match | None = None,
+    partner_match: re.Match | None = None,
+    promo_match: re.Match | None = None,
+    page_ref_match: re.Match | None = None,
+    ad_param_match: re.Match | None = None,
+    admin_user_match: re.Match | None = None,
+    ticket_match: re.Match | None = None,
+    notifications_match: re.Match | None = None,
+) -> None:
+    await state.clear()
+    current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
+    i18n: JsonI18n | None = i18n_data.get("i18n_instance")
+    _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
+
+    user = message_from_user(message)
+    telegram_user_id = user.id
+    user_id: int | None = None
+    start_param = _start_argument(message)
+    start_source = _bot_started_source(
+        ref_match=ref_match,
+        partner_match=partner_match,
+        promo_match=promo_match,
+        page_ref_match=page_ref_match,
+        ad_param_match=ad_param_match,
+        ticket_match=ticket_match,
+        notifications_match=notifications_match,
+    )
+
+    from bot.services.account_roles import bootstrap_configured_owner, is_admin
+
+    started_user = await user_dal.get_user_by_telegram_id(session, telegram_user_id)
+    if started_user:
+        user_id = int(started_user.user_id)
+        await bootstrap_configured_owner(
+            session,
+            user_id,
+            telegram_id=settings.BOOTSTRAP_OWNER_TELEGRAM_ID,
+            email=settings.BOOTSTRAP_OWNER_EMAIL,
+        )
+    if admin_user_match and started_user and await is_admin(session, int(started_user.user_id)):
+        user_id = int(started_user.user_id)
+        await emit_bot_started(
+            user_id=user_id,
+            returning=started_user is not None,
+            source=start_source,
+            start_param=start_param,
+        )
+        target_identifier = admin_user_match.group(1)
+        target_user = (
+            await session.scalar(select(User).where(User.minishop_id == target_identifier))
+            if target_identifier.startswith("ms_")
+            else await user_dal.get_user_by_id(session, int(target_identifier))
+        )
+        if not target_user:
+            await message.answer(_("admin_user_not_found", input=hd.quote(target_identifier)))
+            return
+
+        try:
+            from bot.handlers.admin.user_management import (
+                _send_with_profile_link_fallback,
+                format_user_card,
+                get_user_card_keyboard,
+            )
+
+            referral_service = ReferralService(
+                settings, subscription_service, message_bot(message), i18n
+            )
+            user_card_text = await format_user_card(
+                target_user,
+                session,
+                subscription_service,
+                i18n,
+                current_lang,
+                referral_service,
+            )
+            keyboard = get_user_card_keyboard(
+                target_user.user_id,
+                i18n,
+                current_lang,
+                target_user.referred_by_id,
+            )
+
+            await _send_with_profile_link_fallback(
+                message.answer,
+                text=user_card_text,
+                markup=keyboard.as_markup(),
+                user_id=target_user.user_id,
+                parse_mode="HTML",
+            )
+            return
+        except Exception as e_admin_card:
+            logger.exception(
+                "Failed to open admin user card via deep-link for %s: %s",
+                target_identifier,
+                e_admin_card,
+            )
+            await message.answer(_("admin_user_card_error"))
+            return
+
+    referred_by_user_id: int | None = None
+    partner_code: str | None = None
+    partner_user_id: int | None = None
+    raw_ref_value: str | None = None
+    promo_code_to_apply: str | None = None
+    should_open_referral_from_start = False
+    ad_start_param: str | None = None
+    notifications_start_requested = bool(notifications_match)
+
+    if ref_match:
+        raw_ref_value = ref_match.group(1)
+    elif partner_match:
+        partner_code = partner_match.group(1)
+        raw_ref_value = f"p_{partner_code}"
+    elif promo_match:
+        promo_code_to_apply = promo_match.group(1)
+        logger.info("User %s started with promo code: %s", user_id, promo_code_to_apply)
+    elif notifications_start_requested:
+        logger.info("User %s started bot from notifications deep-link.", user_id)
+    elif page_ref_match:
+        should_open_referral_from_start = True
+        logger.info("User %s started with page_ref deep-link.", user_id)
+    elif ad_param_match:
+        ad_start_param = ad_param_match.group(1)
+        logger.info("User %s started with ad start param: %s", user_id, ad_start_param)
+
+    sanitized_username = sanitize_username(user.username)
+    sanitized_first_name = sanitize_display_name(user.first_name)
+    sanitized_last_name = sanitize_display_name(user.last_name)
+    notification_status_now = datetime.now(UTC)
+
+    db_user = started_user
+    is_existing_user = db_user is not None
+    if db_user:
+        user_id = int(db_user.user_id)
+    if db_user:
+        if raw_ref_value:
+            referred_by_user_id = await _resolve_referrer_from_start_ref(
+                session,
+                raw_ref_value,
+                settings=settings,
+                current_user_id=int(db_user.user_id),
+            )
+    else:
+        invite_check = await evaluate_registration_invite(
+            session,
+            raw_ref_value,
+            settings=settings,
+            current_user_id=user_id,
+            source="telegram_start",
+        )
+        if invite_check.requires_invite:
+            await message.answer(_("registration_invite_required"))
+            return
+        referred_by_user_id = invite_check.referrer_user_id
+        partner_code = invite_check.partner_code
+        partner_user_id = invite_check.partner_user_id
+
+    if ticket_match:
+        ticket_id = int(ticket_match.group(1))
+        base_url = (settings.SUBSCRIPTION_MINI_APP_URL or "").strip()
+        if base_url:
+            if user_id is not None:
+                await emit_bot_started(
+                    user_id=user_id,
+                    returning=is_existing_user,
+                    source=start_source,
+                    start_param=start_param,
+                )
+            ticket_url = f"{base_url.rstrip('/')}/support/{ticket_id}"
+            keyboard = types.InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        types.InlineKeyboardButton(
+                            text=i18n.gettext(current_lang, "wa_support_open_ticket")
+                            if i18n
+                            else "Open ticket",
+                            web_app=types.WebAppInfo(url=ticket_url),
+                        )
+                    ]
+                ]
+            )
+            await message.answer(
+                i18n.gettext(current_lang, "wa_support_open_ticket_hint")
+                if i18n
+                else "Open the ticket in the Mini App.",
+                reply_markup=keyboard,
+            )
+            return
+
+    if not db_user:
+        user_data_to_create = {
+            "telegram_id": telegram_user_id,
+            "username": sanitized_username,
+            "first_name": sanitized_first_name,
+            "last_name": sanitized_last_name,
+            "language_code": current_lang,
+            "referred_by_id": referred_by_user_id,
+            "registration_date": datetime.now(UTC),
+            "telegram_notifications_status": TELEGRAM_NOTIFICATIONS_ENABLED,
+            "telegram_notifications_checked_at": notification_status_now,
+            "telegram_notifications_enabled_at": notification_status_now,
+            "telegram_notifications_blocked_at": None,
+        }
+        try:
+            db_user, created = await user_dal.create_user(
+                session, user_data_to_create, partner_user_id=partner_user_id
+            )
+            user_id = int(db_user.user_id)
+
+            await bootstrap_configured_owner(
+                session,
+                user_id,
+                telegram_id=settings.BOOTSTRAP_OWNER_TELEGRAM_ID,
+                email=settings.BOOTSTRAP_OWNER_EMAIL,
+            )
+
+            if created:
+                if partner_code:
+                    await PartnerProgramService(settings).attribute_user(
+                        session,
+                        user=db_user,
+                        partner_code=partner_code,
+                        source="partner_telegram_link",
+                        registered_via_partner_link=True,
+                    )
+                await PartnerProgramService(settings).auto_enroll_user(
+                    session,
+                    user=db_user,
+                )
+                try:
+                    await session.commit()
+                except Exception as commit_error:
+                    await session.rollback()
+                    logger.exception("Failed to commit new user %s: %s", user_id, commit_error)
+                    await message.answer(_("error_occurred_processing_request"))
+                    return
+
+                logger.info(
+                    "New user %s added to session. Referred by: %s.",
+                    user_id,
+                    referred_by_user_id or "N/A",
+                )
+
+                # Auto-grant referral welcome bonus to newly registered referred users.
+                referral_welcome_days = max(0, int(settings.referral_settings.welcome_bonus_days))
+                if (referred_by_user_id or partner_code) and referral_welcome_days > 0:
+                    try:
+                        locked_user = await user_dal.lock_user_by_id(session, user_id)
+                        eligible_source = bool(
+                            referral_program_enabled(settings)
+                            and locked_user
+                            and locked_user.referred_by_id
+                        )
+                        if locked_user and not eligible_source:
+                            eligible_source = await PartnerProgramService(
+                                settings
+                            ).client_welcome_bonus_eligible(
+                                session,
+                                user_id=user_id,
+                            )
+                        eligible = bool(
+                            locked_user
+                            and eligible_source
+                            and locked_user.referral_welcome_bonus_claimed_at is None
+                            and not await subscription_dal.has_any_subscription_for_user(
+                                session, user_id
+                            )
+                        )
+                        bonus_waits_for_trial = False
+                        if not eligible:
+                            referral_bonus_end_date = None
+                            await session.rollback()
+                        elif referral_welcome_bonus_joins_trial(settings):
+                            # The bonus is added to the trial when the user activates it.
+                            referral_bonus_end_date = None
+                            bonus_waits_for_trial = True
+                            await session.rollback()
+                        else:
+                            db_user = locked_user
+                            welcome_tariff_key = referral_welcome_bonus_tariff_key_for_settings(
+                                settings
+                            )
+                            referral_bonus_end_date = (
+                                await subscription_service.extend_active_subscription_days(
+                                    session,
+                                    user_id,
+                                    referral_welcome_days,
+                                    reason="referral_welcome_bonus",
+                                    tariff_key=welcome_tariff_key,
+                                )
+                            )
+                        if referral_bonus_end_date:
+                            # Mark the welcome bonus as claimed so it cannot be
+                            # re-granted later (e.g. via the WebApp claim route
+                            # once this grant expires).
+                            db_user.referral_welcome_bonus_claimed_at = datetime.now(UTC)
+                            await session.commit()
+                            await events.emit_model(
+                                ReferralBonusGrantedPayload(
+                                    referee_user_id=user_id,
+                                    referee_bonus_days=referral_welcome_days,
+                                    referee_new_end_date=referral_bonus_end_date,
+                                    inviter_bonus_applied=False,
+                                    payment_db_id=None,
+                                    reason="welcome",
+                                ),
+                                exclude_unset=True,
+                            )
+                            logger.info(
+                                "Referral welcome bonus applied: user %s got %s days, new end date %s.",  # noqa: E501
+                                user_id,
+                                referral_welcome_days,
+                                referral_bonus_end_date.isoformat(),
+                            )
+                            await message.answer(
+                                _(
+                                    "referral_welcome_bonus_applied",
+                                    days=referral_welcome_days,
+                                    end_date=referral_bonus_end_date.strftime("%d.%m.%Y %H:%M:%S"),
+                                ),
+                                parse_mode="HTML",
+                            )
+                        elif bonus_waits_for_trial:
+                            await message.answer(
+                                _(
+                                    "referral_welcome_bonus_added_to_trial",
+                                    days=referral_welcome_days,
+                                    trial_days=settings.TRIAL_DURATION_DAYS + referral_welcome_days,
+                                ),
+                                parse_mode="HTML",
+                            )
+                        else:
+                            await session.rollback()
+                            logger.warning(
+                                "Welcome bonus was not applied for user %s (referrer=%s, partner=%s).",  # noqa: E501
+                                user_id,
+                                referred_by_user_id,
+                                bool(partner_code),
+                            )
+                    except Exception as referral_bonus_error:
+                        await session.rollback()
+                        logger.exception(
+                            "Failed to apply referral welcome bonus for user %s: %s",
+                            user_id,
+                            referral_bonus_error,
+                        )
+
+        except Exception as e_create:
+            logger.exception("Failed to add new user %s to session: %s", user_id, e_create)
+            await message.answer(_("error_occurred_processing_request"))
+            return
+    else:
+        update_payload = {}
+        if db_user.language_code != current_lang:
+            update_payload["language_code"] = current_lang
+        if db_user.telegram_id != telegram_user_id:
+            update_payload["telegram_id"] = telegram_user_id
+        if db_user.telegram_notifications_status != TELEGRAM_NOTIFICATIONS_ENABLED:
+            update_payload["telegram_notifications_status"] = TELEGRAM_NOTIFICATIONS_ENABLED
+            update_payload["telegram_notifications_checked_at"] = notification_status_now
+            update_payload["telegram_notifications_enabled_at"] = notification_status_now
+            update_payload["telegram_notifications_blocked_at"] = None
+        # Set referral only if not already set AND user is not currently active.
+        # This allows previously subscribed but currently inactive users to be attributed.
+        if referred_by_user_id and db_user.referred_by_id is None:
+            try:
+                is_active_now = await subscription_service.has_active_subscription(session, user_id)
+            except Exception:
+                is_active_now = False
+            if not is_active_now:
+                update_payload["referred_by_id"] = referred_by_user_id
+        if sanitized_username != db_user.username:
+            update_payload["username"] = sanitized_username
+        if sanitized_first_name != db_user.first_name:
+            update_payload["first_name"] = sanitized_first_name
+        if sanitized_last_name != db_user.last_name:
+            update_payload["last_name"] = sanitized_last_name
+
+        if update_payload:
+            try:
+                await user_dal.update_user(session, user_id, update_payload)
+
+                logger.info("Updated existing user %s in session: %s", user_id, update_payload)
+            except Exception as e_update:
+                logger.exception(
+                    "Failed to update existing user %s in session: %s", user_id, e_update
+                )
+
+    from bot.services.advertising.capture import capture_contact
+
+    await capture_contact(
+        session,
+        code=ad_start_param or "",
+        user_id=user_id,
+        channel="bot",
+        event_key=(
+            f"{message.bot.id if message.bot else 'unknown'}:{message.chat.id}:{message.message_id}"
+        ),
+        occurred_at=message.date,
+        bot_id=str(message.bot.id) if message.bot else None,
+        is_new_user=not is_existing_user,
+    )
+    await session.commit()
+
+    await emit_bot_started(
+        user_id=user_id,
+        returning=is_existing_user,
+        source=start_source,
+        start_param=start_param,
+    )
+
+    if not await ensure_required_channel_subscription(
+        message, settings, i18n, current_lang, session, db_user
+    ):
+        return
+
+    open_referral_page_for_existing_user = should_open_referral_from_start and is_existing_user
+
+    # Send welcome message if not disabled
+    if (
+        not settings.DISABLE_WELCOME_MESSAGE
+        and not open_referral_page_for_existing_user
+        and not notifications_start_requested
+    ):
+        await message.answer(_(key="welcome", user_name=hd.quote(user.full_name)))
+
+    if notifications_start_requested:
+        await message.answer(_("telegram_notifications_started"), parse_mode="HTML")
+
+    # Auto-apply promo code if provided via start parameter
+    if promo_code_to_apply:
+        try:
+            from bot.services.promo_code_service import PromoCheckoutRequired, PromoCodeService
+
+            promo_code_service = PromoCodeService(
+                settings, subscription_service, message_bot(message), i18n
+            )
+
+            success, result = await promo_code_service.apply_promo_code(
+                session, user_id, promo_code_to_apply, current_lang
+            )
+
+            if success and isinstance(result, PromoCheckoutRequired):
+                await session.commit()
+                checkout_url = subscription_mini_app_checkout_code_url(
+                    settings,
+                    result.code or promo_code_to_apply,
+                )
+                if checkout_url:
+                    keyboard = types.InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                types.InlineKeyboardButton(
+                                    text=_("open_mini_app"),
+                                    web_app=types.WebAppInfo(url=checkout_url),
+                                )
+                            ]
+                        ]
+                    )
+                    await message.answer(
+                        _(
+                            "promo_code_requires_checkout",
+                            effect=result.effect_summary,
+                        ),
+                        reply_markup=keyboard,
+                        parse_mode="HTML",
+                    )
+                    return
+                await message.answer(
+                    _(
+                        "promo_code_requires_checkout",
+                        effect=result.effect_summary,
+                    ),
+                    parse_mode="HTML",
+                )
+                return
+
+            if success:
+                await session.commit()
+                logger.info(
+                    "Auto-applied promo code '%s' for user %s", promo_code_to_apply, user_id
+                )
+
+                # Get updated subscription details
+                active = await subscription_service.get_active_subscription_details(
+                    session, user_id
+                )
+                config_link_display = active.get("config_link") if active else None
+                connect_button_url = active.get("connect_button_url") if active else None
+                config_link_text = config_link_display or _("config_link_not_available")
+
+                new_end_date = result if isinstance(result, datetime) else None
+
+                promo_success_text = _(
+                    "promo_code_applied_success_full",
+                    end_date=(
+                        new_end_date.strftime("%d.%m.%Y %H:%M:%S") if new_end_date else "N/A"
+                    ),
+                    config_link=config_link_text,
+                )
+                install_links = await ensure_user_install_guide_links(session, settings, user_id)
+                install_share_url = install_links.public_share_url
+                if install_share_url:
+                    try:
+                        await session.commit()
+                        promo_success_text = append_install_share_link_text(
+                            promo_success_text,
+                            _,
+                            install_share_url,
+                        )
+                    except Exception:
+                        await session.rollback()
+                        logger.exception(
+                            "Failed to persist install guide share token for promo user %s.",
+                            user_id,
+                        )
+                        install_share_url = None
+
+                from bot.keyboards.inline.user_keyboards import get_connect_and_main_keyboard
+
+                await message.answer(
+                    promo_success_text,
+                    reply_markup=get_connect_and_main_keyboard(
+                        current_lang,
+                        i18n,
+                        settings,
+                        config_link_display,
+                        connect_button_url=connect_button_url,
+                        install_share_url=install_share_url,
+                    ),
+                    parse_mode="HTML",
+                )
+
+                # Don't show main menu if promo was successfully applied
+                return
+            else:
+                await session.commit()
+                logger.warning(
+                    "Failed to auto-apply promo code '%s' for user %s: %s",
+                    promo_code_to_apply,
+                    user_id,
+                    result,
+                )
+                await message.answer(str(result), parse_mode="HTML")
+                # Continue to show main menu if promo failed
+
+        except Exception as e:
+            logger.error(
+                "Error auto-applying promo code '%s' for user %s: %s",
+                promo_code_to_apply,
+                user_id,
+                e,
+            )
+            await session.rollback()
+
+    if open_referral_page_for_existing_user:
+        from . import referral as user_referral_handlers
+
+        await user_referral_handlers.referral_command_handler(
+            message, settings, i18n_data, referral_service, message_bot(message), session
+        )
+        return
+
+    await send_main_menu(message, settings, i18n_data, subscription_service, session, is_edit=False)

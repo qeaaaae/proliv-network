@@ -1,0 +1,262 @@
+import SETTINGS_MANIFEST_SECTIONS from "../settingsManifest.generated.json";
+import { DEV_MOCK } from "../previewMock.js";
+import { DATASET, type CloneFn, type DemoRecord, type DemoSettingsField } from "./dataset";
+import { demoSettingsChanges, storeDemoSettingsChanges } from "./state";
+import { currentDemoBalance } from "./balance";
+
+type ManifestSection = DemoRecord & { fields?: (DemoRecord & { key: string })[] };
+
+const DEMO_REFERRAL_WEBAPP_LINK = "https://minishop.app/ref/ABCD1234";
+const DEMO_REFERRAL_TELEGRAM_LINK = "https://t.me/preview_bot?start=ref_uABCD1234";
+
+function demoSettingsValuesByKey(): Map<string, DemoSettingsField> {
+  const map = new Map<string, DemoSettingsField>();
+  for (const section of DATASET.settingsSections || []) {
+    for (const field of section.fields || []) {
+      map.set(field.key, field);
+    }
+  }
+  return map;
+}
+
+function demoRuntimeSettingValue(key: string): unknown {
+  const values: DemoRecord = {
+    USER_BALANCE_ENABLED: Boolean(DEV_MOCK.data.settings.user_balance_enabled),
+    USER_BALANCE_RECURRING_ENABLED: Boolean(currentDemoBalance().recurring_enabled),
+    GIFTS_ENABLED: DEV_MOCK.config.giftsEnabled ?? true,
+    WEBAPP_USER_THEME_MODE_ENABLED: DEV_MOCK.config.userThemeModeEnabled ?? true,
+    WEBAPP_ADMIN_THEME_EFFECTS_ENABLED: DEV_MOCK.config.adminThemeEffectsEnabled ?? false,
+    WEBAPP_COMPACT_HOME_ENABLED: DEV_MOCK.config.compactHomeEnabled ?? false,
+    WEBAPP_COMPACT_LOGIN_ENABLED: DEV_MOCK.config.compactLoginEnabled ?? true,
+    WEBAPP_CHECKOUT_ADDON_VALUE_ANIMATION_ENABLED:
+      DEV_MOCK.config.checkoutAddonValueAnimationEnabled ?? true,
+    WEBAPP_CHECKOUT_ADDON_EDITOR_EXPANDED_BY_DEFAULT:
+      DEV_MOCK.config.checkoutAddonEditorExpandedByDefault ?? false,
+    SERVER_STATUS_SHOW_ON_HOME: DEV_MOCK.config.serverStatusShowOnHome ?? false,
+    TRIAL_WITHOUT_OAUTH_ENABLED: DEV_MOCK.config.trialWithoutOauthEnabled ?? true,
+    TRIAL_CAPTCHA_ENABLED: Boolean(DEV_MOCK.data.settings.trial_captcha_enabled),
+    UNUSED_ACCOUNTS_CLEANUP_ENABLED: false,
+    UNUSED_ACCOUNTS_NO_TRIAL_ENABLED: false,
+    UNUSED_ACCOUNTS_UNUSED_TRIAL_ENABLED: false,
+    UNUSED_ACCOUNTS_NO_TRIAL_DAYS: 30,
+    UNUSED_ACCOUNTS_UNUSED_TRIAL_DAYS: 30,
+    REFERRAL_PROGRAM_ENABLED:
+      DEV_MOCK.config.referralProgramEnabled ??
+      DEV_MOCK.data.settings?.referral_program_enabled ??
+      true,
+    REFERRAL_WELCOME_BONUS_DAYS:
+      DEV_MOCK.config.referralWelcomeBonusDays ?? DEV_MOCK.data.referral?.welcome_bonus_days ?? 3,
+    REFERRAL_WELCOME_BONUS_WITHOUT_TELEGRAM_ENABLED:
+      DEV_MOCK.config.referralWelcomeWithoutTelegramEnabled ?? true,
+    REFERRAL_WELCOME_BONUS_ADDS_TO_TRIAL: false,
+    REFERRAL_ONE_BONUS_PER_REFEREE:
+      DEV_MOCK.config.referralOneBonusPerReferee ??
+      DEV_MOCK.data.referral?.one_bonus_per_referee ??
+      false,
+    REFERRAL_GIFT_ACTIVATION_ENABLED: true,
+    REFERRAL_WEBAPP_LINK_ENABLED: DEV_MOCK.config.referralWebappLinkEnabled ?? true,
+    REFERRAL_TELEGRAM_LINK_ENABLED: DEV_MOCK.config.referralTelegramLinkEnabled ?? true,
+    PARTNER_PROGRAM_ENABLED:
+      DEV_MOCK.config.partnerProgramEnabled ??
+      DEV_MOCK.data.settings?.partner_program_enabled ??
+      false,
+    PARTNER_REFERRAL_PROGRAM_DISABLED: DEV_MOCK.config.partnerReferralProgramDisabled ?? false,
+    PARTNER_WITHDRAWALS_ENABLED: DEV_MOCK.config.partnerWithdrawalsEnabled ?? true,
+    PARTNER_BALANCE_PAYMENT_ENABLED: DEV_MOCK.config.partnerBalancePaymentEnabled ?? true,
+    LEGACY_REFS: DEV_MOCK.config.legacyRefs ?? true,
+    DISPOSABLE_EMAIL_DOMAINS: DEV_MOCK.config.disposableEmailDomains || "",
+    PAYMENT_METHODS_DISPLAY_MODE:
+      DEV_MOCK.data.settings?.payment_methods_display_mode || "dropdown",
+  };
+  return Object.prototype.hasOwnProperty.call(values, key) ? values[key] : undefined;
+}
+
+export function demoSettingsSections(clone: CloneFn): ManifestSection[] {
+  // Section/field structure comes from the manifest snapshot generated off the
+  // Python source of truth (scripts/export_settings_manifest.py), so the demo
+  // stays in sync with the real admin. Realistic values are overlaid per field
+  // key from the dump-based dataset; fields absent there (e.g. a freshly added
+  // section) simply show their placeholders.
+  const demoValues = demoSettingsValuesByKey();
+  const sections = clone(SETTINGS_MANIFEST_SECTIONS) as unknown as ManifestSection[];
+  for (const section of sections) {
+    for (const field of section.fields || []) {
+      const demoField = demoValues.get(field.key);
+      if (demoField) {
+        if ("value" in demoField) field.value = demoField.value;
+        if ("overridden" in demoField) field.overridden = demoField.overridden;
+        if ("updated_at" in demoField) field.updated_at = demoField.updated_at;
+        if ("source" in demoField) field.source = demoField.source;
+        if (field.secret && "has_value" in demoField) field.has_value = demoField.has_value;
+      } else {
+        const runtimeValue = demoRuntimeSettingValue(field.key);
+        if (typeof runtimeValue !== "undefined") field.value = runtimeValue;
+      }
+      if (field.key === "PAYMENT_METHODS_DISPLAY_MODE") {
+        field.value = demoRuntimeSettingValue(field.key) || "dropdown";
+      }
+      if (demoSettingsChanges.has(field.key)) {
+        const change = demoSettingsChanges.get(field.key);
+        if (change?.deleted) {
+          field.value = field.default ?? "";
+          field.overridden = false;
+        } else {
+          field.value = change?.value;
+          field.overridden = true;
+        }
+      }
+    }
+  }
+  return sections;
+}
+
+function applyDemoSettingToMock(key: string, value: unknown): void {
+  if (key === "TRIAL_CAPTCHA_ENABLED")
+    DEV_MOCK.data.settings.trial_captcha_enabled = Boolean(value);
+  if (key === "USER_BALANCE_ENABLED") {
+    DEV_MOCK.data.settings.user_balance_enabled = Boolean(value);
+    DEV_MOCK.data.balance.enabled = Boolean(value);
+    currentDemoBalance().enabled = Boolean(value);
+    const userSource = currentDemoBalance().sources.find((source) => source.id === "user");
+    if (userSource) userSource.recurring_available = Boolean(value);
+  }
+  if (key === "USER_BALANCE_RECURRING_ENABLED") {
+    DEV_MOCK.data.balance.recurring_enabled = Boolean(value);
+    currentDemoBalance().recurring_enabled = Boolean(value);
+  }
+  if (key === "WEBAPP_ADMIN_THEME_EFFECTS_ENABLED") {
+    DEV_MOCK.config.adminThemeEffectsEnabled = Boolean(value);
+  }
+  if (key === "GIFTS_ENABLED") DEV_MOCK.config.giftsEnabled = Boolean(value);
+  if (key === "WEBAPP_TITLE") DEV_MOCK.config.title = value || "";
+  if (key === "WEBAPP_USER_THEME_MODE_ENABLED") {
+    DEV_MOCK.config.userThemeModeEnabled = Boolean(value);
+  }
+  if (key === "WEBAPP_COMPACT_HOME_ENABLED") {
+    DEV_MOCK.config.compactHomeEnabled = Boolean(value);
+  }
+  if (key === "WEBAPP_COMPACT_LOGIN_ENABLED") {
+    DEV_MOCK.config.compactLoginEnabled = Boolean(value);
+  }
+  const wideLoginProvider = /^([A-Z]+)_LOGIN_WIDE_BUTTON$/.exec(key)?.[1]?.toLowerCase();
+  if (wideLoginProvider) {
+    const selected = new Set<string>(
+      Array.isArray(DEV_MOCK.config.wideAuthProviders) ? DEV_MOCK.config.wideAuthProviders : []
+    );
+    if (value) selected.add(wideLoginProvider);
+    else selected.delete(wideLoginProvider);
+    DEV_MOCK.config.wideAuthProviders = [...selected];
+  }
+  if (key === "WEBAPP_CHECKOUT_ADDON_VALUE_ANIMATION_ENABLED") {
+    DEV_MOCK.config.checkoutAddonValueAnimationEnabled = Boolean(value);
+  }
+  if (key === "WEBAPP_CHECKOUT_ADDON_EDITOR_EXPANDED_BY_DEFAULT") {
+    DEV_MOCK.config.checkoutAddonEditorExpandedByDefault = Boolean(value);
+  }
+  if (key === "SERVER_STATUS_SHOW_ON_HOME") {
+    DEV_MOCK.config.serverStatusShowOnHome = Boolean(value);
+  }
+  if (key === "WEBAPP_LOGO_URL") DEV_MOCK.config.logoUrl = value || "";
+  if (key === "WEBAPP_FAVICON_URL" || key === "WEBAPP_LOGO_FAVICON_URL") {
+    DEV_MOCK.config.faviconUrl = value || DEV_MOCK.config.faviconUrl || "";
+  }
+  if (key === "WEBAPP_FAVICON_USE_CUSTOM") DEV_MOCK.config.faviconUseCustom = Boolean(value);
+  if (key === "TRIAL_ENABLED") {
+    DEV_MOCK.config.trialEnabled = Boolean(value);
+    DEV_MOCK.data.settings.trial_enabled = Boolean(value);
+  }
+  if (key === "TRIAL_DURATION_DAYS") {
+    DEV_MOCK.config.trialDurationDays = value;
+    DEV_MOCK.data.settings.trial_duration_days = Number(value || 0);
+  }
+  if (key === "TRIAL_TRAFFIC_LIMIT_GB") {
+    DEV_MOCK.config.trialTrafficLimitGb = value;
+    DEV_MOCK.data.settings.trial_traffic_limit_gb = Number(value || 0);
+  }
+  if (key === "TRIAL_PREMIUM_TRAFFIC_LIMIT_GB") {
+    DEV_MOCK.config.trialPremiumTrafficLimitGb = value;
+  }
+  if (key === "TRIAL_HWID_DEVICE_LIMIT") {
+    DEV_MOCK.config.trialHwidDeviceLimit = value;
+  }
+  if (key === "TRIAL_TRAFFIC_STRATEGY") {
+    DEV_MOCK.config.trialTrafficStrategy = value || "NO_RESET";
+    DEV_MOCK.data.settings.trial_traffic_strategy = value || "NO_RESET";
+  }
+  if (key === "TRIAL_WITHOUT_OAUTH_ENABLED") {
+    DEV_MOCK.config.trialWithoutOauthEnabled = Boolean(value);
+    DEV_MOCK.data.settings.trial_without_oauth_enabled = Boolean(value);
+    DEV_MOCK.data.settings.trial_without_telegram_enabled = Boolean(value);
+  }
+  if (key === "TRIAL_SQUAD_UUIDS") DEV_MOCK.config.trialSquadUuids = value || "";
+  if (key === "TRIAL_PREMIUM_SQUAD_UUIDS") {
+    DEV_MOCK.config.trialPremiumSquadUuids = value || "";
+  }
+  if (key === "REFERRAL_PROGRAM_ENABLED") {
+    const enabled = Boolean(value);
+    DEV_MOCK.config.referralProgramEnabled = enabled;
+    DEV_MOCK.data.settings.referral_program_enabled = enabled;
+  }
+  if (key === "REFERRAL_WELCOME_BONUS_DAYS") {
+    DEV_MOCK.config.referralWelcomeBonusDays = Number(value || 0);
+    DEV_MOCK.data.referral.welcome_bonus_days = Number(value || 0);
+  }
+  if (key === "REFERRAL_WELCOME_BONUS_WITHOUT_TELEGRAM_ENABLED") {
+    DEV_MOCK.config.referralWelcomeWithoutTelegramEnabled = Boolean(value);
+    DEV_MOCK.data.referral.welcome_bonus_without_telegram_enabled = Boolean(value);
+  }
+  if (key === "REFERRAL_ONE_BONUS_PER_REFEREE") {
+    DEV_MOCK.config.referralOneBonusPerReferee = Boolean(value);
+    DEV_MOCK.data.referral.one_bonus_per_referee = Boolean(value);
+  }
+  if (key === "REFERRAL_WEBAPP_LINK_ENABLED") {
+    const enabled = Boolean(value);
+    DEV_MOCK.config.referralWebappLinkEnabled = enabled;
+    DEV_MOCK.data.referral.webapp_link = enabled ? DEMO_REFERRAL_WEBAPP_LINK : null;
+  }
+  if (key === "REFERRAL_TELEGRAM_LINK_ENABLED") {
+    const enabled = Boolean(value);
+    DEV_MOCK.config.referralTelegramLinkEnabled = enabled;
+    DEV_MOCK.data.referral.bot_link = enabled ? DEMO_REFERRAL_TELEGRAM_LINK : null;
+  }
+  if (key === "PARTNER_PROGRAM_ENABLED") {
+    DEV_MOCK.config.partnerProgramEnabled = Boolean(value);
+    DEV_MOCK.data.settings.partner_program_enabled = Boolean(value);
+  }
+  if (key === "PARTNER_REFERRAL_PROGRAM_DISABLED") {
+    DEV_MOCK.config.partnerReferralProgramDisabled = Boolean(value);
+    DEV_MOCK.data.settings.partner_referral_program_disabled = Boolean(value);
+  }
+  if (key === "PARTNER_WITHDRAWALS_ENABLED") {
+    DEV_MOCK.config.partnerWithdrawalsEnabled = Boolean(value);
+  }
+  if (key === "PARTNER_BALANCE_PAYMENT_ENABLED") {
+    DEV_MOCK.config.partnerBalancePaymentEnabled = Boolean(value);
+  }
+  if (key === "LEGACY_REFS") DEV_MOCK.config.legacyRefs = Boolean(value);
+  if (key === "DISPOSABLE_EMAIL_DOMAINS") {
+    DEV_MOCK.config.disposableEmailDomains = value || "";
+  }
+  if (key === "PAYMENT_METHODS_DISPLAY_MODE") {
+    DEV_MOCK.data.settings.payment_methods_display_mode =
+      value === "buttons" ? "buttons" : "dropdown";
+  }
+}
+
+export function persistDemoSetting(key: string, value: unknown): void {
+  demoSettingsChanges.set(key, { value, deleted: false });
+  storeDemoSettingsChanges();
+  applyDemoSettingToMock(key, value);
+}
+
+export function persistDemoSettings(updates: DemoRecord | null | undefined): void {
+  for (const [key, value] of Object.entries(updates || {})) {
+    persistDemoSetting(key, value);
+  }
+}
+
+export function restoreDemoSettings(): void {
+  for (const [key, change] of demoSettingsChanges) {
+    if (!change.deleted) applyDemoSettingToMock(key, change.value);
+  }
+}

@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+from bot.app.web.message_image_contracts import message_image_request_content
+from bot.app.web.route_contracts import (
+    BINARY_RESPONSE_SCHEMA,
+    BOOLEAN_SCHEMA,
+    INTEGER_SCHEMA,
+    RouteContract,
+    ok_envelope_with,
+    schema_ref,
+)
+from bot.app.web.support_schemas import (
+    SupportCountsOut,
+    SupportMessageButtonOut,
+    SupportMessageOut,
+    SupportTicketOut,
+    SupportTypingIn,
+)
+
+from .contract_schemas import user_contract
+from .payloads import CreateTicketPayload, TicketReplyPayload
+
+SUPPORT_ROUTE_CONTRACTS: dict[str, RouteContract] = {
+    "support_tickets_route": user_contract(
+        response_schema=ok_envelope_with(
+            {
+                "tickets": {
+                    "type": "array",
+                    "items": schema_ref(SupportTicketOut),
+                },
+                "counts": schema_ref(SupportCountsOut),
+            }
+        ),
+        models=(SupportCountsOut, SupportTicketOut),
+    ),
+    "support_create_ticket_route": user_contract(
+        request_content=message_image_request_content(CreateTicketPayload),
+        response_schema=ok_envelope_with({"ticket": schema_ref(SupportTicketOut)}),
+        models=(CreateTicketPayload, SupportTicketOut),
+    ),
+    "support_ticket_detail_route": user_contract(
+        response_schema=ok_envelope_with(
+            {
+                "ticket": schema_ref(SupportTicketOut),
+                "messages": {
+                    "type": "array",
+                    "items": schema_ref(SupportMessageOut),
+                },
+                "peer_typing": BOOLEAN_SCHEMA,
+                "incremental": BOOLEAN_SCHEMA,
+                "unread": INTEGER_SCHEMA,
+            },
+            required=["ticket", "messages", "peer_typing"],
+        ),
+        models=(SupportMessageButtonOut, SupportMessageOut, SupportTicketOut),
+    ),
+    "support_ticket_reply_route": user_contract(
+        request_content=message_image_request_content(TicketReplyPayload),
+        response_schema=ok_envelope_with(
+            {
+                "ticket": schema_ref(SupportTicketOut),
+                "message": schema_ref(SupportMessageOut),
+            }
+        ),
+        models=(
+            SupportMessageButtonOut,
+            SupportMessageOut,
+            SupportTicketOut,
+            TicketReplyPayload,
+        ),
+    ),
+    "support_ticket_read_route": user_contract(response_schema=ok_envelope_with()),
+    "support_ticket_typing_route": user_contract(
+        request_model=SupportTypingIn,
+        response_schema=ok_envelope_with(),
+        models=(SupportTypingIn,),
+    ),
+    "support_unread_route": user_contract(
+        response_schema=ok_envelope_with({"unread": INTEGER_SCHEMA}),
+    ),
+    "support_message_image_route": user_contract(
+        response_schema=BINARY_RESPONSE_SCHEMA,
+        response_content_type="image/webp",
+    ),
+    "support_ticket_emoji_route": user_contract(
+        response_schema=BINARY_RESPONSE_SCHEMA,
+        response_content_type="application/octet-stream",
+    ),
+}

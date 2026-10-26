@@ -1,0 +1,983 @@
+import { currentBootSignal } from "./bootBudget";
+import { fetchApiJson } from "./apiJsonRequest";
+import { createBlobRequester } from "./apiBlobRequest";
+import { registerEmojiApiCacheScope } from "./emojiCatalogStorage";
+import { readCookie } from "./session.js";
+import { requestSignal } from "./requestSignal.js";
+import type {
+  ApiPathInput,
+  ApiResponseFor,
+  BuiltApiPath,
+  PostPayload,
+  PostResponse,
+  RawApiPath,
+} from "./publicApiContracts";
+
+export type * from "./publicApiContracts";
+
+export type AccountEmailRequestPath = "/account/email/request";
+export type AccountEmailVerifyPath = "/account/email/verify";
+export type AccountLanguagePath = "/account/language";
+export type AccountNotificationPreferencesPath = "/account/notification-preferences";
+export type AccountPasswordRequestPath = "/account/password/request";
+export type AccountPasswordConfirmPath = "/account/password/confirm";
+export type AccountTelegramLinkPath = "/account/telegram/link";
+export type AuthEmailMagicPath = "/auth/email/magic";
+export type AuthEmailPasswordPath = "/auth/email/password";
+export type AuthEmailRequestPath = "/auth/email/request";
+export type AuthEmailVerifyPath = "/auth/email/verify";
+export type AuthExternalPendingPath = "/auth/external/pending";
+export type AuthExternalRequestPath = "/auth/external/request";
+export type AuthExternalVerifyPath = "/auth/external/verify";
+export type AuthExternalCancelPath = "/auth/external/cancel";
+export type AuthLogoutPath = "/auth/logout";
+export type AuthTokenPath = "/auth/token";
+export type ServerStatusPath = "/status";
+export type DeviceTopupOptionsPath = "/devices/topup-options";
+export type DevicesDisconnectPath = "/devices/disconnect";
+export type DevicesRenamePath = "/devices/rename";
+export type TariffChangeOptionsPath = "/tariffs/change-options";
+export type PlansViewedPath = "/plans/viewed";
+export type TariffChangePath = "/tariffs/change";
+export type TariffChangePaymentPath = "/tariffs/change-payment";
+export type SubscriptionAutoRenewPath = "/subscription/auto-renew";
+export type SubscriptionReissuePath = "/subscription/reissue";
+export type SubscriptionPromoQuotePath = "/subscription/quote-promo";
+export type SubscriptionQuotePath = "/subscription/quote";
+export type ReferralWelcomeBonusClaimPath = "/referral/welcome-bonus/claim";
+export type PromoApplyPath = "/promo/apply";
+export type PromoStatusPath = "/promo/status";
+export type TrialActivatePath = "/trial/activate";
+export type SupportTicketsListPath = "/support/tickets" | `/support/tickets?${string}`;
+export type SupportUnreadPath = "/support/unread";
+export type SubscriptionGuidesPath = "/subscription-guides";
+export type PublicSubscriptionGuidesPath =
+  BuiltApiPath<"/api/subscription-guides/public/{share_token}">;
+export type PaymentsPath = "/payments";
+export type PaymentHistoryPath = BuiltApiPath<"/api/payments/history">;
+
+export function buildPaymentHistoryPath(limit = 10, offset = 0): PaymentHistoryPath {
+  return builtApiPath<"/api/payments/history">(
+    `/payments/history?${new URLSearchParams({ limit: String(limit), offset: String(offset) })}`
+  );
+}
+export type PartnerWithdrawalCancelPath = BuiltApiPath<"/api/partner/withdrawals/{id}/cancel">;
+
+type MockContext = Record<string, unknown>;
+export type MockApi = (
+  path: string,
+  options: RequestInit,
+  context: MockContext
+) => unknown | Promise<unknown>;
+
+type ApiClientOptions = {
+  csrfCookieName?: string;
+  getAuthToken?: () => string;
+  getCsrfToken?: () => string;
+  getEmojiCacheScope?: () => string;
+  getTariffAccessCode?: () => string;
+  onUnauthorized?: () => void;
+  onMaintenance?: () => void;
+  mockApi?: MockApi | null;
+  getMockContext?: () => MockContext;
+  requestTimeoutMs?: number;
+};
+
+const DEFAULT_API_REQUEST_TIMEOUT_MS = 15000;
+const WEBAPP_API_BASE = "/api";
+
+export function buildApiUrl(path: string): string {
+  const value = String(path || "").trim();
+  if (!value) return WEBAPP_API_BASE;
+  if (value.startsWith("/api")) return value;
+  return `${WEBAPP_API_BASE}/${value.replace(/^\/+/, "")}`;
+}
+
+export type ApiClient = {
+  api<Path extends ApiPathInput, Options extends RequestInit | undefined = undefined>(
+    path: Path,
+    options?: Options
+  ): Promise<ApiResponseFor<Path, Options>>;
+  apiUnchecked(path: string, options?: RequestInit): Promise<Record<string, unknown>>;
+  apiBlob(path: string, options?: RequestInit): Promise<Blob>;
+  publicApi<Path extends ApiPathInput>(
+    path: Path,
+    payload?: PostPayload<Path>,
+    options?: Pick<RequestInit, "signal">
+  ): Promise<PostResponse<Path>>;
+  publicApiUnchecked(
+    path: string,
+    payload?: Record<string, unknown>,
+    options?: Pick<RequestInit, "signal">
+  ): Promise<Record<string, unknown>>;
+};
+
+export function builtApiPath<Template extends RawApiPath>(path: string): BuiltApiPath<Template> {
+  return path as BuiltApiPath<Template>;
+}
+
+export type MePath = "/me" | "/me?fresh=1";
+export function buildMePath(fresh: boolean = false): MePath {
+  return fresh ? "/me?fresh=1" : "/me";
+}
+
+export type ThemeEffectsPath = "/theme-effects" | `/theme-effects?${string}`;
+
+/** Adds the administrator's live-preview target so the adapter is exposed. */
+export function buildThemeEffectsPath(previewKey?: string | null): ThemeEffectsPath {
+  const key = String(previewKey || "").trim();
+  return key ? `/theme-effects?theme_preview=${encodeURIComponent(key)}` : "/theme-effects";
+}
+
+export function buildPartnerWithdrawalCancelPath(id: string | number): PartnerWithdrawalCancelPath {
+  return builtApiPath<"/api/partner/withdrawals/{id}/cancel">(
+    `/partner/withdrawals/${encodeURIComponent(String(id))}/cancel`
+  );
+}
+
+export function buildAccountEmailRequestPath(): AccountEmailRequestPath {
+  return "/account/email/request";
+}
+
+export function buildAccountEmailVerifyPath(): AccountEmailVerifyPath {
+  return "/account/email/verify";
+}
+
+export function buildAccountLanguagePath(): AccountLanguagePath {
+  return "/account/language";
+}
+
+export function buildAccountNotificationPreferencesPath(): AccountNotificationPreferencesPath {
+  return "/account/notification-preferences";
+}
+
+export function buildAccountPasswordRequestPath(): AccountPasswordRequestPath {
+  return "/account/password/request";
+}
+
+export function buildAccountPasswordConfirmPath(): AccountPasswordConfirmPath {
+  return "/account/password/confirm";
+}
+
+export function buildAccountTelegramLinkPath(): AccountTelegramLinkPath {
+  return "/account/telegram/link";
+}
+
+export function buildAuthEmailMagicPath(): AuthEmailMagicPath {
+  return "/auth/email/magic";
+}
+
+export function buildAuthEmailPasswordPath(): AuthEmailPasswordPath {
+  return "/auth/email/password";
+}
+
+export function buildAuthEmailRequestPath(): AuthEmailRequestPath {
+  return "/auth/email/request";
+}
+
+export function buildAuthEmailVerifyPath(): AuthEmailVerifyPath {
+  return "/auth/email/verify";
+}
+
+export function buildAuthExternalPendingPath(): AuthExternalPendingPath {
+  return "/auth/external/pending";
+}
+
+export function buildAuthExternalRequestPath(): AuthExternalRequestPath {
+  return "/auth/external/request";
+}
+
+export function buildAuthExternalVerifyPath(): AuthExternalVerifyPath {
+  return "/auth/external/verify";
+}
+
+export function buildAuthExternalCancelPath(): AuthExternalCancelPath {
+  return "/auth/external/cancel";
+}
+
+export function buildAuthLogoutPath(): AuthLogoutPath {
+  return "/auth/logout";
+}
+
+export function buildAuthTokenPath(): AuthTokenPath {
+  return "/auth/token";
+}
+
+export function buildDevicesPath(): "/devices" {
+  return "/devices";
+}
+
+export function buildServerStatusPath(): ServerStatusPath {
+  return "/status";
+}
+
+export function buildDevicesDisconnectPath(): DevicesDisconnectPath {
+  return "/devices/disconnect";
+}
+
+export function buildDevicesRenamePath(): DevicesRenamePath {
+  return "/devices/rename";
+}
+
+export function buildDeviceTopupOptionsPath(): DeviceTopupOptionsPath {
+  return "/devices/topup-options";
+}
+
+export function buildPlansViewedPath(): PlansViewedPath {
+  return "/plans/viewed";
+}
+
+export type AdminHealthPath = "/admin/health" | "/admin/health?refresh=1";
+export function buildAdminHealthPath(refresh: boolean = false): AdminHealthPath {
+  return refresh ? "/admin/health?refresh=1" : "/admin/health";
+}
+
+export type AdminDocumentsPath = "/admin/documents";
+export function buildAdminDocumentsPath(): AdminDocumentsPath {
+  return "/admin/documents";
+}
+
+export type AdminDocumentPath = BuiltApiPath<"/api/admin/documents/{slug}">;
+export function buildAdminDocumentPath(slug: string): AdminDocumentPath {
+  return builtApiPath<"/api/admin/documents/{slug}">(
+    `/admin/documents/${String(slug)
+      .split("/")
+      .map((segment) => encodeURIComponent(segment))
+      .join("/")}`
+  );
+}
+
+export type TariffTopupOptionsPath = `/tariffs/topup-options?kind=${string}`;
+export function buildTariffTopupOptionsPath(kind: string): TariffTopupOptionsPath {
+  return `/tariffs/topup-options?kind=${encodeURIComponent(String(kind))}`;
+}
+
+export type PaymentStatusPath = BuiltApiPath<"/api/payments/{payment_id}">;
+export function buildPaymentStatusPath(paymentId: string | number): PaymentStatusPath {
+  return builtApiPath<"/api/payments/{payment_id}">(
+    `/payments/${encodeURIComponent(String(paymentId))}`
+  );
+}
+
+export type PaymentCancelPath = BuiltApiPath<"/api/payments/{payment_id}/cancel">;
+export function buildPaymentCancelPath(paymentId: string | number): PaymentCancelPath {
+  return builtApiPath<"/api/payments/{payment_id}/cancel">(
+    `/payments/${encodeURIComponent(String(paymentId))}/cancel`
+  );
+}
+
+export type QaPaymentCompletePath = BuiltApiPath<"/api/payments/{payment_id}/qa/complete">;
+export function buildQaPaymentCompletePath(paymentId: string | number): QaPaymentCompletePath {
+  return builtApiPath<"/api/payments/{payment_id}/qa/complete">(
+    `/payments/${encodeURIComponent(String(paymentId))}/qa/complete`
+  );
+}
+
+export type SupportTicketPath = BuiltApiPath<"/api/support/tickets/{id}">;
+export function buildSupportTicketPath(
+  ticketId: string | number,
+  afterMessageId?: number
+): SupportTicketPath {
+  const query =
+    afterMessageId === undefined
+      ? ""
+      : `?after_message_id=${Math.max(0, Math.trunc(afterMessageId))}`;
+  return builtApiPath<"/api/support/tickets/{id}">(
+    `/support/tickets/${encodeURIComponent(String(ticketId))}${query}`
+  );
+}
+
+export function buildSupportTicketsPath(params?: URLSearchParams): SupportTicketsListPath {
+  const query = params?.toString();
+  return (query ? `/support/tickets?${query}` : "/support/tickets") as SupportTicketsListPath;
+}
+
+export function buildSupportUnreadPath(): SupportUnreadPath {
+  return "/support/unread";
+}
+
+export function buildPublicSubscriptionGuidesPath(
+  token: string | number
+): PublicSubscriptionGuidesPath {
+  return builtApiPath<"/api/subscription-guides/public/{share_token}">(
+    `/subscription-guides/public/${encodeURIComponent(String(token))}`
+  );
+}
+
+export function buildTariffChangeOptionsPath(): TariffChangeOptionsPath {
+  return "/tariffs/change-options";
+}
+
+export function buildTariffChangePath(): TariffChangePath {
+  return "/tariffs/change";
+}
+
+export function buildTariffChangePaymentPath(): TariffChangePaymentPath {
+  return "/tariffs/change-payment";
+}
+
+export function buildSubscriptionAutoRenewPath(): SubscriptionAutoRenewPath {
+  return "/subscription/auto-renew";
+}
+
+export function buildSubscriptionReissuePath(): SubscriptionReissuePath {
+  return "/subscription/reissue";
+}
+
+export function buildSubscriptionPromoQuotePath(): SubscriptionPromoQuotePath {
+  return "/subscription/quote-promo";
+}
+
+export function buildSubscriptionQuotePath(): SubscriptionQuotePath {
+  return "/subscription/quote";
+}
+
+export function buildReferralWelcomeBonusClaimPath(): ReferralWelcomeBonusClaimPath {
+  return "/referral/welcome-bonus/claim";
+}
+
+export function buildPromoApplyPath(): PromoApplyPath {
+  return "/promo/apply";
+}
+
+export function buildPromoStatusPath(): PromoStatusPath {
+  return "/promo/status";
+}
+
+export function buildTrialActivatePath(): TrialActivatePath {
+  return "/trial/activate";
+}
+
+export function buildSubscriptionGuidesPath(): SubscriptionGuidesPath {
+  return "/subscription-guides";
+}
+
+export function buildPaymentsPath(): PaymentsPath {
+  return "/payments";
+}
+
+export type SupportTicketMessagesPath = BuiltApiPath<"/api/support/tickets/{id}/messages">;
+export function buildSupportTicketMessagesPath(
+  ticketId: string | number
+): SupportTicketMessagesPath {
+  return builtApiPath<"/api/support/tickets/{id}/messages">(
+    `/support/tickets/${encodeURIComponent(String(ticketId))}/messages`
+  );
+}
+
+export type SupportTicketEmojiPath = BuiltApiPath<"/api/support/tickets/{id}/emoji/{emoji_id}">;
+export function buildSupportTicketEmojiPath(
+  ticketId: string | number,
+  emojiId: string
+): SupportTicketEmojiPath {
+  return builtApiPath<"/api/support/tickets/{id}/emoji/{emoji_id}">(
+    `/support/tickets/${encodeURIComponent(String(ticketId))}/emoji/${encodeURIComponent(emojiId)}`
+  );
+}
+
+export type SupportTicketReadPath = BuiltApiPath<"/api/support/tickets/{id}/read">;
+export function buildSupportTicketReadPath(ticketId: string | number): SupportTicketReadPath {
+  return builtApiPath<"/api/support/tickets/{id}/read">(
+    `/support/tickets/${encodeURIComponent(String(ticketId))}/read`
+  );
+}
+
+export type SupportTicketTypingPath = BuiltApiPath<"/api/support/tickets/{id}/typing">;
+export function buildSupportTicketTypingPath(ticketId: string | number): SupportTicketTypingPath {
+  return builtApiPath<"/api/support/tickets/{id}/typing">(
+    `/support/tickets/${encodeURIComponent(String(ticketId))}/typing`
+  );
+}
+
+export type AdminSettingsPath = "/admin/settings";
+export function buildAdminGiftPath(
+  id: string | number
+): BuiltApiPath<"/api/admin/gifts/{gift_id}"> {
+  return builtApiPath<"/api/admin/gifts/{gift_id}">(
+    `/admin/gifts/${encodeURIComponent(String(id))}`
+  );
+}
+
+export type AdminGiftRevokePath = BuiltApiPath<"/api/admin/gifts/{gift_id}/revoke">;
+export function buildAdminGiftRevokePath(id: string | number): AdminGiftRevokePath {
+  return builtApiPath<"/api/admin/gifts/{gift_id}/revoke">(
+    `/admin/gifts/${encodeURIComponent(String(id))}/revoke`
+  );
+}
+
+export function buildAdminSettingsPath(): AdminSettingsPath {
+  return "/admin/settings";
+}
+
+export type AdminInformationPagesPath =
+  "/admin/information-pages" | `/admin/information-pages?${string}`;
+export function buildAdminInformationPagesPath(path?: string): AdminInformationPagesPath {
+  const query = path ? new URLSearchParams({ path }).toString() : "";
+  return (
+    query ? `/admin/information-pages?${query}` : "/admin/information-pages"
+  ) as AdminInformationPagesPath;
+}
+
+export type AdminTariffsPath = "/admin/tariffs";
+export function buildAdminTariffsPath(): AdminTariffsPath {
+  return "/admin/tariffs";
+}
+
+export type AdminTariffReconciliationPath = "/admin/tariffs/reconciliation";
+export function buildAdminTariffReconciliationPath(): AdminTariffReconciliationPath {
+  return "/admin/tariffs/reconciliation";
+}
+
+export type AdminTariffsTributeCatalogPath = "/admin/tariffs/tribute/catalog";
+export function buildAdminTariffsTributeCatalogPath(): AdminTariffsTributeCatalogPath {
+  return "/admin/tariffs/tribute/catalog";
+}
+
+export type AdminPanelInternalSquadsPath = "/admin/panel/internal-squads";
+export function buildAdminPanelInternalSquadsPath(): AdminPanelInternalSquadsPath {
+  return "/admin/panel/internal-squads";
+}
+
+export type AdminUsersPath = "/admin/users" | `/admin/users?${string}`;
+export function buildAdminUserRelationshipsPath(): BuiltApiPath<"/api/admin/users/relationships"> {
+  return builtApiPath<"/api/admin/users/relationships">("/admin/users/relationships");
+}
+
+export function buildAdminUsersPath(params?: URLSearchParams): AdminUsersPath {
+  const query = params?.toString();
+  return (query ? `/admin/users?${query}` : "/admin/users") as AdminUsersPath;
+}
+
+export type AdminUserPath = BuiltApiPath<"/api/admin/users/{user_id}">;
+export function buildAdminUserPath(userId: string | number): AdminUserPath {
+  return builtApiPath<"/api/admin/users/{user_id}">(
+    `/admin/users/${encodeURIComponent(String(userId))}`
+  );
+}
+
+export type AdminUsersLogsPath = "/admin/logs" | `/admin/logs?${string}`;
+export function buildAdminUserLogsPath(params?: URLSearchParams): AdminUsersLogsPath {
+  const query = params?.toString();
+  return (query ? `/admin/logs?${query}` : "/admin/logs") as AdminUsersLogsPath;
+}
+
+export type AdminUserReferralsPath = BuiltApiPath<"/api/admin/users/{user_id}/referrals">;
+export function buildAdminUserReferralsPath(
+  userId: string | number,
+  params?: URLSearchParams
+): AdminUserReferralsPath {
+  const base = `/admin/users/${encodeURIComponent(String(userId))}/referrals`;
+  const query = params?.toString();
+  return builtApiPath<"/api/admin/users/{user_id}/referrals">(query ? `${base}?${query}` : base);
+}
+
+export type AdminUserAction =
+  | "ban"
+  | "message"
+  | "message/preview"
+  | "telegram-profile-link"
+  | "extend"
+  | "tariff"
+  | "reset-trial"
+  | "subscription-reissue"
+  | "squad-overrides"
+  | "squad-overrides/refresh"
+  | "premium-override"
+  | "regular-traffic-override"
+  | "traffic-strategy"
+  | "hwid-device-limit"
+  | "traffic-grant"
+  | "balance-adjustment"
+  | "balance-conversion"
+  | "notification-preferences";
+type AdminUserActionTemplate =
+  | "/api/admin/users/{user_id}/ban"
+  | "/api/admin/users/{user_id}/message"
+  | "/api/admin/users/{user_id}/message/preview"
+  | "/api/admin/users/{user_id}/telegram-profile-link"
+  | "/api/admin/users/{user_id}/extend"
+  | "/api/admin/users/{user_id}/tariff"
+  | "/api/admin/users/{user_id}/reset-trial"
+  | "/api/admin/users/{user_id}/subscription-reissue"
+  | "/api/admin/users/{user_id}/squad-overrides"
+  | "/api/admin/users/{user_id}/squad-overrides/refresh"
+  | "/api/admin/users/{user_id}/premium-override"
+  | "/api/admin/users/{user_id}/regular-traffic-override"
+  | "/api/admin/users/{user_id}/traffic-strategy"
+  | "/api/admin/users/{user_id}/hwid-device-limit"
+  | "/api/admin/users/{user_id}/traffic-grant"
+  | "/api/admin/users/{user_id}/balance-adjustment"
+  | "/api/admin/users/{user_id}/balance-conversion"
+  | "/api/admin/users/{user_id}/notification-preferences";
+export type AdminUserActionPath = BuiltApiPath<AdminUserActionTemplate>;
+export function buildAdminUserActionPath(
+  userId: string | number,
+  action: AdminUserAction
+): AdminUserActionPath {
+  return builtApiPath<AdminUserActionTemplate>(
+    `/admin/users/${encodeURIComponent(String(userId))}/${action}`
+  );
+}
+
+export type AdminSupportTicketsPath = "/admin/support/tickets" | `/admin/support/tickets?${string}`;
+export function buildAdminSupportTicketsPath(params: URLSearchParams): AdminSupportTicketsPath {
+  return `/admin/support/tickets?${params.toString()}` as AdminSupportTicketsPath;
+}
+
+export type AdminSupportTicketPath = BuiltApiPath<"/api/admin/support/tickets/{id}">;
+export function buildAdminSupportTicketPath(ticketId: string | number): AdminSupportTicketPath {
+  return builtApiPath<"/api/admin/support/tickets/{id}">(
+    `/admin/support/tickets/${encodeURIComponent(String(ticketId))}`
+  );
+}
+
+export type AdminSupportTicketMessagesPath =
+  BuiltApiPath<"/api/admin/support/tickets/{id}/messages">;
+export function buildAdminSupportTicketMessagesPath(
+  ticketId: string | number
+): AdminSupportTicketMessagesPath {
+  return builtApiPath<"/api/admin/support/tickets/{id}/messages">(
+    `/admin/support/tickets/${encodeURIComponent(String(ticketId))}/messages`
+  );
+}
+
+export type AdminSupportTicketReadPath = BuiltApiPath<"/api/admin/support/tickets/{id}/read">;
+export function buildAdminSupportTicketReadPath(
+  ticketId: string | number
+): AdminSupportTicketReadPath {
+  return builtApiPath<"/api/admin/support/tickets/{id}/read">(
+    `/admin/support/tickets/${encodeURIComponent(String(ticketId))}/read`
+  );
+}
+
+export type AdminSupportTicketTypingPath = BuiltApiPath<"/api/admin/support/tickets/{id}/typing">;
+export function buildAdminSupportTicketTypingPath(
+  ticketId: string | number
+): AdminSupportTicketTypingPath {
+  return builtApiPath<"/api/admin/support/tickets/{id}/typing">(
+    `/admin/support/tickets/${encodeURIComponent(String(ticketId))}/typing`
+  );
+}
+
+export type AdminSupportPath = "/admin/support" | "/admin/support/{id}";
+export function buildAdminSupportPath(ticketId?: string | number | null): AdminSupportPath {
+  return ticketId
+    ? (`/admin/support/${encodeURIComponent(String(ticketId))}` as AdminSupportPath)
+    : "/admin/support";
+}
+
+export type AdminBroadcastPath = "/admin/broadcast";
+export function buildAdminBroadcastPath(): AdminBroadcastPath {
+  return "/admin/broadcast";
+}
+
+export type AdminBroadcastsPath = "/admin/broadcasts";
+export function buildAdminBroadcastsPath(): AdminBroadcastsPath {
+  return "/admin/broadcasts";
+}
+
+export type AdminBroadcastItemPath = BuiltApiPath<"/api/admin/broadcasts/{id}">;
+export function buildAdminBroadcastItemPath(broadcastId: string | number): AdminBroadcastItemPath {
+  return builtApiPath<"/api/admin/broadcasts/{id}">(
+    `/admin/broadcasts/${encodeURIComponent(String(broadcastId))}`
+  );
+}
+
+export type AdminBroadcastFailuresPath = BuiltApiPath<"/api/admin/broadcasts/{id}/failures">;
+export function buildAdminBroadcastFailuresPath(
+  broadcastId: string | number,
+  params?: URLSearchParams
+): AdminBroadcastFailuresPath {
+  const base = `/admin/broadcasts/${encodeURIComponent(String(broadcastId))}/failures`;
+  const query = params?.toString();
+  return builtApiPath<"/api/admin/broadcasts/{id}/failures">(query ? `${base}?${query}` : base);
+}
+
+export type AdminBroadcastAudienceCountsPath = "/admin/broadcast/audience-counts";
+export function buildAdminBroadcastAudienceCountsPath(): AdminBroadcastAudienceCountsPath {
+  return "/admin/broadcast/audience-counts";
+}
+
+export type AdminBroadcastShortcodesPath = "/admin/broadcast/shortcodes";
+export function buildAdminBroadcastShortcodesPath(): AdminBroadcastShortcodesPath {
+  return "/admin/broadcast/shortcodes";
+}
+
+export type AdminBroadcastPreviewPath = "/admin/broadcast/preview";
+export function buildAdminBroadcastPreviewPath(): AdminBroadcastPreviewPath {
+  return "/admin/broadcast/preview";
+}
+
+export type AdminLogsPath = "/admin/logs" | `/admin/logs?${string}`;
+export function buildAdminLogsPath(params?: URLSearchParams): AdminLogsPath {
+  const query = params?.toString();
+  return (query ? `/admin/logs?${query}` : "/admin/logs") as AdminLogsPath;
+}
+
+export type AdminStatsPath = "/admin/stats";
+export function buildAdminStatsPath(): AdminStatsPath {
+  return "/admin/stats";
+}
+
+export type AdminSyncPath = "/admin/sync";
+export function buildAdminSyncPath(): AdminSyncPath {
+  return "/admin/sync";
+}
+
+export type AdminThemesPath = "/admin/themes";
+export function buildAdminThemesPath(): AdminThemesPath {
+  return "/admin/themes";
+}
+
+export type AdminAppearanceLogoPath = "/admin/appearance/logo";
+export function buildAdminAppearanceLogoPath(): AdminAppearanceLogoPath {
+  return "/admin/appearance/logo";
+}
+
+export type AdminAppearanceFaviconPath = "/admin/appearance/favicon";
+export function buildAdminAppearanceFaviconPath(): AdminAppearanceFaviconPath {
+  return "/admin/appearance/favicon";
+}
+
+export type AdminTranslationsPath = "/admin/translations";
+export function buildAdminTranslationsPath(): AdminTranslationsPath {
+  return "/admin/translations";
+}
+
+export type AdminBackupsPath = "/admin/backups";
+export function buildAdminBackupsPath(): AdminBackupsPath {
+  return "/admin/backups";
+}
+
+export type AdminBackupDetailPath = BuiltApiPath<"/api/admin/backup-archives/{archive_name}">;
+export function buildAdminBackupDetailPath(name: string): AdminBackupDetailPath {
+  return builtApiPath<"/api/admin/backup-archives/{archive_name}">(
+    `/admin/backup-archives/${encodeURIComponent(name)}`
+  );
+}
+
+export type AdminBackupDownloadPath =
+  BuiltApiPath<"/api/admin/backup-archives/{archive_name}/download">;
+export function buildAdminBackupDownloadPath(name: string): AdminBackupDownloadPath {
+  return builtApiPath<"/api/admin/backup-archives/{archive_name}/download">(
+    `/admin/backup-archives/${encodeURIComponent(name)}/download`
+  );
+}
+
+export type BackupRestoreStatusPath = BuiltApiPath<"/api/backup-restore-status/{job_id}">;
+export function buildBackupRestoreStatusPath(id: string): BackupRestoreStatusPath {
+  return builtApiPath<"/api/backup-restore-status/{job_id}">(
+    `/backup-restore-status/${encodeURIComponent(id)}`
+  );
+}
+
+export type AdminBackupsCreatePath = "/admin/backups/create";
+export function buildAdminBackupsCreatePath(): AdminBackupsCreatePath {
+  return "/admin/backups/create";
+}
+
+export type AdminBackupsUploadPath = "/admin/backups/upload";
+export function buildAdminBackupsUploadPath(): AdminBackupsUploadPath {
+  return "/admin/backups/upload";
+}
+
+export type AdminBackupsRestorePath = "/admin/backups/restore";
+export function buildAdminBackupsRestorePath(): AdminBackupsRestorePath {
+  return "/admin/backups/restore";
+}
+
+export type AdminPromosPath = "/admin/promos" | `/admin/promos?${string}`;
+export function buildAdminPromosPath(params?: URLSearchParams): AdminPromosPath {
+  const query = params?.toString();
+  return (query ? `/admin/promos?${query}` : "/admin/promos") as AdminPromosPath;
+}
+
+export type AdminPromoOptionsPath = "/admin/promos/options" | `/admin/promos/options?${string}`;
+export function buildAdminPromoOptionsPath(params?: URLSearchParams): AdminPromoOptionsPath {
+  const query = params?.toString();
+  return (
+    query ? `/admin/promos/options?${query}` : "/admin/promos/options"
+  ) as AdminPromoOptionsPath;
+}
+
+export type AdminPromoPath = BuiltApiPath<"/api/admin/promos/{promo_id}">;
+export function buildAdminPromoPath(promoId: string | number): AdminPromoPath {
+  return builtApiPath<"/api/admin/promos/{promo_id}">(
+    `/admin/promos/${encodeURIComponent(String(promoId))}`
+  );
+}
+
+export type AdminPromoActivationsPath = BuiltApiPath<"/api/admin/promos/{promo_id}/activations">;
+export function buildAdminPromoActivationsPath(
+  promoId: string | number,
+  params?: URLSearchParams
+): AdminPromoActivationsPath {
+  const base = `/admin/promos/${encodeURIComponent(String(promoId))}/activations`;
+  const query = params?.toString();
+  return builtApiPath<"/api/admin/promos/{promo_id}/activations">(
+    query ? `${base}?${query}` : base
+  );
+}
+
+const advertisingTemplates = {
+  detail: "/api/admin/ads/{campaign_id}/detail",
+  edit: "/api/admin/ads/{campaign_id}/edit",
+  archive: "/api/admin/ads/{campaign_id}/archive",
+  links: "/api/admin/ads/{campaign_id}/links",
+  linkToggle: "/api/admin/ads/{campaign_id}/links/{link_id}/toggle",
+  bindings: "/api/admin/ads/{campaign_id}/bindings",
+  endBinding: "/api/admin/ads/{campaign_id}/bindings/{binding_id}/end",
+  spend: "/api/admin/ads/{campaign_id}/spend",
+  preview: "/api/admin/ads/{campaign_id}/imports/preview",
+  confirm: "/api/admin/ads/{campaign_id}/imports/{batch_id}/confirm",
+  revert: "/api/admin/ads/{campaign_id}/imports/{batch_id}/revert",
+  candidates: "/api/admin/ads/{campaign_id}/imports/{batch_id}/candidates",
+  decide: "/api/admin/ads/{campaign_id}/candidates/{candidate_id}",
+} as const;
+
+export function buildAdvertisingPath<K extends keyof typeof advertisingTemplates>(
+  kind: K,
+  campaignId: number,
+  childId: string | number = "",
+  query?: URLSearchParams
+): BuiltApiPath<(typeof advertisingTemplates)[K]> {
+  const path = advertisingTemplates[kind]
+    .replace("/api", "")
+    .replace("{campaign_id}", encodeURIComponent(String(campaignId)))
+    .replace(
+      /\{(?:binding_id|batch_id|candidate_id|link_id)\}/g,
+      encodeURIComponent(String(childId))
+    );
+  return builtApiPath<(typeof advertisingTemplates)[K]>(query?.size ? `${path}?${query}` : path);
+}
+
+export type AdminAdsPath = BuiltApiPath<"/api/admin/ads">;
+export function buildAdvertisingExportPath(
+  campaignId: number,
+  query?: URLSearchParams
+): BuiltApiPath<"/api/admin/ads/{campaign_id}/export"> {
+  return builtApiPath<"/api/admin/ads/{campaign_id}/export">(
+    `/admin/ads/${campaignId}/export${query?.size ? `?${query}` : ""}`
+  );
+}
+export function buildAdminAdsPath(query?: URLSearchParams): AdminAdsPath {
+  return builtApiPath<"/api/admin/ads">(query?.size ? `/admin/ads?${query}` : "/admin/ads");
+}
+
+export type AdminAdPath = BuiltApiPath<"/api/admin/ads/{campaign_id}">;
+export function buildAdminAdPath(campaignId: string | number): AdminAdPath {
+  return builtApiPath<"/api/admin/ads/{campaign_id}">(
+    `/admin/ads/${encodeURIComponent(String(campaignId))}`
+  );
+}
+
+export type AdminAdTogglePath = BuiltApiPath<"/api/admin/ads/{campaign_id}/toggle">;
+export function buildAdminAdTogglePath(campaignId: string | number): AdminAdTogglePath {
+  return builtApiPath<"/api/admin/ads/{campaign_id}/toggle">(
+    `/admin/ads/${encodeURIComponent(String(campaignId))}/toggle`
+  );
+}
+
+export type AdminAdAssignPath = BuiltApiPath<"/api/admin/ads/{campaign_id}/assign">;
+export function buildAdminAdAssignPath(campaignId: string | number): AdminAdAssignPath {
+  return builtApiPath<"/api/admin/ads/{campaign_id}/assign">(
+    `/admin/ads/${encodeURIComponent(String(campaignId))}/assign`
+  );
+}
+
+export type AdminAdResetStatsPath = BuiltApiPath<"/api/admin/ads/{campaign_id}/reset-stats">;
+export function buildAdminAdResetStatsPath(campaignId: string | number): AdminAdResetStatsPath {
+  return builtApiPath<"/api/admin/ads/{campaign_id}/reset-stats">(
+    `/admin/ads/${encodeURIComponent(String(campaignId))}/reset-stats`
+  );
+}
+
+export type AdminAdPurchasesPath = BuiltApiPath<"/api/admin/ads/{campaign_id}/purchases">;
+export function buildAdminAdPurchasesPath(
+  campaignId: string | number,
+  params?: URLSearchParams
+): AdminAdPurchasesPath {
+  const base = `/admin/ads/${encodeURIComponent(String(campaignId))}/purchases`;
+  const query = params?.toString();
+  return builtApiPath<"/api/admin/ads/{campaign_id}/purchases">(query ? `${base}?${query}` : base);
+}
+
+export type AdminSupportStatsPath = "/admin/support/stats";
+export function buildAdminSupportStatsPath(): AdminSupportStatsPath {
+  return "/admin/support/stats";
+}
+
+export type AdminPaymentsPath = "/admin/payments" | `/admin/payments?${string}`;
+export function buildAdminPaymentsPath(params?: URLSearchParams): AdminPaymentsPath {
+  const query = params?.toString();
+  return (query ? `/admin/payments?${query}` : "/admin/payments") as AdminPaymentsPath;
+}
+
+export type AdminPaymentUsersPath = "/admin/payments/users" | "/admin/payments/users/{user_id}";
+export function buildAdminPaymentsUserPath(userId?: string | number | null): AdminPaymentUsersPath {
+  return userId
+    ? (`/admin/payments/users/${encodeURIComponent(String(userId))}` as AdminPaymentUsersPath)
+    : "/admin/payments/users";
+}
+
+export type AdminPaymentPath = BuiltApiPath<"/api/admin/payments/{payment_id}">;
+export function buildAdminPaymentPath(paymentId: string | number): AdminPaymentPath {
+  return builtApiPath<"/api/admin/payments/{payment_id}">(
+    `/admin/payments/${encodeURIComponent(String(paymentId))}`
+  );
+}
+
+export type AdminPaymentFinalizePath = BuiltApiPath<"/api/admin/payments/{payment_id}/finalize">;
+export function buildAdminPaymentFinalizePath(
+  paymentId: string | number
+): AdminPaymentFinalizePath {
+  return builtApiPath<"/api/admin/payments/{payment_id}/finalize">(
+    `/admin/payments/${encodeURIComponent(String(paymentId))}/finalize`
+  );
+}
+
+export type AdminPaymentReversePath = BuiltApiPath<"/api/admin/payments/{payment_id}/reverse">;
+export function buildAdminPaymentReversePath(paymentId: string | number): AdminPaymentReversePath {
+  return builtApiPath<"/api/admin/payments/{payment_id}/reverse">(
+    `/admin/payments/${encodeURIComponent(String(paymentId))}/reverse`
+  );
+}
+
+export type AdminPaymentsExportPath = "/api/admin/payments/export.csv";
+export function buildAdminPaymentsExportPath(): AdminPaymentsExportPath {
+  return "/api/admin/payments/export.csv";
+}
+
+export function unwrap<T extends { ok: boolean }>(response: T): Extract<T, { ok: true }> {
+  if (!response.ok) throw response;
+  return response as Extract<T, { ok: true }>;
+}
+
+export function createApiClient({
+  csrfCookieName = "rw_webapp_csrf",
+  getAuthToken = () => "",
+  getCsrfToken = () => "",
+  getEmojiCacheScope = () => "",
+  getTariffAccessCode = () => "",
+  onUnauthorized = () => {},
+  onMaintenance = () => {},
+  mockApi = null,
+  getMockContext = () => ({}),
+  requestTimeoutMs = DEFAULT_API_REQUEST_TIMEOUT_MS,
+}: ApiClientOptions = {}): ApiClient {
+  const isFormDataBody = (body: BodyInit | null | undefined) =>
+    typeof FormData !== "undefined" && body instanceof FormData;
+
+  function authenticatedHeaders(options: RequestInit): Headers {
+    const method = String(options.method || "GET").toUpperCase();
+    const headers = new Headers(options.headers);
+    headers.set("X-Billing-Period-Unit", "day");
+    const csrf = getCsrfToken() || readCookie(csrfCookieName) || "";
+    const authToken = getAuthToken();
+    const tariffAccessCode = String(getTariffAccessCode() || "")
+      .trim()
+      .toLowerCase();
+    if (authToken && !headers.has("Authorization")) {
+      headers.set("Authorization", `Bearer ${authToken}`);
+    }
+    if (/^[a-f0-9]{32}$/.test(tariffAccessCode) && !headers.has("X-Tariff-Access-Code")) {
+      headers.set("X-Tariff-Access-Code", tariffAccessCode);
+    }
+    if (csrf && ["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+      headers.set("X-CSRF-Token", csrf);
+    }
+    return headers;
+  }
+
+  async function requestJson(
+    path: string,
+    options: RequestInit = {}
+  ): Promise<Record<string, unknown>> {
+    if (mockApi) return (await mockApi(path, options, getMockContext())) as Record<string, unknown>;
+
+    const headers = authenticatedHeaders(options);
+    if (options.body && !headers.has("Content-Type") && !isFormDataBody(options.body)) {
+      headers.set("Content-Type", "application/json");
+    }
+
+    return fetchApiJson(
+      buildApiUrl(path),
+      path,
+      { ...options, headers },
+      requestTimeoutMs,
+      onUnauthorized,
+      onMaintenance
+    );
+  }
+
+  async function api<
+    Path extends ApiPathInput,
+    Options extends RequestInit | undefined = undefined,
+  >(path: Path, options: Options = {} as Options): Promise<ApiResponseFor<Path, Options>> {
+    return (await requestJson(path, options)) as ApiResponseFor<Path, Options>;
+  }
+
+  async function apiUnchecked(
+    path: string,
+    options: RequestInit = {}
+  ): Promise<Record<string, unknown>> {
+    return requestJson(path, options);
+  }
+
+  const apiBlob = createBlobRequester({
+    authenticatedHeaders,
+    sessionScope: () => getCsrfToken() || readCookie(csrfCookieName) || "",
+    persistentScope: getEmojiCacheScope,
+    buildApiUrl,
+    mockApi,
+    getMockContext,
+    onUnauthorized,
+    onMaintenance,
+    requestTimeoutMs,
+  });
+
+  async function publicApiUnchecked(
+    path: string,
+    payload: Record<string, unknown> = {},
+    options: Pick<RequestInit, "signal"> = {}
+  ): Promise<Record<string, unknown>> {
+    if (mockApi) {
+      return (await mockApi(
+        path,
+        { method: "POST", body: JSON.stringify(payload) },
+        getMockContext()
+      )) as Record<string, unknown>;
+    }
+    const { signal, cleanup } = requestSignal(
+      options.signal || currentBootSignal(),
+      requestTimeoutMs
+    );
+    try {
+      const response = await fetch(buildApiUrl(path), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal,
+        credentials: "same-origin",
+      });
+      return (await response.json()) as Record<string, unknown>;
+    } finally {
+      cleanup();
+    }
+  }
+
+  async function publicApi<Path extends ApiPathInput>(
+    path: Path,
+    payload: PostPayload<Path> = {} as PostPayload<Path>,
+    options: Pick<RequestInit, "signal"> = {}
+  ): Promise<PostResponse<Path>> {
+    return (await publicApiUnchecked(path, payload, options)) as PostResponse<Path>;
+  }
+
+  registerEmojiApiCacheScope(api, () =>
+    !mockApi && (getAuthToken() || getCsrfToken() || readCookie(csrfCookieName))
+      ? getEmojiCacheScope()
+      : ""
+  );
+  return { api, apiUnchecked, apiBlob, publicApi, publicApiUnchecked } as ApiClient;
+}

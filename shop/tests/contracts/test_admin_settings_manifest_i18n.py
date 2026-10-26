@@ -1,0 +1,1006 @@
+import json
+import re
+from pathlib import Path
+from typing import cast
+
+import pytest
+
+from bot.app.web.admin_settings_manifest import coerce_value, get_field_by_key, manifest_payload
+from bot.middlewares.i18n import resolve_locale_key
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+SUPPORT_RELATED_SETTINGS = (
+    "LOG_SUPPORT_THREAD_ID",
+    "SUPPORT_TICKETS_ENABLED",
+    "SUPPORT_ADMIN_TELEGRAM_NOTIFICATIONS_ENABLED",
+    "SUPPORT_ADMIN_EMAIL_NOTIFICATIONS_ENABLED",
+    "SUPPORT_ADMIN_NOTIFICATION_COOLDOWN_SECONDS",
+    "SUPPORT_ADMIN_EMAIL_COOLDOWN_SECONDS",
+    "SUPPORT_TICKET_MAX_BODY_LENGTH",
+    "SUPPORT_TICKET_MAX_SUBJECT_LENGTH",
+    "SUPPORT_TICKET_RATE_LIMIT_PER_HOUR",
+    "SUPPORT_MESSAGE_RATE_LIMIT_PER_MINUTE",
+    "SUPPORT_IMAGE_RATE_LIMIT_PER_DAY",
+)
+
+SUBSCRIPTION_PURCHASE_DESCRIPTION_SETTINGS = (
+    "SUBSCRIPTION_PURCHASE_DESCRIPTION_ENABLED",
+    "SUBSCRIPTION_PURCHASE_DESCRIPTION_RU",
+    "SUBSCRIPTION_PURCHASE_DESCRIPTION_EN",
+    "PAYMENT_REQUEST_TIMEOUT_SECONDS",
+    "PAYMENT_FAILURE_NOTIFICATION_GRACE_SECONDS",
+)
+
+SUBSCRIPTION_GUIDE_SETTINGS = (
+    "SUBSCRIPTION_GUIDES_ENABLED",
+    "SUBSCRIPTION_GATEWAY_ENABLED",
+    "SUBSCRIPTION_LINK_MODE",
+    "SUBSCRIPTION_GUIDES_BOT_MENU_ENABLED",
+    "SUBSCRIPTION_PAGE_CONFIG_PANEL_ENABLED",
+    "SUBSCRIPTION_PAGE_CONFIG_JSON_OVERRIDE_ENABLED",
+    "SUBSCRIPTION_PAGE_CONFIG_PATH",
+    "SUBSCRIPTION_PAGE_CONFIG_JSON",
+)
+
+BACKUP_SETTINGS = (
+    "BACKUP_ENABLED",
+    "BACKUP_CHAT_ID",
+    "BACKUP_THREAD_ID",
+    "BACKUP_INTERVAL_SECONDS",
+    "BACKUP_LOCAL_RETENTION",
+    "BACKUP_COMPOSE_ENABLED",
+)
+
+TORRENT_BLOCKER_NOTIFICATION_SETTINGS = (
+    "TORRENT_BLOCKER_NOTIFICATIONS_ENABLED",
+    "TORRENT_BLOCKER_TELEGRAM_NOTIFICATIONS_ENABLED",
+    "TORRENT_BLOCKER_EMAIL_NOTIFICATIONS_ENABLED",
+    "TORRENT_BLOCKER_NOTIFICATION_COOLDOWN_SECONDS",
+    "TORRENT_BLOCKER_NOTIFICATION_INCLUDE_IP",
+)
+
+TELEGRAM_ANTIFLOOD_SETTINGS = (
+    "TELEGRAM_DROP_NON_PRIVATE_UPDATES",
+    "TELEGRAM_ANTIFLOOD_ENABLED",
+    "TELEGRAM_ANTIFLOOD_WINDOW_SECONDS",
+    "TELEGRAM_ANTIFLOOD_MAX_UPDATES_PER_WINDOW",
+    "TELEGRAM_ANTIFLOOD_MESSAGE_MAX_PER_WINDOW",
+    "TELEGRAM_ANTIFLOOD_CALLBACK_MAX_PER_WINDOW",
+    "TELEGRAM_ANTIFLOOD_INLINE_MAX_PER_WINDOW",
+    "TELEGRAM_ANTIFLOOD_START_MAX_PER_WINDOW",
+    "TELEGRAM_ANTIFLOOD_EXPENSIVE_CALLBACK_MAX_PER_WINDOW",
+    "TELEGRAM_ACTION_COOLDOWN_ENABLED",
+    "TELEGRAM_PAYMENT_CALLBACK_COOLDOWN_SECONDS",
+    "TELEGRAM_TRIAL_CALLBACK_COOLDOWN_SECONDS",
+)
+
+EMAIL_AUTH_SETTINGS = (
+    "QA_AUTH_ENABLED",
+    "WEBAPP_AUTH_MAX_AGE_SECONDS",
+    "WEBAPP_LOGIN_TOKEN_TTL_SECONDS",
+    "SMTP_HOST",
+    "SMTP_PORT",
+    "SMTP_FALLBACK_PORTS",
+    "SMTP_TIMEOUT_SECONDS",
+    "SMTP_USERNAME",
+    "SMTP_PASSWORD",
+    "SMTP_FROM_EMAIL",
+    "SMTP_FROM_NAME",
+    "SMTP_STARTTLS",
+    "SMTP_USE_SSL",
+    "EMAIL_CODE_TTL_SECONDS",
+    "EMAIL_CODE_RESEND_SECONDS",
+    "EMAIL_CODE_MAX_ATTEMPTS",
+    "BRUTE_FORCE_MAX_FAILURES",
+    "BRUTE_FORCE_WINDOW_SECONDS",
+    "BRUTE_FORCE_LOCK_SECONDS",
+)
+
+REMNASHOP_MIGRATION_SETTINGS = (
+    "MIGRATION_REMNASHOP_REFERRAL_CODE_COMPAT_ENABLED",
+    "MIGRATION_REMNASHOP_PROMO_CODE_COMPAT_ENABLED",
+    "MIGRATION_REMNASHOP_IMPORTED_AT",
+    "MIGRATION_REMNASHOP_NOTES",
+)
+
+ADMIN_TARIFF_SETTINGS_PAGE_KEYS = {
+    "admin_tariffs_trial_title",
+    "admin_tariffs_trial_subtitle",
+    "admin_tariffs_trial_enabled",
+    "admin_tariffs_trial_without_oauth_enabled",
+    "admin_tariffs_trial_days",
+    "admin_tariffs_trial_traffic",
+    "admin_tariffs_trial_premium_traffic",
+    "admin_tariffs_trial_devices",
+    "admin_tariffs_trial_strategy",
+    "admin_tariffs_trial_squads",
+    "admin_tariffs_trial_squads_hint",
+    "admin_tariffs_trial_premium_squads",
+    "admin_tariffs_trial_premium_squads_hint",
+    "admin_tariffs_trial_add_squad",
+    "admin_tariffs_trial_add_premium_squad",
+    "admin_tariffs_trial_group_switch",
+    "admin_tariffs_trial_group_switch_hint",
+    "admin_tariffs_trial_group_general",
+    "admin_tariffs_trial_group_general_hint",
+    "admin_tariffs_trial_group_reset",
+    "admin_tariffs_trial_group_reset_hint",
+    "admin_tariffs_trial_group_squads",
+    "admin_tariffs_trial_group_squads_hint",
+    "admin_tariffs_referral_title",
+    "admin_tariffs_referral_subtitle",
+    "admin_tariffs_referral_group_welcome",
+    "admin_tariffs_referral_group_welcome_hint",
+    "admin_tariffs_referral_welcome_bonus_days",
+    "admin_tariffs_referral_without_telegram",
+    "admin_tariffs_referral_group_rules",
+    "admin_tariffs_referral_group_rules_hint",
+    "admin_tariffs_referral_one_bonus_per_referee",
+    "admin_tariffs_referral_one_bonus_per_referee_hint",
+    "admin_tariffs_referral_disposable_domains",
+    "admin_tariffs_referral_disposable_domains_hint",
+    "admin_tariffs_legacy_title",
+    "admin_tariffs_legacy_subtitle",
+    "admin_tariffs_legacy_refs",
+    "admin_tariffs_legacy_refs_hint",
+    "admin_tariffs_legacy_period",
+    "admin_tariffs_legacy_enabled",
+    "admin_tariffs_legacy_ref_inviter",
+    "admin_tariffs_legacy_ref_referee",
+    "admin_tariffs_legacy_traffic_packages",
+    "admin_tariffs_legacy_stars_traffic_packages",
+    "admin_tariffs_legacy_traffic_hint",
+    "admin_payment_rub",
+    "admin_payment_stars",
+}
+
+ADMIN_VISIBLE_RU_KEYS = {
+    "admin_appearance_theme_accent",
+    "admin_clear",
+    "admin_save",
+    "admin_saving",
+    "admin_search",
+    "admin_settings_badge_override",
+    "admin_settings_badge_secret",
+    "admin_settings_badge_dirty",
+    "admin_settings_icon_current",
+    "admin_settings_source_database_override",
+    "admin_settings_source_environment",
+    "admin_settings_icon_default_value",
+    "admin_settings_icon_empty",
+    "admin_settings_icon_picker_title",
+    "admin_settings_icon_use_default",
+    "admin_tariff_label_premium_squads",
+    "admin_tariff_premium",
+    "admin_tariff_squads",
+    "admin_tariff_tab_premium",
+}
+
+ADMIN_AT_SIMPLE_FALLBACK_RE = re.compile(
+    r"""\bat\(\s*["'`](?P<key>[^"'`$]+)["'`]\s*,\s*\{[^)]*?\}\s*,\s*["'`](?P<fallback>[^"'`$]*)["'`]""",
+    re.DOTALL,
+)
+
+
+def _manifest_by_key() -> dict[str, dict]:
+    return {item["key"]: item for item in manifest_payload()}
+
+
+def _manifest_items() -> list[dict]:
+    return cast(list[dict], manifest_payload())
+
+
+def _locale(language: str) -> dict[str, str]:
+    return cast(
+        dict[str, str],
+        json.loads((REPO_ROOT / "locales" / f"{language}.json").read_text(encoding="utf-8")),
+    )
+
+
+def _has_locale_key(messages: dict[str, str], key: str) -> bool:
+    return resolve_locale_key(key) in messages
+
+
+def test_maintenance_precedes_webapp_title_in_general_admin_settings():
+    items = _manifest_items()
+    manifest = {item["key"]: item for item in items}
+    field = manifest["WEBAPP_TITLE"]
+
+    assert field["section"] == "general"
+    assert field["section_order"] == 1
+    assert field["label"] == "Web App title"
+    assert [item["key"] for item in items if item["section"] == "general"][:2] == [
+        "MAINTENANCE_MODE_ENABLED",
+        "WEBAPP_TITLE",
+    ]
+
+
+def test_webapp_session_lifetime_is_editable_in_general_settings():
+    field = _manifest_by_key()["WEBAPP_SESSION_TTL_SECONDS"]
+
+    assert field["section"] == "general"
+    assert field["type"] == "int"
+    assert field["optional"] is False
+    assert field["min"] == 60
+    assert coerce_value(get_field_by_key("WEBAPP_SESSION_TTL_SECONDS"), "2592000") == 2592000
+    with pytest.raises(ValueError):
+        coerce_value(get_field_by_key("WEBAPP_SESSION_TTL_SECONDS"), "59")
+
+    for language in ("ru", "en"):
+        messages = _locale(language)
+        assert field["i18n_label_key"] in messages
+        assert field["i18n_description_key"] in messages
+
+
+def test_broadcast_blocked_filter_is_a_general_admin_setting():
+    field = _manifest_by_key()["ADMIN_BROADCAST_EXCLUDE_BLOCKED_TELEGRAM"]
+
+    assert field["type"] == "bool"
+    assert field["section"] == "general"
+    assert field["i18n_label_key"] == "admin_broadcast_exclude_blocked_telegram"
+    assert field["i18n_description_key"] == "admin_broadcast_exclude_blocked_telegram_hint"
+
+
+def test_server_status_url_is_admin_editable():
+    manifest = _manifest_by_key()
+    field = manifest["SERVER_STATUS_URL"]
+
+    assert field["type"] == "url"
+    assert field["section"] == "system"
+    assert field["subsection"] == "server_status"
+    assert field["i18n_label_key"] == "admin_settings_field_server_status_url_label"
+    for language in ("ru", "en"):
+        assert field["i18n_label_key"] in _locale(language)
+
+
+def test_server_status_manifest_has_typed_provider_choices():
+    manifest = _manifest_by_key()
+    keys = {
+        "SERVER_STATUS_ENABLED",
+        "SERVER_STATUS_SHOW_ON_HOME",
+        "SERVER_STATUS_PROVIDER",
+        "SERVER_STATUS_URL",
+        "SERVER_STATUS_KUMA_URL",
+        "SERVER_STATUS_XRAY_CHECKER_URL",
+        "SERVER_STATUS_CACHE_TTL_SECONDS",
+        "SERVER_STATUS_STALE_TTL_SECONDS",
+        "SERVER_STATUS_TIMEOUT_SECONDS",
+    }
+
+    assert all(manifest[key]["section"] == "system" for key in keys)
+    assert all(manifest[key]["subsection"] == "server_status" for key in keys)
+    assert "SERVER_STATUS_KUMA_SLUG" not in manifest
+    assert [choice["value"] for choice in manifest["SERVER_STATUS_PROVIDER"]["choices"]] == [
+        "url",
+        "uptime-kuma",
+        "xray-checker",
+    ]
+    provider_field = get_field_by_key("SERVER_STATUS_PROVIDER")
+    assert provider_field is not None
+    assert coerce_value(provider_field, "uptime-kuma") == "uptime-kuma"
+    with pytest.raises(ValueError, match="unsupported choice"):
+        coerce_value(provider_field, "both")
+
+    kuma_field = get_field_by_key("SERVER_STATUS_KUMA_URL")
+    assert kuma_field is not None
+    assert (
+        coerce_value(kuma_field, "https://status.example.test/kuma/status/services/")
+        == "https://status.example.test/kuma/status/services/"
+    )
+    with pytest.raises(ValueError, match="published /status/<slug> URL expected"):
+        coerce_value(kuma_field, "https://status.example.test/kuma//status/services")
+
+    home_field = manifest["SERVER_STATUS_SHOW_ON_HOME"]
+    assert home_field["type"] == "bool"
+    for language in ("ru", "en"):
+        messages = _locale(language)
+        assert home_field["i18n_label_key"] in messages
+        assert home_field["i18n_description_key"] in messages
+
+
+def test_default_user_traffic_strategy_is_a_general_admin_setting():
+    manifest = _manifest_by_key()
+    field = manifest["USER_TRAFFIC_STRATEGY"]
+
+    assert field["type"] == "string"
+    assert field["section"] == "general"
+    assert field["section_order"] == 1
+    assert field["label"] == "Default Traffic Reset Strategy"
+    assert field["choices"]
+    label_key = field["i18n_label_key"]
+    assert _locale("ru")[label_key] == "Стратегия сброса трафика по-умолчанию"
+    assert _locale("en")[label_key] == "Default Traffic Reset Strategy"
+
+
+def test_telegram_bot_menu_toggle_is_general_admin_setting():
+    manifest = _manifest_by_key()
+    field = manifest["TELEGRAM_BOT_MENU_DISABLED"]
+
+    assert field["type"] == "bool"
+    assert field["section"] == "general"
+    assert field["section_order"] == 1
+    for language in ("ru", "en"):
+        messages = _locale(language)
+        assert "admin_settings_section_general" in messages
+        assert field["i18n_label_key"] in messages
+        assert field["i18n_description_key"] in messages
+
+
+def test_user_theme_mode_toggle_is_an_appearance_setting():
+    field = _manifest_by_key()["WEBAPP_USER_THEME_MODE_ENABLED"]
+
+    assert field["type"] == "bool"
+    assert field["section"] == "appearance"
+    assert field["section_order"] == 2
+    for language in ("ru", "en"):
+        messages = _locale(language)
+        assert field["i18n_label_key"] in messages
+        assert field["i18n_description_key"] in messages
+
+
+def test_compact_home_toggle_is_an_appearance_setting():
+    field = _manifest_by_key()["WEBAPP_COMPACT_HOME_ENABLED"]
+
+    assert field["type"] == "bool"
+    assert field["section"] == "appearance"
+    assert field["section_order"] == 2
+    for language in ("ru", "en"):
+        messages = _locale(language)
+        assert field["i18n_label_key"] in messages
+        assert field["i18n_description_key"] in messages
+
+
+def test_admin_theme_effects_toggle_is_a_localized_appearance_setting():
+    field = _manifest_by_key()["WEBAPP_ADMIN_THEME_EFFECTS_ENABLED"]
+
+    assert field["type"] == "bool"
+    assert field["section"] == "appearance"
+    assert field["optional"] is False
+    for language in ("ru", "en"):
+        messages = _locale(language)
+        assert field["i18n_label_key"] in messages
+        assert field["i18n_description_key"] in messages
+
+
+def test_compact_login_toggles_are_localized():
+    manifest = _manifest_by_key()
+    global_field = manifest["WEBAPP_COMPACT_LOGIN_ENABLED"]
+    assert global_field["type"] == "bool"
+    assert global_field["section"] == "appearance"
+    for provider in ("telegram", "email", "google", "yandex", "discord", "passkey"):
+        field = manifest[f"{provider.upper()}_LOGIN_WIDE_BUTTON"]
+        assert field["type"] == "bool"
+        assert field["section"] == "login_methods"
+        assert field["subsection"] == provider
+        for language in ("ru", "en"):
+            messages = _locale(language)
+            assert field["i18n_label_key"] in messages
+            assert field["i18n_description_key"] in messages
+    for language in ("ru", "en"):
+        messages = _locale(language)
+        assert global_field["i18n_label_key"] in messages
+        assert global_field["i18n_description_key"] in messages
+
+
+def test_checkout_addon_ux_toggles_are_appearance_settings():
+    manifest = _manifest_by_key()
+    for key in (
+        "WEBAPP_CHECKOUT_ADDON_VALUE_ANIMATION_ENABLED",
+        "WEBAPP_CHECKOUT_ADDON_EDITOR_EXPANDED_BY_DEFAULT",
+    ):
+        field = manifest[key]
+        assert field["type"] == "bool"
+        assert field["section"] == "appearance"
+        assert field["section_order"] == 2
+        for language in ("ru", "en"):
+            messages = _locale(language)
+            assert field["i18n_label_key"] in messages
+            assert field["i18n_description_key"] in messages
+
+
+def test_recommended_login_method_toggles_are_localized():
+    manifest = _manifest_by_key()
+    expected_subsections = {
+        "TELEGRAM_LOGIN_RECOMMENDED": "telegram",
+        "EMAIL_LOGIN_RECOMMENDED": "email",
+        "GOOGLE_LOGIN_RECOMMENDED": "google",
+        "YANDEX_LOGIN_RECOMMENDED": "yandex",
+        "DISCORD_LOGIN_RECOMMENDED": "discord",
+        "PASSKEY_LOGIN_RECOMMENDED": "passkey",
+    }
+
+    for setting_key, subsection in expected_subsections.items():
+        field = manifest[setting_key]
+        assert field["type"] == "bool"
+        assert field["section"] == "login_methods"
+        assert field["subsection"] == subsection
+        for language in ("ru", "en"):
+            messages = _locale(language)
+            assert field["i18n_label_key"] in messages
+            assert field["i18n_description_key"] in messages
+
+
+def test_support_settings_manifest_uses_admin_i18n_keys():
+    manifest = _manifest_by_key()
+
+    assert manifest["SUPPORT_TICKETS_ENABLED"]["section"] == "support"
+    assert manifest["SUPPORT_TICKETS_ENABLED"]["section_order"] == 8
+
+    for setting_key in SUPPORT_RELATED_SETTINGS:
+        field = manifest[setting_key]
+        prefix = f"admin_settings_field_{setting_key.lower()}"
+
+        assert field["i18n_label_key"] == f"{prefix}_label"
+        assert field["i18n_description_key"] == f"{prefix}_description"
+
+
+def test_support_settings_i18n_keys_exist_in_admin_locales():
+    manifest = _manifest_by_key()
+
+    for language in ("ru", "en"):
+        messages = _locale(language)
+
+        assert "admin_settings_section_support" in messages
+        for setting_key in SUPPORT_RELATED_SETTINGS:
+            field = manifest[setting_key]
+            assert field["i18n_label_key"] in messages
+            assert field["i18n_description_key"] in messages
+
+
+def test_user_notification_preferences_setting_is_localized():
+    field = _manifest_by_key()["USER_NOTIFICATION_PREFERENCES_ENABLED"]
+
+    assert field["type"] == "bool"
+    assert field["section"] == "notifications"
+    assert field["subsection"] is None
+    for language in ("ru", "en"):
+        messages = _locale(language)
+        assert field["i18n_label_key"] in messages
+        assert field["i18n_description_key"] in messages
+
+
+def test_settings_choice_i18n_keys_exist_in_admin_locales():
+    fields_with_choices = [
+        item for item in _manifest_items() if isinstance(item.get("choices"), list)
+    ]
+    assert fields_with_choices
+
+    for language in ("ru", "en"):
+        messages = _locale(language)
+        missing: list[str] = []
+        for field in fields_with_choices:
+            for choice in field["choices"]:
+                key = choice.get("i18n_label_key")
+                if key and key not in messages:
+                    missing.append(str(key))
+
+        assert sorted(missing) == []
+
+
+def test_subscription_purchase_description_settings_i18n_keys_exist():
+    manifest = _manifest_by_key()
+
+    timeout_field = manifest["PAYMENT_REQUEST_TIMEOUT_SECONDS"]
+    assert timeout_field["type"] == "float"
+    assert timeout_field["optional"] is False
+    assert timeout_field["min"] == 1
+
+    for language in ("ru", "en"):
+        messages = _locale(language)
+        for setting_key in SUBSCRIPTION_PURCHASE_DESCRIPTION_SETTINGS:
+            field = manifest[setting_key]
+            assert field["section"] == "payments"
+            assert field["subsection"] == "checkout"
+            assert field["i18n_label_key"] in messages
+            assert field["i18n_description_key"] in messages
+
+
+def test_subscription_guide_settings_i18n_keys_exist():
+    manifest = _manifest_by_key()
+
+    assert manifest["SUBSCRIPTION_GUIDES_ENABLED"]["section"] == "subscription_guides"
+    assert manifest["SUBSCRIPTION_GUIDES_ENABLED"]["section_order"] == 10
+    assert manifest["SUBSCRIPTION_GATEWAY_ENABLED"]["section"] == "subscription_guides"
+    assert manifest["SUBSCRIPTION_GATEWAY_ENABLED"]["type"] == "bool"
+    link_mode = manifest["SUBSCRIPTION_LINK_MODE"]
+    assert link_mode["section"] == "subscription_guides"
+    assert link_mode["type"] == "string"
+    assert link_mode["optional"] is False
+    assert [choice["value"] for choice in link_mode["choices"]] == ["panel", "minishop"]
+    field = get_field_by_key("SUBSCRIPTION_LINK_MODE")
+    assert field is not None
+    assert coerce_value(field, "minishop") == "minishop"
+    assert coerce_value(field, "panel") == "panel"
+    with pytest.raises(ValueError, match="unsupported choice"):
+        coerce_value(field, "other")
+    assert manifest["SUBSCRIPTION_PAGE_CONFIG_JSON"]["type"] == "json"
+
+    for language in ("ru", "en"):
+        messages = _locale(language)
+
+        assert "admin_settings_section_subscription_guides" in messages
+        for setting_key in SUBSCRIPTION_GUIDE_SETTINGS:
+            field = manifest[setting_key]
+            assert field["i18n_label_key"] in messages
+            assert field["i18n_description_key"] in messages
+
+
+def test_backup_settings_i18n_keys_exist():
+    manifest = _manifest_by_key()
+
+    assert manifest["BACKUP_ENABLED"]["section"] == "backups"
+    assert manifest["BACKUP_ENABLED"]["section_order"] == 9
+    assert manifest["BACKUP_INTERVAL_SECONDS"]["min"] == 60
+    assert manifest["BACKUP_INTERVAL_SECONDS"]["optional"] is False
+    assert manifest["BACKUP_LOCAL_RETENTION"]["min"] == 1
+    assert manifest["BACKUP_LOCAL_RETENTION"]["optional"] is False
+
+    for language in ("ru", "en"):
+        messages = _locale(language)
+
+        assert "admin_settings_section_backups" in messages
+        for setting_key in BACKUP_SETTINGS:
+            field = manifest[setting_key]
+            assert field["i18n_label_key"] in messages
+            assert field["i18n_description_key"] in messages
+
+
+def test_torrent_blocker_notification_settings_are_localized_and_grouped():
+    manifest = _manifest_by_key()
+
+    for setting_key in TORRENT_BLOCKER_NOTIFICATION_SETTINGS:
+        field = manifest[setting_key]
+        assert field["section"] == "notifications"
+        assert field["section_order"] == 7
+        assert field["subsection"] == "torrent_blocker"
+        assert field["i18n_subsection_key"] == "admin_settings_subsection_torrent_blocker"
+
+    cooldown = manifest["TORRENT_BLOCKER_NOTIFICATION_COOLDOWN_SECONDS"]
+    assert cooldown["type"] == "int"
+    assert cooldown["min"] == 0
+    assert cooldown["max"] == 31536000
+
+    for language in ("ru", "en"):
+        messages = _locale(language)
+        assert "admin_settings_subsection_torrent_blocker" in messages
+        for setting_key in TORRENT_BLOCKER_NOTIFICATION_SETTINGS:
+            field = manifest[setting_key]
+            assert field["i18n_label_key"] in messages
+            assert field["i18n_description_key"] in messages
+
+
+def test_telegram_antiflood_settings_i18n_keys_exist():
+    manifest = _manifest_by_key()
+
+    for setting_key in TELEGRAM_ANTIFLOOD_SETTINGS:
+        field = manifest[setting_key]
+        assert field["section"] == "system"
+        assert field["section_order"] == 12
+        assert field["subsection"] == "telegram_antiflood"
+        assert field["i18n_subsection_key"] == "admin_settings_subsection_telegram_antiflood"
+
+    assert manifest["TELEGRAM_ANTIFLOOD_WINDOW_SECONDS"]["min"] == 1
+    for setting_key in (
+        "TELEGRAM_ANTIFLOOD_MAX_UPDATES_PER_WINDOW",
+        "TELEGRAM_ANTIFLOOD_MESSAGE_MAX_PER_WINDOW",
+        "TELEGRAM_ANTIFLOOD_CALLBACK_MAX_PER_WINDOW",
+        "TELEGRAM_ANTIFLOOD_INLINE_MAX_PER_WINDOW",
+        "TELEGRAM_ANTIFLOOD_START_MAX_PER_WINDOW",
+        "TELEGRAM_ANTIFLOOD_EXPENSIVE_CALLBACK_MAX_PER_WINDOW",
+        "TELEGRAM_PAYMENT_CALLBACK_COOLDOWN_SECONDS",
+        "TELEGRAM_TRIAL_CALLBACK_COOLDOWN_SECONDS",
+    ):
+        assert manifest[setting_key]["min"] == 0
+
+    for language in ("ru", "en"):
+        messages = _locale(language)
+
+        assert "admin_settings_section_system" in messages
+        assert "admin_settings_subsection_telegram_antiflood" in messages
+        for setting_key in TELEGRAM_ANTIFLOOD_SETTINGS:
+            field = manifest[setting_key]
+            assert field["i18n_label_key"] in messages
+            assert field["i18n_description_key"] in messages
+
+
+def test_email_auth_settings_i18n_keys_exist():
+    manifest = _manifest_by_key()
+
+    expected_subsections = {
+        "QA_AUTH_ENABLED": "email_auth",
+        "WEBAPP_AUTH_MAX_AGE_SECONDS": "email_auth",
+        "WEBAPP_LOGIN_TOKEN_TTL_SECONDS": "email_auth",
+        "SMTP_HOST": "smtp",
+        "SMTP_PORT": "smtp",
+        "SMTP_FALLBACK_PORTS": "smtp",
+        "SMTP_TIMEOUT_SECONDS": "smtp",
+        "SMTP_USERNAME": "smtp",
+        "SMTP_PASSWORD": "smtp",
+        "SMTP_FROM_EMAIL": "smtp",
+        "SMTP_FROM_NAME": "smtp",
+        "SMTP_STARTTLS": "smtp",
+        "SMTP_USE_SSL": "smtp",
+        "EMAIL_CODE_TTL_SECONDS": "email_codes",
+        "EMAIL_CODE_RESEND_SECONDS": "email_codes",
+        "EMAIL_CODE_MAX_ATTEMPTS": "email_codes",
+        "BRUTE_FORCE_MAX_FAILURES": "email_security",
+        "BRUTE_FORCE_WINDOW_SECONDS": "email_security",
+        "BRUTE_FORCE_LOCK_SECONDS": "email_security",
+    }
+
+    for setting_key in EMAIL_AUTH_SETTINGS:
+        field = manifest[setting_key]
+        assert field["section"] == "email"
+        assert field["section_order"] == 8
+        assert field["subsection"] == expected_subsections[setting_key]
+
+    invite_only = manifest["REGISTRATION_INVITE_ONLY_ENABLED"]
+    assert invite_only["section"] == "general"
+    assert invite_only["section_order"] == 1
+    assert invite_only["subsection"] is None
+
+    assert manifest["SMTP_PASSWORD"]["secret"] is True
+    assert manifest["SMTP_PORT"]["min"] == 1
+    assert manifest["SMTP_PORT"]["max"] == 65535
+    assert manifest["EMAIL_CODE_TTL_SECONDS"]["min"] == 60
+
+    for language in ("ru", "en"):
+        messages = _locale(language)
+
+        assert "admin_settings_section_email" in messages
+        for subsection in {"email_auth", "smtp", "email_codes", "email_security"}:
+            assert f"admin_settings_subsection_{subsection}" in messages
+        for setting_key in EMAIL_AUTH_SETTINGS:
+            field = manifest[setting_key]
+            assert field["i18n_label_key"] in messages
+            assert field["i18n_description_key"] in messages
+            if field.get("i18n_placeholder_key"):
+                assert field["i18n_placeholder_key"] in messages
+
+
+def test_remnashop_migration_settings_i18n_keys_exist():
+    manifest = _manifest_by_key()
+
+    for setting_key in REMNASHOP_MIGRATION_SETTINGS:
+        field = manifest[setting_key]
+        assert field["section"] == "migrations"
+        assert field["section_order"] == 13
+        assert field["subsection"] == "Remnashop"
+        assert field["i18n_subsection_key"] == "admin_settings_subsection_remnashop"
+
+    for language in ("ru", "en"):
+        messages = _locale(language)
+
+        assert "admin_settings_section_migrations" in messages
+        assert "admin_settings_subsection_remnashop" in messages
+        for setting_key in REMNASHOP_MIGRATION_SETTINGS:
+            field = manifest[setting_key]
+            assert field["i18n_label_key"] in messages
+            assert field["i18n_description_key"] in messages
+
+
+def test_backup_required_numeric_settings_reject_empty_values():
+    with pytest.raises(ValueError):
+        coerce_value(get_field_by_key("BACKUP_INTERVAL_SECONDS"), "")
+
+
+def test_subscription_purchase_descriptions_accept_explicit_empty_values():
+    for key in (
+        "SUBSCRIPTION_PURCHASE_DESCRIPTION_RU",
+        "SUBSCRIPTION_PURCHASE_DESCRIPTION_EN",
+    ):
+        assert coerce_value(get_field_by_key(key), "   ") == ""
+
+
+def test_support_link_coercion_normalizes_telegram_shortcuts():
+    field = get_field_by_key("SUPPORT_LINK")
+
+    assert coerce_value(field, "@help_center_bot") == "https://t.me/help_center_bot"
+    assert coerce_value(field, "t.me/help_center_bot") == "https://t.me/help_center_bot"
+
+
+def test_support_link_coercion_rejects_invalid_button_urls():
+    with pytest.raises(ValueError):
+        coerce_value(get_field_by_key("SUPPORT_LINK"), "not a link")
+
+
+def test_trial_required_settings_reject_empty_values():
+    for key in (
+        "TRIAL_ENABLED",
+        "TRIAL_PAYMENT_ENABLED",
+        "TRIAL_PAYMENT_PRICE",
+        "TRIAL_PAYMENT_STARS_PRICE",
+        "TRIAL_DURATION_DAYS",
+        "TRIAL_DAYS_STRATEGY",
+        "TRIAL_TRAFFIC_LIMIT_GB",
+        "TRIAL_TRAFFIC_STRATEGY",
+        "TRIAL_WITHOUT_OAUTH_ENABLED",
+    ):
+        with pytest.raises(ValueError):
+            coerce_value(get_field_by_key(key), "")
+
+
+def test_payment_provider_settings_include_webhook_metadata():
+    manifest = _manifest_by_key()
+
+    assert manifest["FREEKASSA_ENABLED"]["webhook_path"] == "/webhook/freekassa"
+    assert manifest["FREEKASSA_ENABLED"]["provider_id"] == "freekassa"
+    assert manifest["FREEKASSA_ENABLED"]["provider_info_url"] == "https://freekassa.net/"
+    assert manifest["FREEKASSA_ENABLED"]["provider_logo_url"] == "/provider-logos/freekassa.png"
+    assert manifest["PAYMENT_PLATEGA_CRYPTO_WEBAPP_LABEL_RU"]["webhook_path"] == "/webhook/platega"
+    assert manifest["YOOKASSA_SHOP_ID"]["webhook_requires_base_url"] is True
+    assert "webhook_path" not in manifest["PAYMENT_STARS_WEBAPP_LABEL_RU"]
+    assert manifest["PAYMENT_STARS_WEBAPP_LABEL_RU"]["provider_info_url"] == "https://telegram.org/"
+    assert (
+        manifest["PAYMENT_STARS_WEBAPP_LABEL_RU"]["provider_logo_url"]
+        == "/provider-logos/telegram-stars.png"
+    )
+
+
+def test_payment_provider_logo_assets_are_local_png_files():
+    logo_urls = {
+        str(item["provider_logo_url"])
+        for item in _manifest_items()
+        if item.get("provider_logo_url")
+    }
+
+    assert "/provider-logos/cryptopay.png" in logo_urls
+    assert len(logo_urls) >= 13
+    for logo_url in logo_urls:
+        assert re.fullmatch(r"/provider-logos/[A-Za-z0-9_-]+\.png", logo_url)
+        logo_path = REPO_ROOT / "frontend" / "public" / logo_url.removeprefix("/")
+        assert logo_path.is_file()
+        with logo_path.open("rb") as fh:
+            header = fh.read(24)
+            assert header.startswith(PNG_SIGNATURE)
+            if logo_url == "/provider-logos/oxapay.png":
+                assert int.from_bytes(header[16:20], "big") >= 96
+                assert int.from_bytes(header[20:24], "big") >= 96
+
+
+def test_payment_provider_settings_i18n_keys_exist_in_admin_locales():
+    provider_items = [item for item in _manifest_items() if item.get("provider_id")]
+    assert provider_items
+
+    for language in ("ru", "en"):
+        messages = _locale(language)
+        missing: list[str] = []
+        for field in provider_items:
+            for key_name in (
+                "i18n_label_key",
+                "i18n_description_key",
+                "i18n_subsection_key",
+            ):
+                key = field.get(key_name)
+                if key and key not in messages:
+                    missing.append(str(key))
+
+        assert sorted(set(missing)) == []
+
+
+def test_shared_payment_provider_option_i18n_does_not_bake_provider_names():
+    provider_names = {
+        str(item["provider_label"])
+        for item in _manifest_items()
+        if item.get("provider_id") and item.get("provider_label")
+    }
+
+    for language in ("ru", "en"):
+        messages = _locale(language)
+        baked_names: dict[str, list[str]] = {}
+        for key, value in messages.items():
+            if not key.startswith("admin_settings_provider_opt_"):
+                continue
+            if "{provider}" in value:
+                continue
+            offenders = sorted(name for name in provider_names if name and name in value)
+            if offenders:
+                baked_names[key] = offenders
+
+        assert baked_names == {}
+
+
+def test_remnawave_settings_include_panel_webhook_metadata():
+    manifest = _manifest_by_key()
+    field = manifest["PANEL_WEBHOOK_SECRET"]
+    remnawave_keys = (
+        "PANEL_API_URL",
+        "PANEL_API_KEY",
+        "PANEL_API_COOKIE",
+        "PANEL_API_TOTAL_TIMEOUT_SECONDS",
+        "PANEL_API_CONNECT_TIMEOUT_SECONDS",
+        "PANEL_API_SOCK_CONNECT_TIMEOUT_SECONDS",
+        "PANEL_API_SOCK_READ_TIMEOUT_SECONDS",
+        "PANEL_WEBHOOK_SECRET",
+        "USER_SQUAD_UUIDS",
+        "USER_EXTERNAL_SQUAD_UUID",
+    )
+    timeout_keys = remnawave_keys[3:7]
+
+    assert field["webhook_path"] == "/webhook/panel"
+    assert field["webhook_requires_base_url"] is True
+    assert field["provider_id"] == "remnawave"
+    assert field["webhook_hint_i18n_key"] == "admin_settings_panel_webhook_url_hint"
+    for setting_key in remnawave_keys:
+        assert manifest[setting_key]["section"] == "remnawave"
+        assert manifest[setting_key]["section_order"] == 3
+        assert manifest[setting_key]["subsection"] is None
+
+    for setting_key in timeout_keys:
+        assert manifest[setting_key]["type"] == "float"
+        assert manifest[setting_key]["optional"] is False
+        assert manifest[setting_key]["min"] == 1
+    assert manifest["PANEL_API_COOKIE"]["secret"] is True
+
+    for language in ("ru", "en"):
+        messages = _locale(language)
+        assert "admin_settings_section_remnawave" in messages
+        assert field["webhook_hint_i18n_key"] in messages
+        for setting_key in timeout_keys:
+            assert manifest[setting_key]["i18n_label_key"] in messages
+            assert manifest[setting_key]["i18n_description_key"] in messages
+
+
+def test_public_panel_url_is_an_optional_localized_browser_setting():
+    field = _manifest_by_key()["PANEL_PUBLIC_URL"]
+    assert field["section"] == "remnawave"
+    assert field["type"] == "url"
+    assert field["optional"] is True
+    assert field["secret"] is False
+    for language in ("ru", "en"):
+        messages = _locale(language)
+        assert field["i18n_label_key"] in messages
+        assert field["i18n_description_key"] in messages
+
+
+def test_payment_provider_admin_only_toggles_are_mutually_exclusive():
+    manifest = _manifest_by_key()
+
+    assert manifest["WATA_ADMIN_ONLY_ENABLED"]["mutually_exclusive_key"] == "WATA_ENABLED"
+    assert manifest["WATA_ENABLED"]["mutually_exclusive_key"] == "WATA_ADMIN_ONLY_ENABLED"
+    assert (
+        manifest["WATA_CRYPTO_ADMIN_ONLY_ENABLED"]["mutually_exclusive_key"]
+        == "WATA_CRYPTO_ENABLED"
+    )
+    assert (
+        manifest["WATA_CRYPTO_ENABLED"]["mutually_exclusive_key"]
+        == "WATA_CRYPTO_ADMIN_ONLY_ENABLED"
+    )
+    assert (
+        manifest["PLATEGA_CRYPTO_ADMIN_ONLY_ENABLED"]["mutually_exclusive_key"]
+        == "PLATEGA_CRYPTO_ENABLED"
+    )
+    assert manifest["STARS_ADMIN_ONLY_ENABLED"]["mutually_exclusive_key"] == "STARS_ENABLED"
+    assert manifest["STARS_ENABLED"]["subsection"] == "Telegram Stars"
+    assert manifest["STARS_ADMIN_ONLY_ENABLED"]["subsection"] == "Telegram Stars"
+    assert manifest["PAYMENT_STARS_WEBAPP_LABEL_RU"]["subsection"] == "Telegram Stars"
+
+
+def test_legacy_tariff_settings_are_separated_from_payment_settings():
+    manifest = _manifest_by_key()
+    payment_fields = [item for item in _manifest_items() if item["section"] == "payments"]
+    payment_method_fields = [
+        item for item in payment_fields if item["key"] == "PAYMENT_METHODS_ORDER"
+    ]
+    payment_subsections = list(dict.fromkeys(item["subsection"] for item in payment_fields))
+
+    assert len(payment_method_fields) == 1
+    assert payment_method_fields[0]["section"] == "payments"
+    assert payment_method_fields[0]["subsection"] == "payment_button_order"
+    assert payment_subsections.index("payment_button_order") < payment_subsections.index(
+        "Telegram Stars"
+    )
+    assert payment_subsections.index("Telegram Stars") < payment_subsections.index("FreeKassa")
+    assert manifest["MONTH_1_ENABLED"]["section"] == "pricing"
+    assert manifest["MONTH_1_ENABLED"]["section_order"] == 11
+    assert manifest["TRIAL_ENABLED"]["section"] == "pricing"
+    assert manifest["TRIAL_ENABLED"]["subsection"] == "trial"
+    assert manifest["TRIAL_PAYMENT_ENABLED"]["section"] == "pricing"
+    assert manifest["TRIAL_PAYMENT_ENABLED"]["subsection"] == "trial"
+    assert manifest["TRIAL_PAYMENT_PRICE"]["min"] == 0
+    assert manifest["TRIAL_PAYMENT_STARS_PRICE"]["min"] == 0
+    assert manifest["TRIAL_WITHOUT_OAUTH_ENABLED"]["section"] == "system"
+    assert manifest["TRIAL_WITHOUT_OAUTH_ENABLED"]["subsection"] == "email_anti_abuse"
+    assert manifest["TRIAL_SQUAD_UUIDS"]["section"] == "pricing"
+    assert manifest["TRIAL_SQUAD_UUIDS"]["subsection"] == "trial"
+    assert manifest["TRIAL_PREMIUM_TRAFFIC_LIMIT_GB"]["section"] == "pricing"
+    assert manifest["TRIAL_PREMIUM_TRAFFIC_LIMIT_GB"]["subsection"] == "trial"
+    assert manifest["TRIAL_PREMIUM_TRAFFIC_LIMIT_GB"]["type"] == "float"
+    assert manifest["TRIAL_PREMIUM_TRAFFIC_LIMIT_GB"]["optional"] is True
+    assert manifest["TRIAL_PREMIUM_TRAFFIC_LIMIT_GB"]["min"] == 0
+    assert manifest["TRIAL_HWID_DEVICE_LIMIT"]["section"] == "pricing"
+    assert manifest["TRIAL_HWID_DEVICE_LIMIT"]["subsection"] == "trial"
+    assert manifest["TRIAL_HWID_DEVICE_LIMIT"]["type"] == "int"
+    assert manifest["TRIAL_HWID_DEVICE_LIMIT"]["optional"] is True
+    assert manifest["TRIAL_HWID_DEVICE_LIMIT"]["min"] == 0
+    assert manifest["TRIAL_PREMIUM_SQUAD_UUIDS"]["section"] == "pricing"
+    assert manifest["TRIAL_PREMIUM_SQUAD_UUIDS"]["subsection"] == "trial"
+    assert manifest["REFERRAL_PROGRAM_ENABLED"]["section"] == "pricing"
+    assert manifest["REFERRAL_PROGRAM_ENABLED"]["subsection"] == "referral"
+    assert manifest["REFERRAL_WELCOME_BONUS_DAYS"]["section"] == "pricing"
+    assert manifest["REFERRAL_WELCOME_BONUS_DAYS"]["subsection"] == "referral"
+    assert manifest["REFERRAL_WELCOME_BONUS_WITHOUT_TELEGRAM_ENABLED"]["section"] == "system"
+    assert (
+        manifest["REFERRAL_WELCOME_BONUS_WITHOUT_TELEGRAM_ENABLED"]["subsection"]
+        == "email_anti_abuse"
+    )
+    assert manifest["REFERRAL_ONE_BONUS_PER_REFEREE"]["section"] == "pricing"
+    assert manifest["REFERRAL_ONE_BONUS_PER_REFEREE"]["subsection"] == "referral"
+    assert manifest["REFERRAL_WEBAPP_LINK_ENABLED"]["section"] == "pricing"
+    assert manifest["REFERRAL_WEBAPP_LINK_ENABLED"]["subsection"] == "referral"
+    assert manifest["REFERRAL_TELEGRAM_LINK_ENABLED"]["section"] == "pricing"
+    assert manifest["REFERRAL_TELEGRAM_LINK_ENABLED"]["subsection"] == "referral"
+    assert manifest["PARTNER_CLIENT_WELCOME_BONUS_ENABLED"]["section"] == "pricing"
+    assert manifest["PARTNER_CLIENT_WELCOME_BONUS_ENABLED"]["subsection"] == "partner"
+    assert manifest["PARTNER_CLIENT_PAYMENT_BONUS_ENABLED"]["section"] == "pricing"
+    assert manifest["PARTNER_CLIENT_PAYMENT_BONUS_ENABLED"]["subsection"] == "partner"
+    assert manifest["PARTNER_AUTO_ENROLLMENT_ENABLED"]["section"] == "pricing"
+    assert manifest["PARTNER_AUTO_ENROLLMENT_ENABLED"]["subsection"] == "partner"
+    assert manifest["PARTNER_REFERRAL_PROGRAM_DISABLED"]["section"] == "pricing"
+    assert manifest["PARTNER_REFERRAL_PROGRAM_DISABLED"]["subsection"] == "partner"
+    assert manifest["PARTNER_ONE_BONUS_PER_CLIENT"]["section"] == "pricing"
+    assert manifest["PARTNER_ONE_BONUS_PER_CLIENT"]["subsection"] == "partner"
+    assert manifest["LEGACY_REFS"]["section"] == "pricing"
+    assert manifest["LEGACY_REFS"]["subsection"] == "legacy_tariffs"
+    assert manifest["DISPOSABLE_EMAIL_DOMAINS"]["section"] == "system"
+    assert manifest["DISPOSABLE_EMAIL_DOMAINS"]["subsection"] == "email_anti_abuse"
+    for key in (
+        "TRIAL_WITHOUT_OAUTH_ENABLED",
+        "REFERRAL_WELCOME_BONUS_WITHOUT_TELEGRAM_ENABLED",
+        "DISPOSABLE_EMAIL_DOMAINS",
+    ):
+        assert manifest[key]["section_order"] == 12
+        assert manifest[key]["i18n_subsection_key"] == (
+            "admin_settings_subsection_email_anti_abuse"
+        )
+
+
+def test_platega_settings_share_one_admin_subsection():
+    manifest = _manifest_by_key()
+    platega_keys = [key for key in manifest if key.startswith(("PLATEGA_", "PAYMENT_PLATEGA_"))]
+
+    assert platega_keys
+    assert {manifest[key]["subsection"] for key in platega_keys} == {"Platega"}
+
+
+def test_wata_settings_share_one_admin_subsection():
+    manifest = _manifest_by_key()
+    wata_keys = [key for key in manifest if key.startswith(("WATA_", "PAYMENT_WATA_"))]
+
+    assert wata_keys
+    assert {manifest[key]["subsection"] for key in wata_keys} == {"Wata"}
+
+
+def test_tariff_settings_page_i18n_keys_exist():
+    for language in ("ru", "en"):
+        messages = _locale(language)
+        missing = {
+            key for key in ADMIN_TARIFF_SETTINGS_PAGE_KEYS if not _has_locale_key(messages, key)
+        }
+        assert missing == set()
+
+
+def test_visible_admin_russian_labels_do_not_fall_back_to_english():
+    messages = _locale("ru")
+
+    for key in ADMIN_VISIBLE_RU_KEYS:
+        assert key in messages
+
+    missing_latin_fallbacks = []
+    for file_path in (REPO_ROOT / "frontend" / "src" / "admin").rglob("*"):
+        if file_path.suffix not in {".svelte", ".js"}:
+            continue
+        text = file_path.read_text(encoding="utf-8")
+        for match in ADMIN_AT_SIMPLE_FALLBACK_RE.finditer(text):
+            locale_key = f"admin_{match.group('key')}"
+            fallback = match.group("fallback")
+            if _has_locale_key(messages, locale_key):
+                continue
+            has_latin = any("A" <= char <= "Z" or "a" <= char <= "z" for char in fallback)
+            has_cyrillic = any("А" <= char <= "я" or char in "Ёё" for char in fallback)
+            if has_latin and not has_cyrillic:
+                missing_latin_fallbacks.append((locale_key, fallback, str(file_path)))
+
+    assert missing_latin_fallbacks == []

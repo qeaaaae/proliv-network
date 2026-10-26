@@ -1,0 +1,75 @@
+import type { CheckoutAddonPreset } from "$lib/webapp/deeplinks.js";
+import type { Snippet } from "svelte";
+import type { ApiClient } from "$lib/webapp/publicApi.js";
+import type {
+  CheckoutPromoOptions,
+  PartnerBalancePaymentOptions,
+} from "$lib/webapp/billingActions.js";
+import type {
+  PaymentMethodView,
+  PendingPaymentView,
+  PlanView,
+  StringAction,
+  SubscriptionView,
+  TariffView,
+  TermUnitLabel,
+  Translate,
+  VoidAction,
+} from "$lib/webapp/types.js";
+
+export type CheckoutPaymentOptions = PartnerBalancePaymentOptions;
+
+type BalancePaymentAction = (options?: CheckoutPaymentOptions) => unknown;
+type CheckoutPromoAction = (options?: CheckoutPromoOptions) => unknown;
+
+export type PaymentCheckoutDialogProps = {
+  api: ApiClient["api"];
+  inline?: boolean;
+  gift?: boolean;
+  giftDelivery?: Snippet;
+  createPayment?: BalancePaymentAction;
+  hasMultipleTariffs?: boolean;
+  methods?: PaymentMethodView[];
+  paymentMethodsDisplayMode?: "dropdown" | "buttons" | string;
+  pendingPayment?: PendingPaymentView | null;
+  payBusy?: boolean;
+  paymentModalOpen?: boolean;
+  paymentStep?: string;
+  plans?: PlanView[];
+  selectedMethod?: string;
+  selectedPlan?: PlanView | null;
+  selectedTariff?: TariffView | null;
+  selectedTariffKey?: string;
+  selectedTariffPlans?: PlanView[];
+  renewHwidDevices?: boolean;
+  singleTariffMode?: boolean;
+  subscription?: SubscriptionView;
+  subscriptionPurchaseDescription?: string;
+  tariffCatalog?: TariffView[];
+  tariffMode?: boolean;
+  trafficMode?: boolean;
+  checkoutAddonValueAnimationEnabled?: boolean;
+  checkoutAddonEditorExpandedByDefault?: boolean;
+  closePaymentModal?: VoidAction;
+  checkoutPromoAppliedCode?: string;
+  checkoutPromoInput?: string;
+  checkoutPromoIsError?: boolean;
+  checkoutPromoPriceText?: string;
+  checkoutPromoEffectiveAmount?: number;
+  checkoutPromoStatus?: string;
+  checkoutPromoDiscountPercent?: number;
+  checkoutPromoAppliesTo?: string;
+  checkoutPromoMinSubscriptionDays?: number | null;
+  checkoutPromoMinTrafficGb?: number | null;
+  checkoutAddonPreset?: CheckoutAddonPreset | null;
+  applyCheckoutPromo?: CheckoutPromoAction;
+  backToTariffList?: VoidAction;
+  clearCheckoutPromo?: VoidAction;
+  continueWithSelectedTariff?: VoidAction;
+  resumePendingPayment?: (payment: PendingPaymentView) => void;
+  cancelPendingPayment?: (payment: PendingPaymentView) => void;
+  selectTariff?: (tariff: TariffView) => void;
+  setCheckoutPromoInput?: StringAction;
+  t?: Translate;
+  termUnitLabel?: TermUnitLabel;
+};

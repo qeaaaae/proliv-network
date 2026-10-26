@@ -1,0 +1,33 @@
+{
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@10.9.9",
+  "scripts": {
+    "sync:docs": "node ./scripts/sync-docs.mjs",
+    "check:openapi-sync": "node ./scripts/check-openapi-sync.mjs",
+    "check:sidebar": "node ./scripts/check-sidebar-coverage.mjs",
+    "check:demo-routes": "node ./scripts/check-demo-routes.mjs",
+    "build:demo": "node ./scripts/build-demo-runtime.mjs",
+    "dev": "npm run sync:docs && npm run build:demo && astro dev",
+    "build": "npm run sync:docs && npm run build:demo && astro build && node ./scripts/materialize-demo-routes.mjs",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.42.6",
+    "astro": "^7.4.1",
+    "starlight-theme-nova": "^0.12.3",
+    "swagger-ui-dist": "^5.34.0",
+    "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "esbuild": "0.28.2",
+    "js-yaml": "4.3.2",
+    "postcss-selector-parser": "7.1.6",
+    "smol-toml": "1.9.1",
+    "svgo": "4.1.0",
+    "vite": "8.3.4"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

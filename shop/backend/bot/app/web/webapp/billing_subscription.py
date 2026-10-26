@@ -1,0 +1,459 @@
+import logging
+from datetime import UTC, datetime
+
+from aiohttp import web
+from sqlalchemy.orm import sessionmaker
+
+from bot.app.web.context import (
+    get_promo_code_service,
+    get_session_factory,
+    get_settings,
+    get_subscription_service,
+)
+from bot.app.web.webapp.assets import _enforce_webapp_rate_limit
+from bot.app.web.webapp.auth import _require_user_id
+from bot.app.web.webapp.auth_common import _trial_oauth_required_reason_for_user
+from bot.app.web.webapp.common import (
+    _invalidate_webapp_user_caches,
+    _json_error,
+    _normalize_language,
+    _parse_model_payload,
+)
+from bot.app.web.webapp.payloads import (
+    WebAppAutoRenewPayload,
+    WebAppPromoApplyPayload,
+)
+from bot.infra.auto_renew import (
+    auto_renew_toggle_allowed,
+    auto_renew_user_lock_name,
+    managed_recurring_service_for,
+    stop_provider_managed_recurrence,
+)
+from bot.infra.redis import redis_lock
+from bot.services.code_attempts import check_code_attempt
+from bot.services.promo_code_service import PromoCheckoutRequired, PromoCodeService
+from bot.services.subscription_service_impl.core import SubscriptionService
+from bot.utils.config_link import prepare_config_links
+from bot.utils.install_links import ensure_user_install_guide_share_url
+from config.settings import Settings
+from db.dal import message_log_dal, subscription_dal, tribute_dal, user_dal
+
+from .billing_common import (
+    _TRIAL_ACTIVATION_FAILURE_STATUSES,
+    _localized_webapp_message,
+    _plain_text_message,
+)
+from .common import (
+    _format_webapp_datetime,
+)
+from .response_helpers import json_response
+
+logger = logging.getLogger(__name__)
+
+
+async def promo_status_route(request: web.Request) -> web.Response:
+    """Classify a promo code for the current user without applying it.
+
+    Used by the web app before acting on a promo deeplink: instead of always
+    opening checkout (and surfacing a cryptic field error for used or unknown
+    codes), the frontend asks for the verdict first and shows an explanatory
+    dialog when the code cannot be applied.
+    """
+    user_id = _require_user_id(request)
+    status_payload = await _parse_model_payload(request, WebAppPromoApplyPayload)
+    code = str(status_payload.code or "").strip()
+    if not code:
+        return _json_error(400, "empty_code", "Promo code is empty")
+
+    settings: Settings = get_settings(request)
+    promo_code_service: PromoCodeService = get_promo_code_service(request)
+    if not promo_code_service:
+        return _json_error(503, "service_unavailable", "Promo service unavailable")
+
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        try:
+            db_user = await user_dal.get_user_by_id(session, user_id)
+            if not db_user or db_user.is_banned:
+                await session.rollback()
+                return _json_error(403, "access_denied", "Access denied")
+            lang = _normalize_language(db_user.language_code or settings.DEFAULT_LANGUAGE)
+            status = await promo_code_service.get_promo_code_status(
+                session,
+                user_id,
+                code,
+                lang,
+            )
+            # Throttle bookkeeping for unknown codes must persist.
+            await session.commit()
+            if status.status == "throttled":
+                from .rate_limits import rate_error
+
+                return rate_error(status.retry_after or settings.BRUTE_FORCE_LOCK_SECONDS)
+            return json_response(
+                {
+                    "ok": True,
+                    "status": status.status,
+                    "code": status.code,
+                    "message": _plain_text_message(status.message) if status.message else "",
+                    "effect_summary": status.effect_summary,
+                    "applies_to": status.applies_to,
+                    "min_subscription_months": status.min_subscription_months,
+                    "min_subscription_days": status.min_subscription_days,
+                    "min_traffic_gb": status.min_traffic_gb,
+                    "bonus_days": status.bonus_days,
+                    "regular_traffic_gb": status.regular_traffic_gb,
+                    "premium_traffic_gb": status.premium_traffic_gb,
+                    "discount_percent": status.discount_percent,
+                    "duration_multiplier": status.duration_multiplier,
+                    "traffic_multiplier": status.traffic_multiplier,
+                    "end_date_text": (
+                        _format_webapp_datetime(status.subscription_end_date)
+                        if status.subscription_end_date
+                        else None
+                    ),
+                }
+            )
+        except Exception:
+            await session.rollback()
+            logger.exception("WebApp promo status check failed")
+            return _json_error(500, "promo_status_failed", "Promo status check failed")
+
+
+async def apply_promo_route(request: web.Request) -> web.Response:
+    user_id = _require_user_id(request)
+    promo_payload = await _parse_model_payload(request, WebAppPromoApplyPayload)
+    code = str(promo_payload.code or "").strip()
+    if not code:
+        return _json_error(400, "empty_code", "Promo code is empty")
+
+    settings: Settings = get_settings(request)
+    promo_code_service: PromoCodeService = get_promo_code_service(request)
+    if not promo_code_service:
+        return _json_error(503, "service_unavailable", "Promo service unavailable")
+
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        try:
+            db_user = await user_dal.get_user_by_id(session, user_id)
+            if not db_user or db_user.is_banned:
+                await session.rollback()
+                return _json_error(403, "access_denied", "Access denied")
+            lang = _normalize_language(db_user.language_code or settings.DEFAULT_LANGUAGE)
+            success, result = await promo_code_service.apply_promo_code(
+                session,
+                user_id,
+                code,
+                lang,
+            )
+            if not success:
+                throttle = await check_code_attempt(session, settings, user_id)
+                await session.commit()
+                if throttle.locked:
+                    from .rate_limits import rate_error
+
+                    return rate_error(throttle.retry_after or settings.BRUTE_FORCE_LOCK_SECONDS)
+                return _json_error(400, "promo_apply_failed", _plain_text_message(result))
+            await session.commit()
+            if isinstance(result, PromoCheckoutRequired):
+                return json_response(
+                    {
+                        "ok": True,
+                        "requires_checkout": True,
+                        "code": result.code,
+                        "effect_summary": result.effect_summary,
+                        "applies_to": result.applies_to,
+                        "min_subscription_months": result.min_subscription_months,
+                        "min_subscription_days": result.min_subscription_days,
+                        "min_traffic_gb": result.min_traffic_gb,
+                        "bonus_days": result.bonus_days,
+                        "regular_traffic_gb": result.regular_traffic_gb,
+                        "premium_traffic_gb": result.premium_traffic_gb,
+                        "discount_percent": result.discount_percent,
+                        "duration_multiplier": result.duration_multiplier,
+                        "traffic_multiplier": result.traffic_multiplier,
+                    }
+                )
+            end_date = result if isinstance(result, datetime) else None
+            return json_response(
+                {
+                    "ok": True,
+                    "end_date": end_date.isoformat() if end_date else None,
+                    "end_date_text": end_date.strftime("%d.%m.%Y %H:%M") if end_date else None,
+                }
+            )
+        except Exception:
+            await session.rollback()
+            logger.exception("WebApp promo apply failed")
+            return _json_error(500, "promo_apply_failed", "Promo apply failed")
+
+
+async def subscription_auto_renew_route(request: web.Request) -> web.Response:
+    user_id = _require_user_id(request)
+    auto_renew_payload = await _parse_model_payload(request, WebAppAutoRenewPayload)
+
+    enabled = bool(auto_renew_payload.enabled)
+    settings: Settings = get_settings(request)
+    subscription_service: SubscriptionService = get_subscription_service(request)
+    async_session_factory: sessionmaker = get_session_factory(request)
+
+    async with async_session_factory() as session:
+        try:
+            db_user = await user_dal.get_user_by_id(session, user_id)
+            if not db_user or db_user.is_banned:
+                await session.rollback()
+                return _json_error(403, "access_denied", "Access denied")
+            sub = await subscription_dal.get_active_subscription_by_user_id(
+                session,
+                user_id,
+                db_user.panel_user_uuid,
+            )
+            if not sub:
+                await session.rollback()
+                return _json_error(
+                    400,
+                    "subscription_required",
+                    "Active subscription is required",
+                )
+
+            provider = str(getattr(sub, "provider", "") or "").strip().lower()
+            from bot.payment_providers import provider_label_map, provider_supports_recurring
+            from bot.payment_providers.shared import service_supports_recurring
+            from bot.payment_providers.shared.recurring import has_recurring_payment_method
+
+            if not auto_renew_toggle_allowed(provider, enable=enabled):
+                await session.rollback()
+                return _json_error(
+                    400,
+                    "auto_renew_unavailable",
+                    "Auto-renew is not available for this payment provider",
+                )
+
+            if enabled and provider_supports_recurring(provider):
+                recurring_service_for = getattr(subscription_service, "recurring_service_for", None)
+                recurring_service = (
+                    recurring_service_for(provider) if callable(recurring_service_for) else None
+                )
+                if not service_supports_recurring(recurring_service):
+                    await session.rollback()
+                    return _json_error(
+                        400,
+                        "auto_renew_unavailable",
+                        "Auto-renew is not available for this payment provider",
+                    )
+                has_saved_method = await has_recurring_payment_method(
+                    session,
+                    user_id,
+                    provider=provider,
+                )
+                if not has_saved_method:
+                    await session.rollback()
+                    return _json_error(
+                        400,
+                        "auto_renew_requires_saved_method",
+                        "A saved payment method is required",
+                    )
+
+            creator_subscription_id = (
+                await tribute_dal.get_other_active_creator_subscription_id(session, user_id=user_id)
+                if not enabled and provider == "tribute"
+                else None
+            )
+            if (
+                not enabled
+                and provider == "tribute"
+                and creator_subscription_id is not None
+                and not auto_renew_payload.creator_cancellation_confirmed
+            ):
+                await session.rollback()
+                return _json_error(
+                    409,
+                    "auto_renew_tribute_cancel_required",
+                    "Confirm cancellation in @tribute before disabling local auto-renew",
+                )
+
+            async with redis_lock(
+                settings,
+                auto_renew_user_lock_name(user_id),
+                ttl_seconds=60,
+            ) as acquired:
+                if not acquired:
+                    await session.rollback()
+                    return _json_error(
+                        409,
+                        "auto_renew_busy",
+                        "Auto-renew is being processed; please try again",
+                    )
+                if not enabled and creator_subscription_id is not None:
+                    tribute_service = managed_recurring_service_for(subscription_service, "tribute")
+                    shop_order = await tribute_dal.get_other_active_shop_order_uuid(
+                        session, user_id=user_id
+                    )
+                    provider_stopped = shop_order is None or (
+                        tribute_service is not None
+                        and await tribute_service.cancel_shop_recurrence_for_user(
+                            session, user_id=user_id
+                        )
+                    )
+                elif not enabled:
+                    provider_stopped = await stop_provider_managed_recurrence(
+                        subscription_service,
+                        session,
+                        user_id=user_id,
+                        provider=provider,
+                    )
+                else:
+                    provider_stopped = True
+                if not provider_stopped:
+                    # Reporting "off" while the provider keeps debiting the
+                    # customer would be the worst possible outcome here.
+                    await session.rollback()
+                    return _json_error(
+                        502,
+                        "auto_renew_provider_cancel_failed",
+                        "The payment provider did not confirm the cancellation",
+                    )
+                await subscription_dal.set_auto_renew(
+                    session,
+                    sub.subscription_id,
+                    enabled,
+                    stop_reason=("customer_disabled" if not enabled else "consent_changed"),
+                )
+                await session.commit()
+            await _invalidate_webapp_user_caches(settings, user_id)
+
+            lang = _normalize_language(db_user.language_code or settings.DEFAULT_LANGUAGE)
+            provider_label = provider_label_map(settings, language=lang).get(provider, provider)
+            return json_response(
+                {
+                    "ok": True,
+                    "auto_renew_enabled": enabled,
+                    "provider": provider,
+                    "provider_label": provider_label,
+                }
+            )
+        except Exception:
+            await session.rollback()
+            logger.exception("WebApp auto-renew update failed for user %s", user_id)
+            return _json_error(500, "auto_renew_update_failed", "Auto-renew update failed")
+
+
+async def activate_trial_route(request: web.Request) -> web.Response:
+    user_id = _require_user_id(request)
+    rate_limit_response = await _enforce_webapp_rate_limit(
+        request,
+        user_id=user_id,
+        action="trial_activate",
+    )
+    if rate_limit_response:
+        return rate_limit_response
+
+    settings: Settings = get_settings(request)
+    if not settings.TRIAL_ENABLED or settings.TRIAL_DURATION_DAYS <= 0:
+        return _json_error(400, "trial_unavailable", "Trial is not available")
+    if settings.TRIAL_PAYMENT_ENABLED:
+        return _json_error(
+            402,
+            "trial_payment_required",
+            "Trial activation requires payment",
+        )
+
+    async_session_factory: sessionmaker = get_session_factory(request)
+    subscription_service: SubscriptionService = get_subscription_service(request)
+    async with async_session_factory() as session:
+        db_user = await user_dal.get_user_by_id(session, user_id)
+        if not db_user or db_user.is_banned:
+            return _json_error(403, "access_denied", "Access denied")
+        lang = _normalize_language(
+            getattr(db_user, "language_code", None) or settings.DEFAULT_LANGUAGE
+        )
+        oauth_required_reason = await _trial_oauth_required_reason_for_user(
+            session,
+            settings,
+            db_user,
+        )
+        if oauth_required_reason:
+            return _json_error(
+                400,
+                (
+                    "trial_telegram_required"
+                    if oauth_required_reason == "disposable_email"
+                    else "trial_oauth_required"
+                ),
+                oauth_required_reason,
+            )
+
+        activation_result = await subscription_service.activate_trial_subscription(session, user_id)
+        if not activation_result or not activation_result.get("activated"):
+            await session.rollback()
+            message_key = (
+                activation_result.get("message_key", "trial_activation_failed")
+                if activation_result
+                else "trial_activation_failed"
+            )
+            status = _TRIAL_ACTIVATION_FAILURE_STATUSES.get(message_key, 400)
+            if message_key == "trial_captcha_required":
+                status = 403
+            elif message_key == "trial_captcha_unavailable":
+                status = 503
+            message = _localized_webapp_message(request, lang, message_key)
+            return _json_error(status, message_key, message)
+
+        end_date = activation_result.get("end_date")
+        public_share_url = (
+            await ensure_user_install_guide_share_url(session, settings, user_id)
+            if settings.SUBSCRIPTION_GATEWAY_ENABLED
+            and settings.SUBSCRIPTION_LINK_MODE == "minishop"
+            else None
+        )
+        config_link, connect_url = await prepare_config_links(
+            settings,
+            activation_result.get("subscription_url"),
+            public_share_url=public_share_url,
+        )
+
+        try:
+            await message_log_dal.create_message_log_no_commit(
+                session,
+                {
+                    "user_id": user_id,
+                    "telegram_username": getattr(db_user, "username", None),
+                    "telegram_first_name": getattr(db_user, "first_name", None),
+                    "event_type": "webapp_trial_activate",
+                    "content": (
+                        f"Trial activated via WebApp for user_id={user_id}; "
+                        f"email={getattr(db_user, 'email', None) or 'N/A'}"
+                    ),
+                    "is_admin_event": False,
+                    "target_user_id": user_id,
+                    "timestamp": datetime.now(UTC),
+                },
+            )
+        except Exception:
+            logger.exception("Failed to add WebApp trial activation audit log")
+
+        await session.commit()
+
+        try:
+            from db.dal import ad_dal as _ad_dal
+
+            await _ad_dal.mark_trial_activated(session, user_id)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            logger.exception("Failed to mark WebApp trial activation for ad attribution")
+
+        return json_response(
+            {
+                "ok": True,
+                "activated": True,
+                "days": activation_result.get("days", settings.TRIAL_DURATION_DAYS),
+                "end_date": end_date.isoformat() if isinstance(end_date, datetime) else None,
+                "end_date_text": _format_webapp_datetime(end_date)
+                if isinstance(end_date, datetime)
+                else None,
+                "traffic_gb": activation_result.get("traffic_gb", settings.TRIAL_TRAFFIC_LIMIT_GB),
+                "config_link": config_link,
+                "connect_url": connect_url or config_link,
+            }
+        )

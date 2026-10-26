@@ -1,0 +1,899 @@
+from __future__ import annotations
+
+import logging
+import time
+from collections import OrderedDict
+from collections.abc import Iterable
+from datetime import UTC, datetime
+from typing import Any
+
+from bot.app.web.webapp.cache_helpers import invalidate_webapp_user_caches
+from bot.infra import events
+from bot.infra.payment_events import resolve_payment_success_snapshot
+from bot.infra.redis import get_redis, redis_key
+from bot.keyboards.inline.user_keyboards_payments import get_autorenew_cancel_keyboard
+from bot.payment_providers.shared.common import (
+    make_translator,
+)
+from bot.plugins import PluginContext
+from bot.services.email_templates import render_account_merged
+from bot.services.event_reactions_external_auth import (
+    ACCOUNT_MERGE_NOTIFY_REASONS,
+    EXTERNAL_MERGE_PROVIDERS,
+    EXTERNAL_REGISTRATION_PROVIDERS,
+    react_to_external_identity_link,
+)
+from bot.services.event_reactions_partner import PartnerEventReactionsMixin
+from bot.services.event_reactions_payment_details import (
+    _format_failed_payment_details,
+    _int_or_none,
+)
+from bot.services.notification_service import NotificationService
+from bot.services.telegram_notifications import record_telegram_notification_failure
+from bot.services.user_email_notifications import send_user_notification_email
+from bot.services.user_notification_policy import (
+    UserNotificationCategory,
+    telegram_recipient,
+    user_notification_channel_allowed,
+    user_notification_channel_selected,
+    user_notification_delivery_plan,
+)
+from db.dal import payment_dal, payment_reconciliation_dal, subscription_dal, user_dal
+from db.models import Payment, Subscription, User
+
+logger = logging.getLogger(__name__)
+
+_registered_handlers: list[tuple[str, events.EventHandler]] = []
+_PAYMENT_NOTIFICATION_TTL_SECONDS = 24 * 60 * 60
+_PAYMENT_NOTIFICATION_CACHE_MAX = 4096
+_payment_notification_cache: OrderedDict[str, float] = OrderedDict()
+
+
+async def _log_telegram_notification_failure(
+    ctx: PluginContext,
+    user_id: int,
+    notification: str,
+    exc: Exception,
+) -> bool:
+    telegram_status = await record_telegram_notification_failure(
+        ctx.session_factory,
+        user_id,
+        exc,
+    )
+    if telegram_status is None:
+        return False
+    logger.info(
+        "Telegram notification unavailable; user_id=%s notification=%s status=%s reason=%s",
+        user_id,
+        notification,
+        telegram_status,
+        exc,
+    )
+    return True
+
+
+def _payment_notification_key(
+    settings: Any,
+    notification_kind: str,
+    payment_db_id: int,
+) -> str:
+    return redis_key(settings, notification_kind, payment_db_id)
+
+
+def _claim_local_payment_notification(cache_key: str) -> bool:
+    now = time.monotonic()
+    expired_keys = [
+        key for key, expires_at in _payment_notification_cache.items() if expires_at <= now
+    ]
+    for key in expired_keys:
+        _payment_notification_cache.pop(key, None)
+
+    if cache_key in _payment_notification_cache:
+        _payment_notification_cache.move_to_end(cache_key)
+        return False
+
+    _payment_notification_cache[cache_key] = now + _PAYMENT_NOTIFICATION_TTL_SECONDS
+    while len(_payment_notification_cache) > _PAYMENT_NOTIFICATION_CACHE_MAX:
+        _payment_notification_cache.popitem(last=False)
+    return True
+
+
+async def _claim_payment_notification(
+    ctx: PluginContext,
+    payment_db_id: Any,
+    *,
+    notification_kind: str,
+    notification_label: str,
+) -> bool:
+    normalized_payment_id = _int_or_none(payment_db_id)
+    if normalized_payment_id is None:
+        return True
+
+    cache_key = _payment_notification_key(ctx.settings, notification_kind, normalized_payment_id)
+    redis = await get_redis(ctx.settings)
+    if redis is not None:
+        try:
+            claimed = await redis.set(
+                cache_key,
+                "1",
+                nx=True,
+                ex=_PAYMENT_NOTIFICATION_TTL_SECONDS,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Redis %s notification dedupe failed for payment %s: %s",
+                notification_label,
+                normalized_payment_id,
+                exc,
+            )
+        else:
+            if claimed:
+                return True
+            logger.info(
+                "Skipping duplicate %s notification for payment %s.",
+                notification_label,
+                normalized_payment_id,
+            )
+            return False
+
+    claimed = _claim_local_payment_notification(cache_key)
+    if not claimed:
+        logger.info(
+            "Skipping duplicate in-process %s notification for payment %s.",
+            notification_label,
+            normalized_payment_id,
+        )
+    return claimed
+
+
+async def _claim_payment_log_notification(ctx: PluginContext, payment_db_id: Any) -> bool:
+    return await _claim_payment_notification(
+        ctx,
+        payment_db_id,
+        notification_kind="payment-log-notification",
+        notification_label="payment log",
+    )
+
+
+async def _claim_payment_failure_notification(ctx: PluginContext, payment_db_id: Any) -> bool:
+    return await _claim_payment_notification(
+        ctx,
+        payment_db_id,
+        notification_kind="payment-failure-notification",
+        notification_label="failed payment",
+    )
+
+
+async def _release_payment_failure_notification(
+    ctx: PluginContext,
+    payment_db_id: Any,
+) -> None:
+    """Release a failed Telegram delivery so a webhook/worker retry can resend it."""
+
+    normalized_payment_id = _int_or_none(payment_db_id)
+    if normalized_payment_id is None:
+        return
+    cache_key = _payment_notification_key(
+        ctx.settings,
+        "payment-failure-notification",
+        normalized_payment_id,
+    )
+    redis = await get_redis(ctx.settings)
+    if redis is not None:
+        try:
+            await redis.delete(cache_key)
+        except Exception:
+            logger.exception(
+                "Failed to release failed-payment notification claim for payment %s.",
+                normalized_payment_id,
+            )
+    _payment_notification_cache.pop(cache_key, None)
+
+
+async def _mark_payment_failure_notification_sent(
+    ctx: PluginContext,
+    payment_db_id: Any,
+) -> None:
+    normalized_payment_id = _int_or_none(payment_db_id)
+    if normalized_payment_id is None or ctx.session_factory is None:
+        return
+    try:
+        async with ctx.session_factory() as session:
+            await payment_reconciliation_dal.mark_failure_notification_sent(
+                session,
+                normalized_payment_id,
+            )
+            await session.commit()
+    except Exception:
+        logger.exception(
+            "Failed to persist payment-failure notification delivery for payment %s.",
+            normalized_payment_id,
+        )
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _format_webapp_datetime(value: datetime | None) -> str:
+    if not value:
+        return ""
+    normalized = value if value.tzinfo else value.replace(tzinfo=UTC)
+    return normalized.strftime("%d.%m.%Y %H:%M")
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _payment_status_timestamp(payment: Any) -> datetime | None:
+    """Best-effort time when a payment reached its current status."""
+
+    updated_at = _parse_datetime(getattr(payment, "updated_at", None))
+    created_at = _parse_datetime(getattr(payment, "created_at", None))
+    if updated_at and created_at:
+        return max(updated_at, created_at)
+    return updated_at or created_at
+
+
+def _has_superseding_success(
+    canceled_payment: Any,
+    successful_payments: Iterable[Any],
+) -> bool:
+    canceled_created_at = _parse_datetime(getattr(canceled_payment, "created_at", None))
+    if canceled_created_at is None:
+        return False
+    canceled_payment_id = _int_or_none(getattr(canceled_payment, "payment_id", None))
+    for payment in successful_payments:
+        if (
+            canceled_payment_id is not None
+            and _int_or_none(getattr(payment, "payment_id", None)) == canceled_payment_id
+        ):
+            continue
+        success_at = _payment_status_timestamp(payment)
+        if success_at is not None and success_at >= canceled_created_at:
+            return True
+    return False
+
+
+class CoreEventReactions(PartnerEventReactionsMixin):
+    def __init__(self, ctx: PluginContext) -> None:
+        self.ctx = ctx
+
+    def _notification_service(self) -> NotificationService | None:
+        service = self.ctx.notification_service
+        if service is not None:
+            return service
+        if self.ctx.bot is None:
+            return None
+        return NotificationService(
+            self.ctx.bot,
+            self.ctx.settings,
+            self.ctx.i18n,
+            session_factory=self.ctx.session_factory,
+            email_auth_service=self.ctx.email_auth_service,
+        )
+
+    async def _load_user(self, user_id: Any) -> User | None:
+        if self.ctx.session_factory is None or user_id is None:
+            return None
+        try:
+            async with self.ctx.session_factory() as session:
+                return await user_dal.get_user_by_id(session, int(user_id))
+        except Exception:
+            logger.exception("Failed to load user %s for event reaction.", user_id)
+            return None
+
+    async def _load_payment(self, payment_db_id: Any) -> Payment | None:
+        if self.ctx.session_factory is None or payment_db_id is None:
+            return None
+        try:
+            async with self.ctx.session_factory() as session:
+                return await payment_dal.get_payment_by_db_id(session, int(payment_db_id))
+        except Exception:
+            logger.exception("Failed to load payment %s for event reaction.", payment_db_id)
+            return None
+
+    async def _load_active_subscription(
+        self, user_id: Any, panel_user_uuid: str | None = None
+    ) -> Subscription | None:
+        if self.ctx.session_factory is None or user_id is None:
+            return None
+        try:
+            async with self.ctx.session_factory() as session:
+                return await subscription_dal.get_active_subscription_by_user_id(
+                    session,
+                    int(user_id),
+                    panel_user_uuid,
+                )
+        except Exception:
+            logger.exception(
+                "Failed to load active subscription for user %s during event reaction.",
+                user_id,
+            )
+            return None
+
+    async def _payment_failure_is_superseded(self, payment: Any, user_id: Any) -> bool:
+        payment_user_id = _int_or_none(getattr(payment, "user_id", None))
+        event_user_id = _int_or_none(user_id)
+        if payment_user_id is None or event_user_id is None or payment_user_id != event_user_id:
+            return False
+        if str(getattr(payment, "status", "") or "").lower() == "succeeded":
+            return True
+        created_at = _parse_datetime(getattr(payment, "created_at", None))
+        if created_at is None or self.ctx.session_factory is None:
+            return False
+
+        try:
+            async with self.ctx.session_factory() as session:
+                successful_payments = await payment_dal.get_user_succeeded_payments_after(
+                    session,
+                    payment_user_id,
+                    created_at,
+                    exclude_payment_id=_int_or_none(getattr(payment, "payment_id", None)),
+                )
+        except Exception:
+            logger.exception(
+                "Failed to check superseding successful payments for payment %s.",
+                getattr(payment, "payment_id", None),
+            )
+            return False
+        return _has_superseding_success(payment, successful_payments)
+
+    async def on_trial_activated(self, event_name: str, payload: dict[str, Any]) -> None:
+        del event_name
+        user_id = payload.get("user_id")
+        if user_id is None:
+            return
+        user = await self._load_user(user_id)
+        service = self._notification_service()
+        end_date = _parse_datetime(payload.get("end_date")) or datetime.now(UTC)
+        if service is not None:
+            try:
+                await service.notify_trial_activation(
+                    int(user_id),
+                    end_date,
+                    username=getattr(user, "username", None),
+                    email=getattr(user, "email", None),
+                )
+            except Exception:
+                logger.exception("Failed to react to trial activation for user %s.", user_id)
+
+        try:
+            await invalidate_webapp_user_caches(
+                self.ctx.settings,
+                int(user_id),
+                include_devices=True,
+            )
+        except Exception:
+            logger.exception("Failed to invalidate trial caches for user %s.", user_id)
+
+    async def on_user_registered(self, event_name: str, payload: dict[str, Any]) -> None:
+        del event_name
+        if payload.get("registered_via") == "panel_sync":
+            return
+        user_id = payload.get("user_id")
+        if user_id is None:
+            return
+        user = await self._load_user(user_id)
+        service = self._notification_service()
+        if service is None:
+            return
+
+        referred_by_id = payload.get("referred_by_id")
+        partner_user_id = payload.get("partner_user_id")
+        email = payload.get("email") or getattr(user, "email", None)
+        minishop_id = payload.get("minishop_id") or getattr(user, "minishop_id", None)
+        public_identity = {"minishop_id": str(minishop_id)} if minishop_id else {}
+        try:
+            registered_via = str(payload.get("registered_via") or "unknown")
+            external_provider = EXTERNAL_REGISTRATION_PROVIDERS.get(registered_via)
+            if external_provider:
+                if not email:
+                    return
+                await service.notify_new_external_user_registration(
+                    user_id=int(user_id),
+                    **public_identity,
+                    provider=external_provider,
+                    email=str(email),
+                    referred_by_id=referred_by_id,
+                    partner_user_id=partner_user_id,
+                )
+            elif registered_via == "email":
+                if not email:
+                    return
+                await service.notify_new_email_user_registration(
+                    user_id=int(user_id),
+                    **public_identity,
+                    email=str(email),
+                    referred_by_id=referred_by_id,
+                    partner_user_id=partner_user_id,
+                )
+            else:
+                await service.notify_new_user_registration(
+                    user_id=int(user_id),
+                    **public_identity,
+                    telegram_id=payload.get("telegram_id") or getattr(user, "telegram_id", None),
+                    username=payload.get("username") or getattr(user, "username", None),
+                    first_name=payload.get("first_name") or getattr(user, "first_name", None),
+                    email=email,
+                    referred_by_id=referred_by_id,
+                    partner_user_id=partner_user_id,
+                )
+        except Exception:
+            logger.exception("Failed to react to user registration for user %s.", user_id)
+
+    async def on_promo_code_applied(self, event_name: str, payload: dict[str, Any]) -> None:
+        del event_name
+        user_id = payload.get("user_id")
+        if user_id is None:
+            return
+        service = self._notification_service()
+        if service is None:
+            return
+        user = await self._load_user(user_id)
+        try:
+            await service.notify_promo_activation(
+                user_id=int(user_id),
+                promo_code=str(payload.get("code") or ""),
+                bonus_days=int(payload.get("bonus_days") or 0),
+                regular_traffic_gb=float(payload.get("regular_traffic_gb") or 0),
+                premium_traffic_gb=float(payload.get("premium_traffic_gb") or 0),
+                username=getattr(user, "username", None),
+                email=getattr(user, "email", None),
+            )
+        except Exception:
+            logger.exception("Failed to react to promo activation for user %s.", user_id)
+
+    async def on_account_email_linked(self, event_name: str, payload: dict[str, Any]) -> None:
+        del event_name
+        if not _truthy(payload.get("first_link")):
+            return
+        user_id = payload.get("user_id")
+        email = payload.get("email")
+        if user_id is None or not email:
+            return
+        service = self._notification_service()
+        if service is None:
+            return
+        user = await self._load_user(user_id)
+        try:
+            await service.notify_account_email_linked(
+                user_id=int(user_id),
+                email=str(email),
+                telegram_id=payload.get("telegram_id") or getattr(user, "telegram_id", None),
+                username=payload.get("username") or getattr(user, "username", None),
+                first_name=payload.get("first_name") or getattr(user, "first_name", None),
+            )
+        except Exception:
+            logger.exception("Failed to react to email link for user %s.", user_id)
+
+    async def on_account_telegram_linked(self, event_name: str, payload: dict[str, Any]) -> None:
+        del event_name
+        if not _truthy(payload.get("first_link")):
+            return
+        user_id = payload.get("user_id")
+        telegram_id = payload.get("telegram_id")
+        if user_id is None or not telegram_id:
+            return
+        service = self._notification_service()
+        if service is None:
+            return
+        user = await self._load_user(user_id)
+        try:
+            await service.notify_account_telegram_linked(
+                user_id=int(user_id),
+                email=payload.get("email") or getattr(user, "email", None),
+                telegram_id=int(telegram_id),
+                username=payload.get("username") or getattr(user, "username", None),
+                first_name=payload.get("first_name") or getattr(user, "first_name", None),
+            )
+        except Exception:
+            logger.exception("Failed to react to Telegram link for user %s.", user_id)
+
+    async def on_account_external_identity_linked(
+        self, event_name: str, payload: dict[str, Any]
+    ) -> None:
+        del event_name
+        await react_to_external_identity_link(self, payload)
+
+    async def on_payment_succeeded(self, event_name: str, payload: dict[str, Any]) -> None:
+        del event_name
+        user_id = payload.get("user_id")
+        if user_id is None:
+            return
+        user = await self._load_user(user_id)
+        payment = await self._load_payment(payload.get("payment_db_id"))
+        if self.ctx.session_factory is not None:
+            try:
+                async with self.ctx.session_factory() as session:
+                    await payment_reconciliation_dal.mark_user_failures_superseded_by_success(
+                        session,
+                        user_id=int(user_id),
+                        succeeded_at=_payment_status_timestamp(payment) or datetime.now(UTC),
+                    )
+                    await session.commit()
+            except Exception:
+                logger.exception(
+                    "Failed to suppress stale payment failures after success for user %s.",
+                    user_id,
+                )
+        service = self._notification_service()
+        if service is not None:
+            try:
+                if await _claim_payment_log_notification(self.ctx, payload.get("payment_db_id")):
+                    snapshot = resolve_payment_success_snapshot(
+                        payload,
+                        payment,
+                        default_currency=getattr(self.ctx.settings, "DEFAULT_CURRENCY", "RUB"),
+                    )
+                    notification_kwargs: dict[str, Any] = {
+                        "user_id": int(user_id),
+                        "amount": snapshot.amount,
+                        "currency": snapshot.currency,
+                        "months": snapshot.months,
+                        "traffic_gb": snapshot.traffic_gb,
+                        "payment_provider": snapshot.notification_provider,
+                        "username": getattr(user, "username", None),
+                        "email": getattr(user, "email", None),
+                        "traffic_is_premium": snapshot.traffic_is_premium,
+                        "tariff_key": snapshot.tariff_key,
+                        "purchased_hwid_devices": snapshot.purchased_hwid_devices,
+                        "purchases": snapshot.purchases,
+                    }
+                    telegram_id = getattr(user, "telegram_id", None)
+                    if telegram_id:
+                        notification_kwargs["telegram_id"] = int(telegram_id)
+                    public_id = getattr(user, "minishop_id", None)
+                    if public_id:
+                        notification_kwargs["minishop_id"] = str(public_id)
+                    if snapshot.duration_days is not None:
+                        notification_kwargs["duration_days"] = snapshot.duration_days
+                    if snapshot.promo_code:
+                        notification_kwargs["promo_code"] = snapshot.promo_code
+                    if snapshot.discount_amount is not None and snapshot.discount_amount > 0:
+                        notification_kwargs["discount_amount"] = snapshot.discount_amount
+                    if snapshot.sale_mode_base in {
+                        "balance_topup",
+                        "tariff_upgrade",
+                    } or "gift" in str(snapshot.sale_mode).split("|"):
+                        notification_kwargs.update(
+                            sale_mode=snapshot.sale_mode,
+                            payment_id=snapshot.payment_db_id,
+                        )
+                    await service.notify_payment_received(**notification_kwargs)
+            except Exception:
+                logger.exception("Failed to react to successful payment for user %s.", user_id)
+
+        try:
+            # In worker processes this clears the shared Redis layer; backend
+            # in-process caches keep their normal short TTL until pub/sub
+            # invalidation exists.
+            await invalidate_webapp_user_caches(
+                self.ctx.settings,
+                int(user_id),
+                include_devices=True,
+            )
+        except Exception:
+            logger.exception("Failed to invalidate payment caches for user %s.", user_id)
+
+    async def on_payment_canceled(self, event_name: str, payload: dict[str, Any]) -> None:
+        del event_name
+        user_id = payload.get("user_id")
+        if user_id is None:
+            return
+        try:
+            await invalidate_webapp_user_caches(
+                self.ctx.settings,
+                int(user_id),
+                include_devices=False,
+            )
+        except Exception:
+            logger.exception("Failed to invalidate canceled payment caches for user %s.", user_id)
+        payment = await self._load_payment(payload.get("payment_db_id"))
+        # Payment-linked codes are consumed in the successful fulfillment
+        # transaction. A later cancellation event does not revoke the granted
+        # entitlement, so it must never make that one-time code reusable.
+        if payment is not None and await self._payment_failure_is_superseded(payment, user_id):
+            logger.info(
+                "Suppressing canceled payment notification for user %s payment %s: "
+                "a newer successful payment already superseded it.",
+                user_id,
+                getattr(payment, "payment_id", None),
+            )
+            await _mark_payment_failure_notification_sent(
+                self.ctx,
+                payload.get("payment_db_id"),
+            )
+            return
+        if not await _claim_payment_failure_notification(self.ctx, payload.get("payment_db_id")):
+            return
+        user = await self._load_user(user_id)
+        chat_id = telegram_recipient(user, user_id)
+        plan = user_notification_delivery_plan(
+            self.ctx.settings,
+            UserNotificationCategory.PAYMENTS,
+            user,
+            telegram_available=self.ctx.bot is not None and chat_id is not None,
+        )
+        language = (
+            getattr(user, "language_code", None)
+            or getattr(self.ctx.settings, "DEFAULT_LANGUAGE", "ru")
+            or "ru"
+        )
+        translator = make_translator(self.ctx.i18n, language)
+        retry_at = payload.get("retry_at")
+        retry_at_text = (
+            events.iso(retry_at) if isinstance(retry_at, datetime) else str(retry_at or "")
+        )
+        message_text = translator(
+            payload.get("message_key") or "payment_failed",
+            retry_at=retry_at_text or "",
+        )
+        if payment is not None:
+            try:
+                payment_details = _format_failed_payment_details(
+                    translate=translator,
+                    settings=self.ctx.settings,
+                    language=language,
+                    payment=payment,
+                    payload=payload,
+                )
+                if payment_details:
+                    message_text = translator(
+                        "payment_failed_with_details",
+                        message=message_text,
+                        details=payment_details,
+                    )
+            except Exception:
+                logger.exception(
+                    "Failed to format canceled payment details for payment %s.",
+                    getattr(payment, "payment_id", None),
+                )
+        telegram_error: Exception | None = None
+        if plan.telegram and self.ctx.bot is not None and chat_id is not None:
+            try:
+                reply_markup = (
+                    get_autorenew_cancel_keyboard(
+                        language,
+                        self.ctx.i18n,
+                    )
+                    if _truthy(payload.get("auto_renew_retry_scheduled"))
+                    else None
+                )
+                if reply_markup is not None:
+                    await self.ctx.bot.send_message(
+                        chat_id,
+                        message_text,
+                        reply_markup=reply_markup,
+                    )
+                else:
+                    await self.ctx.bot.send_message(chat_id, message_text)
+            except Exception as exc:
+                expected_failure = await _log_telegram_notification_failure(
+                    self.ctx,
+                    user_id,
+                    "canceled_payment",
+                    exc,
+                )
+                if not expected_failure:
+                    logger.exception("Failed to notify user %s about canceled payment.", user_id)
+                telegram_error = exc
+        email_sent = False
+        email_requested = plan.email or (
+            user is not None
+            and user_notification_channel_selected(
+                self.ctx.settings,
+                UserNotificationCategory.PAYMENTS,
+                "email",
+            )
+            and user_notification_channel_allowed(
+                user,
+                UserNotificationCategory.PAYMENTS,
+                "email",
+            )
+        )
+        if email_requested and user is not None:
+            email_sent = await send_user_notification_email(
+                settings=self.ctx.settings,
+                i18n=self.ctx.i18n,
+                user=user,
+                subject_key="email_payment_failed_subject",
+                message_text=message_text,
+                dashboard_url=(getattr(self.ctx.settings, "SUBSCRIPTION_MINI_APP_URL", "") or None),
+            )
+        if telegram_error is None or email_sent is True:
+            await _mark_payment_failure_notification_sent(
+                self.ctx,
+                payload.get("payment_db_id"),
+            )
+        else:
+            await _release_payment_failure_notification(
+                self.ctx,
+                payload.get("payment_db_id"),
+            )
+
+    async def on_referral_bonus_granted(self, event_name: str, payload: dict[str, Any]) -> None:
+        del event_name
+        if not _truthy(payload.get("inviter_bonus_applied")):
+            return
+        inviter_user_id = payload.get("inviter_user_id")
+        inviter_bonus_days = int(payload.get("inviter_bonus_days") or 0)
+        if inviter_user_id is None or inviter_bonus_days <= 0:
+            return
+        inviter = await self._load_user(inviter_user_id)
+        if inviter is None:
+            return
+        language = (
+            getattr(inviter, "language_code", None)
+            or getattr(self.ctx.settings, "DEFAULT_LANGUAGE", "ru")
+            or "ru"
+        )
+        translator = make_translator(self.ctx.i18n, language)
+        end_date = _parse_datetime(payload.get("inviter_bonus_end_date"))
+        message_key = (
+            "referral_bonus_inviter_notification_new_sub"
+            if payload.get("inviter_bonus_kind") == "new_sub"
+            else "referral_bonus_inviter_notification_extended"
+        )
+        message_text = translator(
+            message_key,
+            days=inviter_bonus_days,
+            referee_name=payload.get("referee_name") or f"User {payload.get('referee_user_id')}",
+            new_end_date=end_date.strftime("%Y-%m-%d") if end_date else "",
+        )
+        chat_id = telegram_recipient(inviter, inviter_user_id)
+        plan = user_notification_delivery_plan(
+            self.ctx.settings,
+            UserNotificationCategory.REFERRALS,
+            inviter,
+            telegram_available=self.ctx.bot is not None and chat_id is not None,
+        )
+        if plan.telegram and self.ctx.bot is not None and chat_id is not None:
+            try:
+                await self.ctx.bot.send_message(chat_id, message_text)
+            except Exception as exc:
+                expected_failure = await _log_telegram_notification_failure(
+                    self.ctx,
+                    int(inviter_user_id),
+                    "referral_bonus",
+                    exc,
+                )
+                if not expected_failure:
+                    logger.exception(
+                        "Failed to send referral bonus notification to inviter %s.",
+                        inviter_user_id,
+                    )
+        email_requested = plan.email or (
+            user_notification_channel_selected(
+                self.ctx.settings,
+                UserNotificationCategory.REFERRALS,
+                "email",
+            )
+            and user_notification_channel_allowed(
+                inviter,
+                UserNotificationCategory.REFERRALS,
+                "email",
+            )
+        )
+        if email_requested:
+            await send_user_notification_email(
+                settings=self.ctx.settings,
+                i18n=self.ctx.i18n,
+                user=inviter,
+                subject_key="email_referral_bonus_subject",
+                message_text=message_text,
+                dashboard_url=(getattr(self.ctx.settings, "SUBSCRIPTION_MINI_APP_URL", "") or None),
+            )
+
+    async def on_account_merged(self, event_name: str, payload: dict[str, Any]) -> None:
+        del event_name
+        reason = str(payload.get("reason") or "")
+        if reason not in ACCOUNT_MERGE_NOTIFY_REASONS:
+            return
+
+        target_user_id = payload.get("target_user_id")
+        source_user_id = payload.get("source_user_id")
+        if target_user_id is None or source_user_id is None:
+            return
+
+        service = self._notification_service()
+        final_end_date = _parse_datetime(payload.get("final_end_date"))
+        if final_end_date is None:
+            subscription = await self._load_active_subscription(
+                target_user_id,
+                payload.get("target_panel_user_uuid"),
+            )
+            final_end_date = getattr(subscription, "end_date", None)
+
+        if service is not None:
+            try:
+                await service.notify_account_merged(
+                    primary_user_id=int(target_user_id),
+                    removed_user_id=int(source_user_id),
+                    **(
+                        {"primary_minishop_id": payload["target_minishop_id"]}
+                        if payload.get("target_minishop_id")
+                        else {}
+                    ),
+                    **(
+                        {"removed_minishop_id": payload["source_minishop_id"]}
+                        if payload.get("source_minishop_id")
+                        else {}
+                    ),
+                    email=payload.get("email"),
+                    telegram_id=payload.get("telegram_id"),
+                    username=payload.get("username"),
+                    first_name=payload.get("first_name"),
+                    final_end_date_text=_format_webapp_datetime(final_end_date),
+                    primary_panel_user_uuid=payload.get("target_panel_user_uuid"),
+                    source_panel_user_uuid=payload.get("source_panel_user_uuid"),
+                    reason=reason,
+                    provider=EXTERNAL_MERGE_PROVIDERS.get(reason),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to react to account merge %s -> %s.",
+                    source_user_id,
+                    target_user_id,
+                )
+
+        email_service = self.ctx.email_auth_service
+        email = str(payload.get("email") or "").strip()
+        if email_service is not None and email and _truthy(payload.get("send_user_email")):
+            try:
+                content = render_account_merged(
+                    self.ctx.settings,
+                    language_code=payload.get("language")
+                    or getattr(self.ctx.settings, "DEFAULT_LANGUAGE", "ru"),
+                    primary_user_id=int(target_user_id),
+                    removed_user_id=int(source_user_id),
+                    final_end_date_text=_format_webapp_datetime(final_end_date),
+                    i18n=self.ctx.i18n,
+                )
+                await email_service.send_rendered_email(email=email, content=content)
+            except Exception:
+                logger.exception("Failed to send account merge email to %s.", email)
+
+
+def register_core_reactions(ctx: PluginContext) -> None:
+    """Subscribe built-in side-effect reactions to domain events."""
+    for event_name, handler in _registered_handlers:
+        events.unsubscribe(event_name, handler)
+    _registered_handlers.clear()
+
+    reactions = CoreEventReactions(ctx)
+    subscriptions: list[tuple[str, events.EventHandler]] = [
+        (events.TRIAL_ACTIVATED, reactions.on_trial_activated),
+        (events.USER_REGISTERED, reactions.on_user_registered),
+        (events.PROMO_CODE_APPLIED, reactions.on_promo_code_applied),
+        (events.ACCOUNT_EMAIL_LINKED, reactions.on_account_email_linked),
+        (events.ACCOUNT_TELEGRAM_LINKED, reactions.on_account_telegram_linked),
+        (events.ACCOUNT_EXTERNAL_IDENTITY_LINKED, reactions.on_account_external_identity_linked),
+        (events.PAYMENT_SUCCEEDED, reactions.on_payment_succeeded),
+        (events.PAYMENT_CANCELED, reactions.on_payment_canceled),
+        (events.REFERRAL_BONUS_GRANTED, reactions.on_referral_bonus_granted),
+        (events.ACCOUNT_MERGED, reactions.on_account_merged),
+        (events.PARTNER_APPLICATION_SUBMITTED, reactions.on_partner_application_submitted),
+        (events.PARTNER_APPLICATION_DECIDED, reactions.on_partner_application_decided),
+        (events.PARTNER_STATUS_CHANGED, reactions.on_partner_status_changed),
+        (events.PARTNER_WITHDRAWAL_REQUESTED, reactions.on_partner_withdrawal_requested),
+        (events.PARTNER_WITHDRAWAL_STATUS_CHANGED, reactions.on_partner_withdrawal_status_changed),
+    ]
+    for event_name, handler in subscriptions:
+        events.subscribe(event_name, handler)
+    _registered_handlers.extend(subscriptions)

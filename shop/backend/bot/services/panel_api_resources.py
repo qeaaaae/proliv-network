@@ -1,0 +1,648 @@
+import logging
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from bot.services.panel_api_compat import PanelApiCompatibility, numeric_panel_user_id
+from bot.services.panel_api_contracts import PanelApiCapability, PanelApiOperation
+from bot.utils.ttl_cache import AsyncTTLCache
+from config.settings import Settings
+from db.dal import panel_sync_dal
+from db.models import PanelSyncStatus
+
+logger = logging.getLogger(__name__)
+
+# Static endpoint prefixes used as log/metric labels instead of the raw request
+# path. Endpoints embed user identifiers (telegram id, username, email, uuids),
+# so logging the path verbatim would leak private data into log files; the
+# label keeps only the constant prefix. Longest prefixes first so e.g.
+
+
+def _json_dict(value: object) -> dict[str, Any] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _json_dict_list(value: object) -> list[dict[str, Any]] | None:
+    if not isinstance(value, list):
+        return None
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _panel_devices_list(value: object) -> list[dict[str, Any]] | None:
+    if isinstance(value, dict):
+        for key in ("devices", "items", "data"):
+            devices = _json_dict_list(value.get(key))
+            if devices is not None:
+                return devices
+        return None
+    return _json_dict_list(value)
+
+
+def _panel_dict_response(response_data: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not response_data or response_data.get("error"):
+        return None
+    return _json_dict(response_data.get("response", response_data))
+
+
+class PanelApiResourcesMixin:
+    settings: Settings
+    _all_users_cache: AsyncTTLCache
+    _devices_cache: AsyncTTLCache
+    _external_squads_cache: AsyncTTLCache
+    _hosts_cache: AsyncTTLCache
+    _squads_cache: AsyncTTLCache
+    _users_cache: AsyncTTLCache
+
+    if TYPE_CHECKING:
+
+        async def _request(
+            self,
+            method: str,
+            endpoint: str,
+            log_full_response: bool = False,
+            *,
+            operation: PanelApiOperation | None = None,
+            **kwargs: Any,
+        ) -> dict[str, Any] | None: ...
+        async def get_panel_api_compatibility(
+            self, *, force_refresh: bool = False
+        ) -> PanelApiCompatibility: ...
+        def panel_capability_state(
+            self,
+            capability: PanelApiCapability,
+            compatibility: PanelApiCompatibility,
+        ) -> bool | None: ...
+        def remember_panel_capability(
+            self,
+            capability: PanelApiCapability,
+            supported: bool,
+        ) -> None: ...
+        async def panel_mutation_allowed(
+            self,
+            operation: PanelApiOperation,
+            *,
+            compatibility: PanelApiCompatibility | None = None,
+        ) -> bool: ...
+        async def resolve_panel_user_reference(
+            self,
+            value: object,
+            operation: PanelApiOperation,
+            *,
+            compatibility: PanelApiCompatibility | None = None,
+        ) -> str | None: ...
+
+    async def get_subscription_link(
+        self, short_uuid_or_sub_uuid: str, client_type: str | None = None
+    ) -> str | None:
+        panel_api_url = self.settings.panel_settings.api_url
+        if not panel_api_url:
+            logger.error("PANEL_API_URL not set, cannot generate subscription link.")
+            return None
+        base_sub_url = f"{panel_api_url.rstrip('/')}/sub/{short_uuid_or_sub_uuid}"
+        if client_type:
+            return f"{base_sub_url}/{client_type.lower()}"
+        return base_sub_url
+
+    async def get_subscription_page_config_by_short_uuid(
+        self,
+        short_uuid: str,
+        request_headers: dict[str, str] | None = None,
+    ) -> dict[str, Any] | None:
+        if not short_uuid:
+            return None
+        endpoint = f"/subscriptions/subpage-config/{short_uuid}"
+        payload = {"requestHeaders": request_headers or {}}
+        response_data = await self._request(
+            "GET",
+            endpoint,
+            operation=PanelApiOperation.SUBSCRIPTION_CONFIG_RESOLVED,
+            json=payload,
+            log_full_response=False,
+        )
+        response = _panel_dict_response(response_data)
+        if response is not None:
+            return response
+        logger.error(
+            "Failed to get subscription page config for short UUID %s. Response: %s",
+            short_uuid,
+            response_data,
+        )
+        return None
+
+    async def get_subscription_page_config_list(self) -> dict[str, Any] | None:
+        endpoint = "/subscription-page-configs"
+        response_data = await self._request(
+            "GET",
+            endpoint,
+            operation=PanelApiOperation.SUBSCRIPTION_PAGE_CONFIG_LIST,
+            log_full_response=False,
+        )
+        response = _panel_dict_response(response_data)
+        if response is not None:
+            return response
+        logger.error(
+            "Failed to get subscription page config list from panel. Response: %s", response_data
+        )
+        return None
+
+    async def get_subscription_page_config_by_uuid(
+        self,
+        config_uuid: str,
+    ) -> dict[str, Any] | None:
+        config_uuid = str(config_uuid or "").strip()
+        if not config_uuid:
+            return None
+        endpoint = f"/subscription-page-configs/{config_uuid}"
+        response_data = await self._request(
+            "GET",
+            endpoint,
+            operation=PanelApiOperation.SUBSCRIPTION_PAGE_CONFIG_GET,
+            log_full_response=False,
+        )
+        response = _panel_dict_response(response_data)
+        if response is not None:
+            return response
+        logger.error(
+            "Failed to get subscription page config %s from panel. Response: %s",
+            config_uuid,
+            response_data,
+        )
+        return None
+
+    async def get_external_squad(self, squad_uuid: str) -> dict[str, Any] | None:
+        squad_uuid = str(squad_uuid or "").strip()
+        if not squad_uuid:
+            return None
+        if self._external_squads_cache.ttl_seconds <= 0:
+            return await self._get_external_squad_uncached(squad_uuid)
+        cached = await self._external_squads_cache.get_or_load(
+            f"detail:{squad_uuid}",
+            lambda: self._get_external_squad_uncached(squad_uuid),
+        )
+        return _json_dict(cached)
+
+    async def _get_external_squad_uncached(self, squad_uuid: str) -> dict[str, Any] | None:
+        response_data = await self._request(
+            "GET",
+            f"/external-squads/{squad_uuid}",
+            operation=PanelApiOperation.EXTERNAL_SQUAD_GET,
+            log_full_response=False,
+        )
+        if response_data and not response_data.get("error") and "response" in response_data:
+            response = response_data.get("response")
+            if isinstance(response, dict):
+                return response
+        logger.error("Failed to get external squad %s. Response: %s", squad_uuid, response_data)
+        return None
+
+    async def get_user_devices(
+        self,
+        user_uuid: str,
+        *,
+        force_refresh: bool = False,
+    ) -> list[dict[str, Any]] | None:
+        if force_refresh:
+            await self._invalidate_devices_cache(user_uuid)
+        if self._devices_cache.ttl_seconds <= 0:
+            return await self._get_user_devices_uncached(user_uuid)
+        cached = await self._devices_cache.get_or_load(
+            f"user:{user_uuid}",
+            lambda: self._get_user_devices_uncached(user_uuid),
+        )
+        return _panel_devices_list(cached)
+
+    async def _get_user_devices_uncached(self, user_uuid: str) -> list[dict[str, Any]] | None:
+        compatibility = await self.get_panel_api_compatibility()
+        user_reference = await self.resolve_panel_user_reference(
+            user_uuid,
+            PanelApiOperation.HWID_DEVICES_GET,
+            compatibility=compatibility,
+        )
+        if user_reference is None:
+            return None
+        endpoint = f"/hwid/devices/{user_reference}"
+        response_data = await self._request(
+            "GET",
+            endpoint,
+            operation=PanelApiOperation.HWID_DEVICES_GET,
+            log_full_response=False,
+        )
+        if response_data and not response_data.get("error"):
+            for key in ("response", "data"):
+                if key not in response_data:
+                    continue
+                devices = _panel_devices_list(response_data.get(key))
+                if devices is not None:
+                    return devices
+        logger.error("Failed to get user devices for user %s (panel response redacted).", user_uuid)
+        return None
+
+    async def disconnect_device(self, user_uuid: str, hwid: str) -> bool:
+        operation = PanelApiOperation.HWID_DEVICE_DELETE
+        compatibility = await self.get_panel_api_compatibility()
+        if not await self.panel_mutation_allowed(operation, compatibility=compatibility):
+            return False
+        selector_is_numeric = self.panel_capability_state(
+            PanelApiCapability.HWID_USER_ID_SELECTOR,
+            compatibility,
+        )
+        endpoint = "/hwid/devices/delete"
+        user_reference = await self.resolve_panel_user_reference(
+            user_uuid,
+            operation,
+            compatibility=compatibility,
+        )
+        if user_reference is None:
+            return False
+        numeric_id = numeric_panel_user_id(user_reference)
+        payload: dict[str, Any] = {"hwid": hwid}
+        if selector_is_numeric is True or (selector_is_numeric is None and numeric_id is not None):
+            payload["userId"] = numeric_id
+        else:
+            payload["userUuid"] = user_reference
+        response_data = await self._request(
+            "POST",
+            endpoint,
+            operation=operation,
+            json=payload,
+            log_full_response=False,
+        )
+        if response_data and not response_data.get("error"):
+            self.remember_panel_capability(
+                PanelApiCapability.HWID_USER_ID_SELECTOR,
+                "userId" in payload,
+            )
+            await self._invalidate_devices_cache(user_uuid)
+            return True
+        logger.error(
+            "Failed to disconnect device for user %s (device id and panel response redacted).",
+            user_uuid,
+        )
+        return False
+
+    async def get_hwid_devices_stats(self) -> dict[str, Any] | None:
+        """Return HWID aggregate stats, including Remnawave 2.8 byPlatform[].byApp."""
+        response_data = await self._request(
+            "GET",
+            "/hwid/devices/stats",
+            operation=PanelApiOperation.HWID_STATS,
+            log_full_response=False,
+        )
+        response = _panel_dict_response(response_data)
+        if response is not None:
+            return response
+        logger.error("Failed to get HWID device stats. Response: %s", response_data)
+        return None
+
+    async def get_hwid_devices_top_users(
+        self,
+        *,
+        start: int = 0,
+        size: int = 10,
+    ) -> dict[str, Any] | None:
+        params = {"start": max(0, int(start)), "size": max(1, int(size))}
+        response_data = await self._request(
+            "GET",
+            "/hwid/devices/top-users",
+            operation=PanelApiOperation.HWID_TOP_USERS,
+            params=params,
+            log_full_response=False,
+        )
+        response = _panel_dict_response(response_data)
+        if response is not None:
+            return response
+        logger.error("Failed to get HWID top users. Response: %s", response_data)
+        return None
+
+    async def restart_node(self, node_uuid: str, *, force_restart: bool = False) -> bool:
+        operation = PanelApiOperation.NODE_RESTART
+        if not await self.panel_mutation_allowed(operation):
+            return False
+        endpoint = f"/nodes/{node_uuid}/actions/restart"
+        response_data = await self._request(
+            "POST",
+            endpoint,
+            operation=operation,
+            json={"forceRestart": bool(force_restart)},
+            log_full_response=False,
+        )
+        if response_data and not response_data.get("error"):
+            return True
+        logger.error("Failed to restart node %s. Response: %s", node_uuid, response_data)
+        return False
+
+    async def restart_all_nodes(self, *, force_restart: bool = False) -> bool:
+        operation = PanelApiOperation.NODES_RESTART_ALL
+        if not await self.panel_mutation_allowed(operation):
+            return False
+        response_data = await self._request(
+            "POST",
+            "/nodes/actions/restart-all",
+            operation=operation,
+            json={"forceRestart": bool(force_restart)},
+            log_full_response=False,
+        )
+        if response_data and not response_data.get("error"):
+            return True
+        logger.error("Failed to restart all nodes. Response: %s", response_data)
+        return False
+
+    async def update_bot_db_sync_status(
+        self,
+        session: AsyncSession,
+        status: str,
+        details: str,
+        users_processed: int = 0,
+        subs_synced: int = 0,
+    ) -> None:
+        await panel_sync_dal.update_panel_sync_status(
+            session, status, details, users_processed, subs_synced
+        )
+
+    async def get_bot_db_last_sync_status(self, session: AsyncSession) -> PanelSyncStatus | None:
+        return await panel_sync_dal.get_panel_sync_status(session)
+
+    async def get_system_stats(self) -> dict[str, Any] | None:
+        """Get system statistics (CPU, memory, users counts)"""
+        response_data = await self._request(
+            "GET",
+            "/system/stats",
+            operation=PanelApiOperation.SYSTEM_STATS,
+            log_full_response=False,
+        )
+        if response_data and not response_data.get("error") and "response" in response_data:
+            return _json_dict(response_data.get("response"))
+        return None
+
+    async def get_bandwidth_stats(self) -> dict[str, Any] | None:
+        """Get bandwidth statistics"""
+        response_data = await self._request(
+            "GET",
+            "/system/stats/bandwidth",
+            operation=PanelApiOperation.SYSTEM_BANDWIDTH_STATS,
+            log_full_response=False,
+        )
+        if response_data and not response_data.get("error") and "response" in response_data:
+            return _json_dict(response_data.get("response"))
+        return None
+
+    async def get_nodes_bandwidth_usage(
+        self,
+        *,
+        start: str,
+        end: str,
+        top_nodes_limit: int = 64,
+    ) -> dict[str, Any] | None:
+        """Per-node usage for a date range (Remnawave GET /bandwidth-stats/nodes).
+
+        Query dates are calendar dates (YYYY-MM-DD), same as the panel UI analytics.
+        Response includes topNodes[{ uuid, name, countryCode, total }, ...] where total is bytes.
+        """
+        response_data = await self._request(
+            "GET",
+            "/bandwidth-stats/nodes",
+            operation=PanelApiOperation.NODE_BANDWIDTH,
+            params={
+                "start": start,
+                "end": end,
+                "topNodesLimit": top_nodes_limit,
+            },
+            log_full_response=False,
+        )
+        if response_data and not response_data.get("error") and "response" in response_data:
+            return _json_dict(response_data.get("response"))
+        return None
+
+    async def get_user_bandwidth_stats(
+        self,
+        user_uuid: str,
+        *,
+        start: str | None = None,
+        end: str | None = None,
+        top_nodes_limit: int = 20,
+    ) -> dict[str, Any] | None:
+        if not start or not end:
+            logger.error("User bandwidth stats require both start and end dates.")
+            return None
+        compatibility = await self.get_panel_api_compatibility()
+        user_reference = await self.resolve_panel_user_reference(
+            user_uuid,
+            PanelApiOperation.USER_BANDWIDTH,
+            compatibility=compatibility,
+        )
+        if user_reference is None:
+            return None
+        endpoint = f"/bandwidth-stats/users/{user_reference}"
+        response_data = await self._request(
+            "GET",
+            endpoint,
+            operation=PanelApiOperation.USER_BANDWIDTH,
+            params={
+                "start": start,
+                "end": end,
+                "topNodesLimit": max(1, int(top_nodes_limit)),
+            },
+            log_full_response=False,
+        )
+        if response_data and not response_data.get("error") and "response" in response_data:
+            return _json_dict(response_data.get("response"))
+        logger.error(
+            "Failed to get bandwidth stats for user %s. Response: %s", user_uuid, response_data
+        )
+        return None
+
+    async def get_node_users_bandwidth_stats(
+        self,
+        node_uuid: str,
+        *,
+        start: str,
+        end: str,
+        top_users_limit: int = 10000,
+    ) -> dict[str, Any] | None:
+        endpoint = f"/bandwidth-stats/nodes/{node_uuid}/users"
+        response_data = await self._request(
+            "GET",
+            endpoint,
+            operation=PanelApiOperation.NODE_USER_BANDWIDTH,
+            params={"start": start, "end": end, "topUsersLimit": top_users_limit},
+            log_full_response=False,
+        )
+        if response_data and not response_data.get("error") and "response" in response_data:
+            response = response_data.get("response")
+            if isinstance(response, dict):
+                return response
+            if isinstance(response, list):
+                return {"topUsers": response}
+        logger.error(
+            "Failed to get node bandwidth stats for node %s. Response: %s",
+            node_uuid,
+            response_data,
+        )
+        return None
+
+    async def _invalidate_squad_caches(self) -> None:
+        await self._squads_cache.invalidate_remote()
+
+    async def _invalidate_user_cache(self, user_uuid: str | None) -> None:
+        if not user_uuid:
+            return
+        await self._users_cache.invalidate_remote(f"uuid:{user_uuid}")
+
+    async def _invalidate_all_users_cache(self) -> None:
+        await self._all_users_cache.invalidate_remote()
+
+    async def _invalidate_devices_cache(self, user_uuid: str | None) -> None:
+        if not user_uuid:
+            return
+        await self._devices_cache.invalidate_remote(f"user:{user_uuid}")
+
+    async def get_internal_squads(self) -> list[dict[str, Any]] | None:
+        squads = _json_dict_list(
+            await self._squads_cache.get_or_load("list", self._get_internal_squads_uncached)
+        )
+        if squads is not None:
+            return squads
+        stale_squads = _json_dict_list(self._squads_cache.get_stale("list"))
+        if stale_squads is not None:
+            logger.warning("Using stale internal squads cache after panel fetch failed.")
+            return stale_squads
+        return None
+
+    async def _get_internal_squads_uncached(self) -> list[dict[str, Any]] | None:
+        response_data = await self._request(
+            "GET",
+            "/internal-squads",
+            operation=PanelApiOperation.INTERNAL_SQUADS_LIST,
+            log_full_response=False,
+        )
+        if response_data and not response_data.get("error") and "response" in response_data:
+            response = response_data.get("response")
+            if isinstance(response, list):
+                return _json_dict_list(response)
+            if isinstance(response, dict):
+                for key in ("internalSquads", "squads", "items", "data"):
+                    value = response.get(key)
+                    if isinstance(value, list):
+                        return _json_dict_list(value)
+        logger.error("Failed to get internal squads. Response: %s", response_data)
+        return None
+
+    async def get_internal_squad(self, squad_uuid: str) -> dict[str, Any] | None:
+        cached = await self._squads_cache.get_or_load(
+            f"detail:{squad_uuid}",
+            lambda: self._get_internal_squad_uncached(squad_uuid),
+        )
+        return _json_dict(cached)
+
+    async def _get_internal_squad_uncached(self, squad_uuid: str) -> dict[str, Any] | None:
+        response_data = await self._request(
+            "GET",
+            f"/internal-squads/{squad_uuid}",
+            operation=PanelApiOperation.INTERNAL_SQUAD_GET,
+            log_full_response=False,
+        )
+        if response_data and not response_data.get("error") and "response" in response_data:
+            response = response_data.get("response")
+            if isinstance(response, dict):
+                inner = response.get("internalSquad") or response.get("squad")
+                if isinstance(inner, dict):
+                    return inner
+                return response
+        logger.error(
+            "Failed to get internal squad %s. Response: %s",
+            squad_uuid,
+            response_data,
+        )
+        return None
+
+    async def get_internal_squad_accessible_nodes(
+        self,
+        squad_uuid: str,
+    ) -> list[dict[str, Any]] | None:
+        cached = await self._squads_cache.get_or_load(
+            f"nodes:{squad_uuid}",
+            lambda: self._get_internal_squad_accessible_nodes_uncached(squad_uuid),
+        )
+        return _json_dict_list(cached)
+
+    async def _get_internal_squad_accessible_nodes_uncached(
+        self,
+        squad_uuid: str,
+    ) -> list[dict[str, Any]] | None:
+        endpoints = (
+            f"/internal-squads/{squad_uuid}/accessible-nodes",
+            f"/internal-squads/{squad_uuid}/nodes",
+        )
+        last_response = None
+        for endpoint in endpoints:
+            response_data = await self._request(
+                "GET",
+                endpoint,
+                operation=PanelApiOperation.INTERNAL_SQUAD_NODES,
+                log_full_response=False,
+            )
+            last_response = response_data
+            if response_data and not response_data.get("error") and "response" in response_data:
+                response = response_data.get("response")
+                if isinstance(response, list):
+                    return _json_dict_list(response)
+                if isinstance(response, dict):
+                    for key in ("nodes", "accessibleNodes", "items", "data"):
+                        value = response.get(key)
+                        if isinstance(value, list):
+                            return _json_dict_list(value)
+        logger.error(
+            "Failed to get accessible nodes for internal squad %s. Response: %s",
+            squad_uuid,
+            last_response,
+        )
+        return None
+
+    async def get_hosts(self) -> list[dict[str, Any]] | None:
+        cached = await self._hosts_cache.get_or_load("list", self._get_hosts_uncached)
+        return _json_dict_list(cached)
+
+    async def _get_hosts_uncached(self) -> list[dict[str, Any]] | None:
+        response_data = await self._request(
+            "GET",
+            "/hosts",
+            operation=PanelApiOperation.HOSTS_LIST,
+            log_full_response=False,
+        )
+        if response_data and not response_data.get("error") and "response" in response_data:
+            response = response_data.get("response")
+            if isinstance(response, list):
+                return _json_dict_list(response)
+            if isinstance(response, dict):
+                for key in ("hosts", "items", "data"):
+                    value = response.get(key)
+                    if isinstance(value, list):
+                        return _json_dict_list(value)
+        logger.error("Failed to get hosts. Response: %s", response_data)
+        return None
+
+    async def reset_user_traffic(self, user_uuid: str) -> bool:
+        operation = PanelApiOperation.USER_RESET_TRAFFIC
+        compatibility = await self.get_panel_api_compatibility()
+        if not await self.panel_mutation_allowed(operation, compatibility=compatibility):
+            return False
+        user_reference = await self.resolve_panel_user_reference(
+            user_uuid,
+            operation,
+            compatibility=compatibility,
+        )
+        if user_reference is None:
+            return False
+        endpoint = f"/users/{user_reference}/actions/reset-traffic"
+        response_data = await self._request(
+            "POST",
+            endpoint,
+            operation=operation,
+            log_full_response=False,
+        )
+        if response_data and not response_data.get("error"):
+            await self._invalidate_user_cache(user_uuid)
+            await self._invalidate_all_users_cache()
+            return True
+        logger.error("Failed to reset traffic for user %s. Response: %s", user_uuid, response_data)
+        return False

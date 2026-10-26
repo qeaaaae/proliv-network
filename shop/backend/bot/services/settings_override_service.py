@@ -1,0 +1,706 @@
+"""Apply persisted setting overrides on top of the env-based Settings.
+
+The runtime treats DB overrides as the source of truth: env values are
+loaded once via pydantic, then any matching keys from the
+``app_setting_overrides`` table replace those attributes in-process.
+This way the admin can flip flags, adjust prices or rename labels
+without restarting the container.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import sessionmaker
+
+from bot.app.web.admin_settings_manifest import (
+    SettingField,
+    coerce_value,
+    get_field_by_key,
+    manifest_keys,
+)
+from config.settings import Settings
+from db.dal import app_settings_dal, partner_dal
+
+logger = logging.getLogger(__name__)
+
+APPEARANCE_OVERRIDE_KEYS = {
+    "WEBAPP_LOGO_URL",
+    "WEBAPP_FAVICON_USE_CUSTOM",
+    "WEBAPP_FAVICON_URL",
+    "WEBAPP_LOGO_FAVICON_URL",
+    "WEBAPP_PRIMARY_COLOR",
+    "WEBAPP_COMPACT_HOME_ENABLED",
+    "WEBAPP_CHECKOUT_ADDON_VALUE_ANIMATION_ENABLED",
+    "WEBAPP_CHECKOUT_ADDON_EDITOR_EXPANDED_BY_DEFAULT",
+    "WEBAPP_DEFAULT_THEME",
+}
+REFERRAL_LINK_VISIBILITY_KEYS = (
+    "REFERRAL_WEBAPP_LINK_ENABLED",
+    "REFERRAL_TELEGRAM_LINK_ENABLED",
+)
+PARTNER_SETTING_KEYS = {
+    "PARTNER_PROGRAM_ENABLED",
+    "PARTNER_AUTO_ENROLLMENT_ENABLED",
+    "PARTNER_REFERRAL_PROGRAM_DISABLED",
+    "PARTNER_WITHDRAWALS_ENABLED",
+    "PARTNER_BALANCE_PAYMENT_ENABLED",
+    "PARTNER_CLIENT_WELCOME_BONUS_ENABLED",
+    "PARTNER_CLIENT_PAYMENT_BONUS_ENABLED",
+    "PARTNER_ONE_BONUS_PER_CLIENT",
+    "PARTNER_DEFAULT_COMMISSION_BPS",
+    "PARTNER_COMMISSION_HOLD_DAYS",
+    "PARTNER_ELIGIBLE_CURRENCIES",
+    "PARTNER_EXCLUDED_SALE_MODES",
+    "PARTNER_WITHDRAWAL_METHODS_JSON",
+    "PARTNER_TELEGRAM_LINK_ENABLED",
+    "PARTNER_WEBAPP_LINK_ENABLED",
+    "PARTNER_APPLICATION_MESSAGE_MAX_LENGTH",
+    "PARTNER_MAX_ACTIVE_WITHDRAWALS",
+    "PARTNER_REAPPLICATION_ENABLED",
+    "PARTNER_REAPPLICATION_COOLDOWN_DAYS",
+    "PARTNER_LIST_PAGE_LIMIT",
+    "PARTNER_APPLICATION_RATE_LIMIT_HOURS",
+    "PARTNER_WITHDRAWAL_RATE_LIMIT_SECONDS",
+    "PARTNER_AUDIT_RETENTION_DAYS",
+    "PARTNER_REQUISITES_RETENTION_DAYS",
+}
+# DEPRECATED: apply only to persisted overrides from pre-full-URL installations.
+LEGACY_RUNTIME_OVERRIDE_KEYS = {"SERVER_STATUS_KUMA_SLUG"}
+APP_ROOT = Path(__file__).resolve().parents[3]
+APPEARANCE_OVERRIDES_BACKUP_PATH = APP_ROOT / "data" / "webapp-logo" / "appearance-settings.json"
+
+
+def _resolve_attribute_name(settings: Settings, key: str) -> str | None:
+    """Resolve the actual attribute name on the Settings model.
+
+    Some settings expose their env name via ``alias`` (e.g. MONTH_1_ENABLED is
+    aliased to "1_MONTH_ENABLED"). Lookups by either alias or attribute name
+    should both succeed, with the attribute name returned in either case.
+    """
+
+    if hasattr(settings, key):
+        return key
+
+    fields = type(settings).model_fields
+    for attr_name, field_info in fields.items():
+        alias = getattr(field_info, "alias", None)
+        if alias and alias == key:
+            return str(attr_name)
+    return None
+
+
+def _apply_to_provider_bundle(key: str, value: Any) -> bool:
+    """Route an override into the matching provider config/presentation model.
+
+    Provider modules own their env-config via BaseSettings subclasses; here
+    we look up which one owns ``key`` and write the value into the right
+    attribute on the right model.
+    """
+    from bot.payment_providers import (
+        find_manifest_owner,
+        get_provider_bundle,
+        get_spec_presentation,
+    )
+
+    owner = find_manifest_owner(key)
+    if owner is None:
+        return False
+    spec, manifest_field = owner
+    if manifest_field.target == "presentation":
+        target = get_spec_presentation(spec.id)
+        if target is None:
+            bundle = get_provider_bundle(spec.service_key)
+            target = bundle.presentation if bundle else None
+    else:
+        bundle = get_provider_bundle(spec.service_key)
+        target = bundle.config if bundle else None
+    if target is None:
+        return False
+    attr_name = manifest_field.attr or key
+    try:
+        setattr(target, attr_name, value)
+        return True
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Failed to apply provider override %s=%r: %s", key, value, exc)
+        return False
+
+
+def _apply_value(settings: Settings, key: str, value: Any) -> bool:
+    # Provider-owned keys go to provider models, not the central Settings.
+    if _apply_to_provider_bundle(key, value):
+        return True
+    attr_name = _resolve_attribute_name(settings, key)
+    if not attr_name:
+        return False
+    try:
+        setattr(settings, attr_name, value)
+        return True
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Failed to apply override %s=%r: %s", key, value, exc)
+        return False
+
+
+def apply_overrides(settings: Settings, overrides: dict[str, Any]) -> int:
+    return len(_apply_overrides(settings, overrides)[0])
+
+
+def _apply_overrides(
+    settings: Settings,
+    overrides: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    """Apply overrides in-process, returning the applied and the skipped keys.
+
+    A key lands nowhere when its provider config could not be built from env or
+    when nothing owns it any more. That used to be a debug-level surprise: the
+    admin panel reported a successful save while the running process kept the
+    old value, so the setting looked like it refused to be changed.
+    """
+
+    applied: list[str] = []
+    skipped: list[str] = []
+    for key, raw_value in overrides.items():
+        field = get_field_by_key(key)
+        if not field:
+            # This key was once editable and may still exist in the overrides
+            # table. Apply it at startup, but keep it absent from the manifest.
+            if key in LEGACY_RUNTIME_OVERRIDE_KEYS:
+                value = str(raw_value).strip() if raw_value is not None else None
+                if _apply_value(settings, key, value):
+                    applied.append(key)
+                else:
+                    skipped.append(key)
+                continue
+            skipped.append(key)
+            continue
+        try:
+            coerced = coerce_value(field, raw_value)
+        except ValueError as exc:
+            logger.warning("Skipping override %s: %s", key, exc)
+            skipped.append(key)
+            continue
+        if _apply_value(settings, key, coerced):
+            applied.append(key)
+        else:
+            skipped.append(key)
+    return applied, skipped
+
+
+def _normalize_exclusive_provider_toggles(
+    updates: dict[str, Any],
+    deletes: list,
+) -> tuple[dict[str, Any], list]:
+    """When a provider is enabled for admins only, turn off its public toggle."""
+
+    from bot.payment_providers import provider_admin_only_pairs
+
+    exclusive_map = {
+        key: opposite
+        for public_key, admin_key in provider_admin_only_pairs()
+        for key, opposite in ((public_key, admin_key), (admin_key, public_key))
+    }
+    if not exclusive_map:
+        return updates, deletes
+
+    normalized = dict(updates)
+    normalized_deletes = list(deletes)
+    for key, value in updates.items():
+        if value is not True or key not in exclusive_map:
+            continue
+        opposite = exclusive_map[key]
+        normalized[opposite] = False
+        normalized_deletes = [item for item in normalized_deletes if item != opposite]
+    return normalized, normalized_deletes
+
+
+def _referral_link_visibility_errors(
+    settings: Settings,
+    updates: dict[str, Any],
+    deletes: list[str],
+) -> dict[str, str]:
+    touched = set(REFERRAL_LINK_VISIBILITY_KEYS).intersection((*updates, *deletes))
+    if not touched:
+        return {}
+
+    values = {key: bool(getattr(settings, key)) for key in REFERRAL_LINK_VISIBILITY_KEYS}
+    deleted_visibility_keys = set(deletes).intersection(REFERRAL_LINK_VISIBILITY_KEYS)
+    if deleted_visibility_keys:
+        try:
+            env_only = Settings()
+        except Exception:
+            return dict.fromkeys(
+                sorted(deleted_visibility_keys),
+                "could not resolve the environment default",
+            )
+        for key in deleted_visibility_keys:
+            values[key] = bool(getattr(env_only, key))
+    for key in REFERRAL_LINK_VISIBILITY_KEYS:
+        if key in updates:
+            values[key] = bool(updates[key])
+
+    if any(values.values()):
+        return {}
+    return dict.fromkeys(sorted(touched), "at least one referral link must remain enabled")
+
+
+def _partner_settings_candidate(
+    settings: Settings,
+    updates: dict[str, Any],
+    deletes: list[str],
+) -> Settings:
+    candidate = settings.model_copy(deep=True)
+    if deletes:
+        env_only = Settings()
+        for key in PARTNER_SETTING_KEYS.intersection(deletes):
+            setattr(candidate, key, getattr(env_only, key))
+    for key in PARTNER_SETTING_KEYS.intersection(updates):
+        setattr(candidate, key, updates[key])
+    return candidate
+
+
+def _partner_settings_errors(
+    settings: Settings,
+    updates: dict[str, Any],
+    deletes: list[str],
+) -> dict[str, str]:
+    touched = PARTNER_SETTING_KEYS.intersection((*updates, *deletes))
+    if not touched:
+        return {}
+    try:
+        candidate = _partner_settings_candidate(settings, updates, deletes)
+        _ = candidate.partner_settings
+    except Exception as exc:
+        return dict.fromkeys(sorted(touched), str(exc))
+    return {}
+
+
+def _appearance_snapshot(settings: Settings) -> dict[str, Any]:
+    snapshot: dict[str, Any] = {}
+    logo_url = settings.WEBAPP_LOGO_URL
+    logo_favicon_url = settings.WEBAPP_LOGO_FAVICON_URL
+    favicon_url = settings.WEBAPP_FAVICON_URL
+    if logo_url:
+        snapshot["WEBAPP_LOGO_URL"] = logo_url
+    if logo_favicon_url:
+        snapshot["WEBAPP_LOGO_FAVICON_URL"] = logo_favicon_url
+    if favicon_url:
+        snapshot["WEBAPP_FAVICON_URL"] = favicon_url
+    if settings.WEBAPP_FAVICON_USE_CUSTOM:
+        snapshot["WEBAPP_FAVICON_USE_CUSTOM"] = True
+    primary_color = settings.WEBAPP_PRIMARY_COLOR
+    if primary_color and primary_color != "#00fe7a":
+        snapshot["WEBAPP_PRIMARY_COLOR"] = primary_color
+    if settings.WEBAPP_COMPACT_HOME_ENABLED:
+        snapshot["WEBAPP_COMPACT_HOME_ENABLED"] = True
+    if not settings.WEBAPP_CHECKOUT_ADDON_VALUE_ANIMATION_ENABLED:
+        snapshot["WEBAPP_CHECKOUT_ADDON_VALUE_ANIMATION_ENABLED"] = False
+    if settings.WEBAPP_CHECKOUT_ADDON_EDITOR_EXPANDED_BY_DEFAULT:
+        snapshot["WEBAPP_CHECKOUT_ADDON_EDITOR_EXPANDED_BY_DEFAULT"] = True
+    return snapshot
+
+
+def _read_appearance_backup() -> dict[str, Any]:
+    try:
+        payload = json.loads(APPEARANCE_OVERRIDES_BACKUP_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to read appearance settings backup: %s", exc)
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    raw_values = payload.get("settings")
+    values: dict[str, Any] = raw_values if isinstance(raw_values, dict) else payload
+    restored: dict[str, Any] = {}
+    for key, value in values.items():
+        if key not in APPEARANCE_OVERRIDE_KEYS:
+            continue
+        if value in (None, "") or value is False:
+            continue
+        field = get_field_by_key(key)
+        if not field:
+            continue
+        try:
+            restored[key] = coerce_value(field, value)
+        except ValueError as exc:
+            logger.warning("Skipping appearance backup key %s: %s", key, exc)
+    return restored
+
+
+def write_appearance_backup(settings: Settings) -> None:
+    payload = {
+        "version": 1,
+        "settings": _appearance_snapshot(settings),
+    }
+    try:
+        APPEARANCE_OVERRIDES_BACKUP_PATH.parent.mkdir(parents=True, exist_ok=True)
+        APPEARANCE_OVERRIDES_BACKUP_PATH.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        logger.warning("Failed to write appearance settings backup: %s", exc)
+
+
+async def load_overrides_from_db(settings: Settings, async_session_factory: sessionmaker) -> int:
+    """Fetch overrides from the DB and apply them to the in-memory settings.
+
+    Provider env-configs live on per-provider BaseSettings bundles instead of
+    the central Settings model. Apply needs those bundles to already exist,
+    otherwise provider-owned overrides (e.g. ``HELEKET_ENABLED``) silently
+    drop on the floor. Build them up-front; the call is idempotent so the
+    later ``build_core_services`` invocation reuses these same instances.
+    """
+    from bot.payment_providers import build_provider_configs
+
+    build_provider_configs()
+
+    try:
+        async with async_session_factory() as session:
+            overrides = await app_settings_dal.get_all_overrides(session)
+            backup_overrides = _read_appearance_backup()
+            missing_backup_overrides = {
+                key: value for key, value in backup_overrides.items() if key not in overrides
+            }
+            if missing_backup_overrides:
+                for key, value in missing_backup_overrides.items():
+                    await app_settings_dal.upsert_override(
+                        session, key=key, value=value, updated_by=None
+                    )
+                await session.commit()
+                overrides.update(missing_backup_overrides)
+                logger.info(
+                    "Restored %s appearance setting overrides from %s",
+                    len(missing_backup_overrides),
+                    APPEARANCE_OVERRIDES_BACKUP_PATH,
+                )
+    except Exception as exc:
+        logger.warning("Could not load setting overrides from DB: %s", exc)
+        return 0
+
+    applied = apply_overrides(settings, overrides)
+    if applied:
+        logger.info("Applied %s setting overrides from DB", applied)
+    return applied
+
+
+async def refresh_overrides_from_db(
+    settings: Settings,
+    async_session_factory: sessionmaker,
+    *,
+    keys: set[str] | None = None,
+) -> int:
+    """Refresh already-known runtime overrides without startup restore side effects."""
+
+    try:
+        async with async_session_factory() as session:
+            overrides = await app_settings_dal.get_all_overrides(session)
+    except Exception as exc:
+        logger.warning("Could not refresh setting overrides from DB: %s", exc)
+        return 0
+    if keys is not None:
+        try:
+            from bot.payment_providers import find_manifest_owner, get_provider_bundle
+            from bot.payment_providers.base import ProviderEnvConfig
+
+            env_only = Settings()
+            fresh_configs: dict[type[ProviderEnvConfig], ProviderEnvConfig | None] = {}
+            for key in keys:
+                if key in overrides:
+                    continue
+                owner = find_manifest_owner(key)
+                if owner is not None:
+                    spec, field = owner
+                    bundle = get_provider_bundle(spec.service_key)
+                    if bundle is None or field.target != "config" or bundle.config is None:
+                        continue
+                    target = bundle.config
+                    cls = type(target)
+                    if cls not in fresh_configs:
+                        try:
+                            fresh_configs[cls] = cls()
+                        except Exception:
+                            logger.warning(
+                                "Could not restore provider env defaults for %s", spec.id
+                            )
+                            fresh_configs[cls] = None
+                    fresh = fresh_configs[cls]
+                    if fresh is None:
+                        continue
+                    attr = field.attr or key
+                    setattr(target, attr, getattr(fresh, attr))
+                    if attr not in fresh.model_fields_set:
+                        target.model_fields_set.discard(attr)
+                    continue
+                attr_name = _resolve_attribute_name(env_only, key)
+                if attr_name and hasattr(env_only, attr_name):
+                    setattr(settings, attr_name, getattr(env_only, attr_name))
+                    if attr_name not in env_only.model_fields_set:
+                        settings.model_fields_set.discard(attr_name)
+        except Exception as exc:
+            logger.warning("Failed to restore env defaults while refreshing overrides: %s", exc)
+        overrides = {key: value for key, value in overrides.items() if key in keys}
+    return apply_overrides(settings, overrides)
+
+
+def outbound_runtime_setting_keys() -> set[str]:
+    """Keep SMTP and provider settings consistent in the separate worker process."""
+    from bot.payment_providers import find_manifest_owner
+
+    keys = set()
+    for key in manifest_keys():
+        owner = find_manifest_owner(key)
+        if key.startswith("SMTP_") or (owner is not None and owner[1].target == "config"):
+            keys.add(key)
+    return keys
+
+
+def _provider_api_origin_errors(updates: dict[str, Any]) -> dict[str, str]:
+    from bot.payment_providers import find_manifest_owner
+    from bot.utils.outbound_network import CredentialPolicy
+
+    errors: dict[str, str] = {}
+    for key, value in updates.items():
+        owner = find_manifest_owner(key)
+        if owner is None or not value:
+            continue
+        _, field = owner
+        if field.target != "config" or field.attr != "BASE_URL":
+            continue
+        try:
+            # Saving an API URL is explicit operator approval of that endpoint.
+            # Still reject malformed URLs and forbidden addresses before persistence.
+            CredentialPolicy([str(value)], private_urls=[str(value)]).check_url(str(value))
+        except ValueError:
+            errors[key] = "unapproved_payment_api_origin"
+    return errors
+
+
+async def update_overrides(
+    settings: Settings,
+    async_session_factory: sessionmaker,
+    *,
+    updates: dict[str, Any],
+    deletes: list | None = None,
+    actor_id: int | None = None,
+    expected_revisions: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Persist + apply a batch of changes coming from the admin UI."""
+
+    deletes = list(deletes or [])
+    coerced_updates: dict[str, Any] = {}
+    errors: dict[str, str] = {}
+
+    for key, raw in updates.items():
+        field: SettingField | None = get_field_by_key(key)
+        if not field:
+            errors[key] = "unknown_setting"
+            continue
+        try:
+            coerced_updates[key] = coerce_value(field, raw)
+        except ValueError as exc:
+            errors[key] = str(exc)
+
+    valid_deletes = []
+    for key in deletes:
+        if get_field_by_key(key) is None:
+            errors.setdefault(key, "unknown_setting")
+            continue
+        valid_deletes.append(key)
+
+    errors.update(_provider_api_origin_errors(coerced_updates))
+    if errors:
+        return {"ok": False, "errors": errors}
+
+    coerced_updates, valid_deletes = _normalize_exclusive_provider_toggles(
+        coerced_updates,
+        valid_deletes,
+    )
+    errors.update(
+        _referral_link_visibility_errors(
+            settings,
+            coerced_updates,
+            valid_deletes,
+        )
+    )
+    errors.update(_partner_settings_errors(settings, coerced_updates, valid_deletes))
+    if errors:
+        return {"ok": False, "errors": errors}
+
+    partner_candidate: Settings | None = None
+    activate_all_partners = False
+    touched_partner_keys = PARTNER_SETTING_KEYS.intersection((*coerced_updates, *valid_deletes))
+    if touched_partner_keys:
+        partner_candidate = _partner_settings_candidate(
+            settings,
+            coerced_updates,
+            valid_deletes,
+        )
+        current_partner = settings.partner_settings
+        next_partner = partner_candidate.partner_settings
+        activate_all_partners = bool(
+            next_partner.enabled
+            and next_partner.auto_enrollment_enabled
+            and not (current_partner.enabled and current_partner.auto_enrollment_enabled)
+        )
+
+    removed_partner_method_ids: set[str] = set()
+    methods_key = "PARTNER_WITHDRAWAL_METHODS_JSON"
+    if methods_key in coerced_updates or methods_key in valid_deletes:
+        current_method_ids = {method.id for method in settings.partner_settings.withdrawal_methods}
+        candidate = settings.model_copy(deep=True)
+        if methods_key in coerced_updates:
+            candidate.PARTNER_WITHDRAWAL_METHODS_JSON = coerced_updates[methods_key]
+        else:
+            candidate.PARTNER_WITHDRAWAL_METHODS_JSON = Settings().PARTNER_WITHDRAWAL_METHODS_JSON
+        next_method_ids = {method.id for method in candidate.partner_settings.withdrawal_methods}
+        removed_partner_method_ids = current_method_ids - next_method_ids
+
+    auto_enrolled = 0
+    async with async_session_factory() as raw_session:
+        session: AsyncSession = raw_session
+        async with session.begin():
+            from bot.services.telegram_settings_lock import lock_telegram_settings
+
+            conflict = await lock_telegram_settings(
+                session, (*coerced_updates, *valid_deletes), expected_revisions or {}
+            )
+            if conflict:
+                return {"ok": False, "errors": {conflict: "telegram_menu_conflict"}}
+            methods_in_use = await partner_dal.active_withdrawal_methods_in_use(
+                session,
+                removed_partner_method_ids,
+            )
+            if methods_in_use:
+                return {
+                    "ok": False,
+                    "errors": {
+                        methods_key: "active withdrawals use methods: "
+                        + ", ".join(sorted(methods_in_use))
+                    },
+                }
+            for key, value in coerced_updates.items():
+                await app_settings_dal.upsert_override(
+                    session, key=key, value=value, updated_by=actor_id
+                )
+            for key in valid_deletes:
+                await app_settings_dal.delete_override(session, key)
+            if activate_all_partners and partner_candidate is not None:
+                from bot.services.partner_program_service import PartnerProgramService
+
+                auto_enrolled = await PartnerProgramService(
+                    partner_candidate
+                ).auto_enroll_all_users(
+                    session,
+                    actor_admin_id=actor_id,
+                )
+
+    # Apply locally; deletes need an env-default fallback. We re-read the env
+    # default by instantiating a fresh Settings() / provider-config model
+    # (cheap; just a few ms) and copying the matching attributes back over.
+    if valid_deletes:
+        from bot.payment_providers import (
+            find_manifest_owner,
+            get_provider_bundle,
+            get_spec_presentation,
+        )
+
+        try:
+            env_only = Settings()
+            for key in valid_deletes:
+                owner = find_manifest_owner(key)
+                if owner is not None:
+                    spec, manifest_field = owner
+                    if manifest_field.target == "presentation":
+                        target = get_spec_presentation(spec.id)
+                        if target is None:
+                            bundle = get_provider_bundle(spec.service_key)
+                            target = bundle.presentation if bundle else None
+                    else:
+                        bundle = get_provider_bundle(spec.service_key)
+                        target = bundle.config if bundle else None
+                    if target is None:
+                        continue
+                    cls = type(target)
+                    try:
+                        fresh = cls()
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to reload provider env defaults for %s: %s",
+                            key,
+                            exc,
+                        )
+                        continue
+                    attr = manifest_field.attr or key
+                    if hasattr(fresh, attr):
+                        setattr(target, attr, getattr(fresh, attr))
+                        if attr not in fresh.model_fields_set:
+                            target.model_fields_set.discard(attr)
+                    continue
+                attr_name = _resolve_attribute_name(env_only, key) or key
+                if hasattr(env_only, attr_name):
+                    setattr(settings, attr_name, getattr(env_only, attr_name))
+                    if attr_name not in env_only.model_fields_set:
+                        settings.model_fields_set.discard(attr_name)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to restore env defaults: %s", exc)
+
+    _, not_applied = _apply_overrides(settings, coerced_updates)
+    if not_applied:
+        logger.error(
+            "Saved settings that the running process could not apply: %s. "
+            "They take effect after a restart; check the provider env config above.",
+            ", ".join(sorted(not_applied)),
+        )
+    appearance_changed = APPEARANCE_OVERRIDE_KEYS.intersection(
+        coerced_updates
+    ) or APPEARANCE_OVERRIDE_KEYS.intersection(valid_deletes)
+    if appearance_changed:
+        write_appearance_backup(settings)
+
+    return {
+        "ok": True,
+        "applied": len(coerced_updates),
+        "reverted": len(valid_deletes),
+        "not_applied": sorted(not_applied),
+        "auto_enrolled": auto_enrolled,
+    }
+
+
+def overridable_keys() -> list:
+    return list(manifest_keys())
+
+
+def current_value(settings: Settings, key: str) -> Any:
+    # Provider-owned keys live on per-provider BaseSettings bundles, not the
+    # central Settings — check there first.
+    from bot.payment_providers import (
+        find_manifest_owner,
+        get_provider_bundle,
+        get_spec_presentation,
+    )
+
+    owner = find_manifest_owner(key)
+    if owner is not None:
+        spec, manifest_field = owner
+        if manifest_field.target == "presentation":
+            target = get_spec_presentation(spec.id)
+            if target is None:
+                bundle = get_provider_bundle(spec.service_key)
+                target = bundle.presentation if bundle else None
+        else:
+            bundle = get_provider_bundle(spec.service_key)
+            target = bundle.config if bundle else None
+        if target is not None:
+            attr = manifest_field.attr or key
+            return getattr(target, attr, None)
+        return None
+
+    attr_name = _resolve_attribute_name(settings, key)
+    if not attr_name:
+        return None
+    return getattr(settings, attr_name, None)

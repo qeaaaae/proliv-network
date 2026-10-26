@@ -1,0 +1,199 @@
+import { mount } from "svelte";
+import { readJsonScript } from "./lib/webapp/browser.js";
+import { createI18n } from "./lib/webapp/i18n.js";
+import { createApiClient } from "./lib/webapp/publicApi.js";
+import { computeThemeView } from "./lib/webapp/themeView.js";
+
+import App from "./App.svelte";
+import InformationPageApp from "./webapp/InformationPageApp.svelte";
+import PreviewBoard from "./PreviewBoard.svelte";
+import NotificationUnsubscribeApp from "./webapp/NotificationUnsubscribeApp.svelte";
+import { mockApi } from "./lib/webapp/mockApi.js";
+import { persistDemoSettings, restoreDemoSettings } from "./lib/webapp/mockApi/settings.js";
+import { DEV_MOCK, applyPreviewMock } from "./lib/webapp/previewMock.js";
+import {
+  documentSlugFromLocation,
+  informationPagePathFromLocation,
+} from "./lib/webapp/informationPages.js";
+import { stripRoutePrefix } from "./lib/webapp/routes.js";
+import type { WebappMockSource } from "./lib/webapp/types";
+import "./styles.css";
+
+const RUNTIME_BASE = "/demo/runtime";
+const DEFAULT_FAVICON_DIGEST = "19b2a242e5b7bc2d";
+const DEMO_HOME_LOGO_SCALE = 70;
+
+type DemoTheme = {
+  key?: string;
+  css_file?: string;
+  tokens?: Record<string, unknown>;
+};
+
+type DemoThemesCatalog = {
+  themes?: DemoTheme[];
+} | null;
+
+function runtimePath(path: string): string {
+  return `${RUNTIME_BASE}/${String(path || "").replace(/^\/+/, "")}`;
+}
+
+function copyThemeAssets(catalog: DemoThemesCatalog): void {
+  const themes = catalog?.themes || [];
+  for (const theme of themes) {
+    const cssFile = String(theme?.css_file || "").trim();
+    if (!theme?.key || !cssFile || cssFile.startsWith("/") || /^(?:https?:)?\/\//i.test(cssFile)) {
+      continue;
+    }
+    theme.css_file = runtimePath(`themes/${theme.key}/${cssFile}`);
+  }
+}
+
+function applyDemoThemeTokens(catalog: DemoThemesCatalog): void {
+  const themes = catalog?.themes || [];
+  for (const theme of themes) {
+    const tokens = theme.tokens || {};
+    theme.tokens = tokens;
+    const logoScaleKeys = ["home_logo_scale_desktop", "home_logo_scale_mobile"];
+    for (const key of ["home_logo_scale", ...logoScaleKeys]) {
+      if (key !== "home_logo_scale" && !(key in tokens)) continue;
+      const currentScale = Number(tokens[key]);
+      if (!Number.isFinite(currentScale) || currentScale > DEMO_HOME_LOGO_SCALE) {
+        tokens[key] = DEMO_HOME_LOGO_SCALE;
+      }
+    }
+  }
+}
+
+async function loadInstallGuidesConfig(): Promise<void> {
+  const response = await fetch(runtimePath("subscription-guides-config.json"), {
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(`demo_install_guides_config_load_failed:${response.status}`);
+  }
+  const config = await response.json();
+  DEV_MOCK.data.settings.subscription_guides_enabled = true;
+  DEV_MOCK.data.subscription_guides = {
+    ...DEV_MOCK.data.subscription_guides,
+    enabled: true,
+    config,
+  };
+}
+
+function prepareMockConfig(mockMode: string): void {
+  restoreDemoSettings();
+  const logoUrl = runtimePath("default-brand/default-logo.webp");
+  const faviconUrl = runtimePath(`default-brand/favicons/${DEFAULT_FAVICON_DIGEST}/icon-180.png`);
+  DEV_MOCK.config.logoUrl = logoUrl;
+  DEV_MOCK.config.faviconUrl = faviconUrl;
+  DEV_MOCK.config.languages = (DEV_MOCK.config.languages || []).filter(
+    (item: { code?: string } | null) => item?.code !== "uk"
+  );
+  DEV_MOCK.config.adminJsAsset = runtimePath("subscription_webapp_admin.js");
+  DEV_MOCK.config.adminCssAsset = runtimePath("subscription_webapp_admin.css");
+  DEV_MOCK.config.appVersion = "demo";
+  DEV_MOCK.config.apiBase = "/api";
+  if (!mockMode.startsWith("partner-referral-") && !mockMode.startsWith("partner_referral_")) {
+    persistDemoSettings({
+      PARTNER_PROGRAM_ENABLED: true,
+      PARTNER_REFERRAL_PROGRAM_DISABLED: false,
+      PARTNER_WITHDRAWALS_ENABLED: true,
+      PARTNER_BALANCE_PAYMENT_ENABLED: true,
+      REFERRAL_PROGRAM_ENABLED: true,
+    });
+  }
+  applyDemoThemeTokens(DEV_MOCK.config.themesCatalog);
+  applyDemoThemeTokens(DEV_MOCK.data.themes_catalog);
+  copyThemeAssets(DEV_MOCK.config.themesCatalog);
+  copyThemeAssets(DEV_MOCK.data.themes_catalog);
+}
+
+function parentSearchParams(): URLSearchParams | null {
+  try {
+    if (window.parent === window) return null;
+    return new URLSearchParams(window.parent.location.search);
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function bootstrap(): Promise<void> {
+  const params = new URLSearchParams(window.location.search);
+  const parentParams = parentSearchParams();
+  const mockMode = String(params.get("mock") || parentParams?.get("mock") || "").toLowerCase();
+  applyPreviewMock(mockMode);
+  prepareMockConfig(mockMode);
+  try {
+    await loadInstallGuidesConfig();
+  } catch (error) {
+    console.warn(error);
+  }
+
+  const target = document.getElementById("app");
+  if (target) {
+    target.replaceChildren();
+    const publicPath = stripRoutePrefix(window.location.pathname, RUNTIME_BASE);
+    const isDemoAppEntry = /^\/app\/?$/.test(publicPath);
+    const documentSlug = isDemoAppEntry ? null : documentSlugFromLocation(publicPath);
+    const pagePath = isDemoAppEntry ? null : informationPagePathFromLocation(publicPath);
+    if (documentSlug || pagePath) {
+      const { api } = createApiClient({ mockApi });
+      const i18n = createI18n({
+        messages: (readJsonScript("i18n") as Record<string, unknown> | null) || {},
+        defaultLang: "ru",
+        getLang: () =>
+          String(DEV_MOCK.data.user?.language_code || DEV_MOCK.config.language || "ru"),
+      });
+      const theme = computeThemeView({
+        themePreviewDraft: null,
+        themePreviewKey: params.get("theme_preview"),
+        data: DEV_MOCK.data,
+        user: DEV_MOCK.data.user || {},
+        screen: "home",
+        cfgThemesCatalog: DEV_MOCK.config.themesCatalog,
+        primaryColor: String(DEV_MOCK.config.primaryColor || "#00fe7a"),
+        userThemeModeEnabled: false,
+      });
+      mount(InformationPageApp, {
+        target,
+        props: {
+          documentSlug: documentSlug || "",
+          pagePath: pagePath || (documentSlug ? `/${documentSlug}` : ""),
+          request: api,
+          routePrefix: RUNTIME_BASE,
+          shellStyle: theme.shellStyle,
+          shellThemeClass: theme.shellThemeClass,
+          shellToneClass: theme.shellToneClass,
+          themeCssHref: theme.shellThemeCssHref || "",
+          t: i18n.t,
+        },
+      });
+      return;
+    }
+    if (window.location.pathname.replace(/\/$/, "").endsWith("/unsubscribe")) {
+      mount(NotificationUnsubscribeApp, {
+        target,
+        props: {
+          request: (path: string, options: RequestInit = {}) => mockApi(path, options),
+          brandTitle: String(DEV_MOCK.config.title || ""),
+          logoUrl: String(DEV_MOCK.config.logoUrl || ""),
+        },
+      });
+      return;
+    }
+    mount(App, {
+      target,
+      props: {
+        mockRuntime: {
+          source: DEV_MOCK as unknown as WebappMockSource,
+          applyPreviewMock: () => {},
+          mockApi,
+          PreviewBoard,
+          docsDemo: true,
+        },
+      },
+    });
+  }
+}
+
+void bootstrap();

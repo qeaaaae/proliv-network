@@ -1,0 +1,773 @@
+<script lang="ts">
+  import { getBackupsStore } from "$lib/admin/context";
+  import { onMount } from "svelte";
+  import {
+    AdminBadge,
+    AdminButton,
+    AdminListToolbar,
+    AdminEmptyState,
+    AdminPagination,
+    AdminSortableHeader,
+    AdminTable,
+    AdminTableSkeleton,
+  } from "$components/patterns/admin/index.js";
+  import { Checkbox, FileInput, Input, RadioGroup, RadioGroupItem } from "$components/ui/index.js";
+  import {
+    CheckCircle2,
+    Database,
+    Download,
+    Plus,
+    RefreshCw,
+    Server,
+    TriangleAlert,
+    Upload,
+  } from "$components/ui/icons.js";
+  import { TableHandler } from "@vincjo/datatables";
+  import type {
+    BackupArchive,
+    BackupArchiveSummary,
+    BackupRestoreResult,
+  } from "../../lib/admin/stores/backupsStore";
+  import { sortAdminRows, type AdminSortColumn } from "$lib/admin/tableSort.js";
+
+  type TranslateFn = (key: string, params?: Record<string, unknown>, fallback?: string) => string;
+
+  let {
+    at = (key) => key,
+    fmtDate = (value) => value,
+  }: {
+    at?: TranslateFn;
+    fmtDate?: (value: string) => string;
+  } = $props();
+
+  const BACKUPS_PAGE_SIZE = 10;
+  const backupsTable = new TableHandler<BackupArchiveSummary>([], {
+    rowsPerPage: BACKUPS_PAGE_SIZE,
+  });
+  const backupsStore = getBackupsStore();
+  let backupsSort = $state("created_desc");
+
+  let selectedName = $state("");
+  let selectedDetails = $state<BackupArchive | null>(null);
+  let detailsLoading = $state(false);
+  let inspectionToken = 0;
+  let restoreDatabase = $state(false);
+  let restoreCompose = $state(false);
+  let panelBindingChoice = $state<"" | "keep" | "rebind">("");
+  let restoreConfirmation = $state("");
+  let fileInput = $state<HTMLInputElement | null>(null);
+
+  const archives = $derived((backupsStore.archives || []) as BackupArchiveSummary[]);
+  const backupDir = $derived(String(backupsStore.backupDir || ""));
+  const backupsCreating = $derived(Boolean(backupsStore.backupsCreating));
+  const backupsLoading = $derived(Boolean(backupsStore.backupsLoading));
+  const backupsUploading = $derived(Boolean(backupsStore.backupsUploading));
+  const backupsRestoring = $derived(Boolean(backupsStore.backupsRestoring));
+  const lastRestore = $derived(backupsStore.lastRestore as BackupRestoreResult | null);
+  const restoreStatus = $derived(backupsStore.restoreStatus);
+  const restoreError = $derived(backupsStore.restoreError);
+  const totalArchives = $derived(archives.length);
+  const backupSortColumns = [
+    {
+      asc: "archive_asc",
+      desc: "archive_desc",
+      defaultDirection: "asc",
+      value: (archive) => archive.name,
+    },
+    {
+      asc: "created_asc",
+      desc: "created_desc",
+      defaultDirection: "desc",
+      value: (archive) => archive.modified_at || "",
+    },
+    {
+      asc: "size_asc",
+      desc: "size_desc",
+      defaultDirection: "desc",
+      value: (archive) => archive.size_bytes,
+    },
+  ] satisfies AdminSortColumn<BackupArchiveSummary>[];
+  const sortedArchives = $derived(sortAdminRows(archives, backupsSort, backupSortColumns));
+
+  $effect(() => {
+    backupsTable.setRows(sortedArchives);
+    if (backupsTable.currentPage > (backupsTable.pageCount || 1))
+      backupsTable.setPage(backupsTable.pageCount || 1);
+  });
+  const backupsMeta = $derived.by(() => {
+    const { start, end, total } = backupsTable.rowCount;
+    return at(
+      "backups_pagination_meta",
+      { from: start, to: end, total },
+      `${start}-${end} / ${total}`
+    );
+  });
+  $effect(() => {
+    if (!selectedName) return;
+    if (archives.some((item) => item.name === selectedName)) return;
+    selectedName = "";
+    selectedDetails = null;
+    backupsTable.setPage(1);
+  });
+  const selectedArchive = $derived(selectedDetails?.name === selectedName ? selectedDetails : null);
+  const panelUrlChanged = $derived(
+    Boolean(
+      restoreDatabase &&
+      selectedArchive?.current_panel_api_url &&
+      selectedArchive.source_panel_api_url !== selectedArchive.current_panel_api_url
+    )
+  );
+  $effect(() => {
+    if (!selectedArchive) return;
+    if (restoreDatabase && !selectedArchive.has_database) restoreDatabase = false;
+    if (restoreCompose && !selectedArchive.has_compose) restoreCompose = false;
+  });
+  const restoreConfirmationMatches = $derived(
+    Boolean(selectedName && restoreConfirmation.trim() === selectedName)
+  );
+  const canRestore = $derived(
+    Boolean(
+      selectedArchive &&
+      restoreDatabase !== restoreCompose &&
+      (!panelUrlChanged || panelBindingChoice !== "") &&
+      restoreConfirmationMatches &&
+      !backupsRestoring &&
+      !backupsCreating
+    )
+  );
+  const backupHeaders = $derived([
+    at("backups_col_archive", {}, "Archive"),
+    at("backups_col_created", {}, "Created"),
+    at("backups_col_size", {}, "Size"),
+  ]);
+
+  function formatSize(sizeBytes: number): string {
+    const units = ["B", "KB", "MB", "GB"];
+    let value = Number(sizeBytes || 0);
+    let unit = units[0];
+    for (unit of units) {
+      if (value < 1024 || unit === "GB") break;
+      value /= 1024;
+    }
+    return unit === "B" ? `${Math.round(value)} ${unit}` : `${value.toFixed(1)} ${unit}`;
+  }
+
+  function archiveDate(archive: BackupArchiveSummary | null | undefined): string {
+    return archive?.modified_at || "";
+  }
+
+  function selectArchive(name: string, details: BackupArchive | null = null): void {
+    selectedName = name;
+    selectedDetails = details;
+    restoreDatabase = false;
+    restoreCompose = false;
+    panelBindingChoice = "";
+    restoreConfirmation = "";
+    const token = ++inspectionToken;
+    detailsLoading = !details;
+    if (!details) void inspectSelectedArchive(name, token);
+  }
+
+  async function inspectSelectedArchive(name: string, token: number): Promise<void> {
+    const details = await backupsStore.inspectArchive(name);
+    if (token !== inspectionToken || name !== selectedName) return;
+    selectedDetails = details;
+    detailsLoading = false;
+  }
+
+  function focusArchivePage(name: string): void {
+    const index = sortedArchives.findIndex((item) => item.name === name);
+    if (index >= 0) backupsTable.setPage(Math.floor(index / BACKUPS_PAGE_SIZE) + 1);
+  }
+
+  function setBackupsSort(sort: string): void {
+    backupsSort = sort;
+    backupsTable.setPage(1);
+  }
+
+  async function uploadSelectedFiles(event: Event): Promise<void> {
+    const input = event.currentTarget as HTMLInputElement | null;
+    const files = Array.from(input?.files || []);
+    if (!input || !files.length) return;
+    try {
+      const archive = await backupsStore.uploadArchive(files);
+      if (archive?.name) {
+        selectArchive(archive.name, archive);
+        focusArchivePage(archive.name);
+      }
+    } finally {
+      input.value = "";
+    }
+  }
+
+  async function createManualBackup(): Promise<void> {
+    const archive = await backupsStore.createBackup();
+    if (archive?.name) {
+      selectArchive(archive.name, archive);
+      focusArchivePage(archive.name);
+    }
+  }
+
+  async function restoreSelected(): Promise<void> {
+    if (!canRestore) return;
+    const ok = await backupsStore.restoreArchive({
+      archiveName: selectedName,
+      restoreDatabase,
+      restoreCompose,
+      resetPanelOrigin: panelBindingChoice === "rebind",
+      confirmation: restoreConfirmation.trim(),
+    });
+    if (ok) {
+      restoreConfirmation = "";
+      await backupsStore.loadArchives();
+    }
+  }
+
+  onMount(() => {
+    backupsStore.loadArchives();
+    void backupsStore.resumeRestore();
+  });
+</script>
+
+<div class="backups-layout">
+  <AdminListToolbar class="backups-list-toolbar">
+    {#snippet actions()}
+      <AdminButton onclick={() => backupsStore.loadArchives()} disabled={backupsLoading}>
+        <RefreshCw size={14} />
+        {at("btn_refresh", {}, "Refresh")}
+      </AdminButton>
+      <AdminButton onclick={createManualBackup} disabled={backupsCreating || backupsRestoring}>
+        <Plus size={14} />
+        {backupsCreating
+          ? at("backups_creating", {}, "Creating...")
+          : at("backups_create", {}, "Create backup")}
+      </AdminButton>
+      <AdminButton
+        onclick={() => fileInput?.click()}
+        disabled={backupsUploading || backupsRestoring}
+        aria-describedby="backups-upload-help"
+      >
+        <Upload size={14} />
+        {backupsUploading
+          ? at("backups_uploading", {}, "Uploading...")
+          : at("backups_upload", {}, "Upload archive")}
+      </AdminButton>
+      <AdminButton
+        onclick={() => backupsStore.downloadArchive(selectedName)}
+        disabled={!selectedArchive || backupsRestoring}
+      >
+        <Download size={14} />
+        {at("backups_download", {}, "Download archive")}
+      </AdminButton>
+      <FileInput
+        bind:element={fileInput}
+        class="backups-file-input"
+        multiple
+        disabled={backupsUploading || backupsRestoring}
+        aria-label={at("backups_upload_files", {}, "Select ZIP or backup parts")}
+        aria-describedby="backups-upload-help"
+        onchange={uploadSelectedFiles}
+      />
+    {/snippet}
+    {#snippet metadata()}
+      <div class="backups-dir-meta">
+        <span>{at("backups_dir", {}, "Directory")}</span><strong class="backups-dir"
+          >{backupDir || "data/backups"}</strong
+        >
+      </div>
+    {/snippet}
+  </AdminListToolbar>
+
+  <p id="backups-upload-help" class="backups-upload-help">
+    {at(
+      "backups_upload_help",
+      {},
+      "Select one ZIP, or the .zip.parts.json manifest and all .zip.partNNNN files together. The server joins and verifies the parts. Maximum archive size: 2 GiB."
+    )}
+  </p>
+
+  <article class="admin-card backups-restore-card">
+    <header class="admin-card-head">
+      <div>
+        <h3>{at("backups_restore_title", {}, "Restore")}</h3>
+        {#if selectedName}
+          <small class="backups-selected-name">{selectedName}</small>
+        {/if}
+      </div>
+      {#if lastRestore}
+        <AdminBadge variant="success">
+          <CheckCircle2 size={12} />
+          {at("backups_last_restore_done", {}, "Done")}
+        </AdminBadge>
+      {/if}
+    </header>
+    {#if detailsLoading}
+      <div class="backups-restore-note" role="status">
+        {at("backups_inspecting", {}, "Inspecting selected archive...")}
+      </div>
+    {:else if selectedName && !selectedArchive}
+      <div class="backups-restore-note" role="status">
+        <AdminButton onclick={() => selectArchive(selectedName)}>
+          {at("backups_inspect_retry", {}, "Retry archive inspection")}
+        </AdminButton>
+      </div>
+    {:else if selectedArchive}
+      <div class="backups-restore-note">
+        <span class="backups-badges">
+          {#if selectedArchive.has_database}
+            <AdminBadge variant="success">{at("backups_badge_db", {}, "DB")}</AdminBadge>
+          {/if}
+          {#if selectedArchive.has_compose}
+            <AdminBadge variant="muted">{at("backups_badge_compose", {}, "Compose")}</AdminBadge>
+          {/if}
+        </span>
+        {#each selectedArchive.warnings as warning, index (index)}
+          <p><TriangleAlert size={12} /> {warning}</p>
+        {/each}
+      </div>
+    {/if}
+    <div class="admin-card-body backups-restore-body">
+      <label class="backups-check" class:is-disabled={!selectedArchive?.has_database}>
+        <Checkbox
+          bind:checked={restoreDatabase}
+          disabled={!selectedArchive?.has_database || backupsRestoring}
+          ariaLabel={at("backups_target_database", {}, "Database")}
+        />
+        <Database size={16} />
+        <span>{at("backups_target_database", {}, "Database")}</span>
+      </label>
+      <label class="backups-check" class:is-disabled={!selectedArchive?.has_compose}>
+        <Checkbox
+          bind:checked={restoreCompose}
+          disabled={!selectedArchive?.has_compose || backupsRestoring}
+          ariaLabel={at("backups_target_compose", {}, "compose folder")}
+        />
+        <Server size={16} />
+        <span>{at("backups_target_compose", {}, "compose folder")}</span>
+      </label>
+      {#if panelUrlChanged}
+        <div class="backups-panel-move" role="group" aria-label={at("backups_panel_move_title")}>
+          <strong>{at("backups_panel_move_title", {}, "Panel address changed")}</strong>
+          <div class="backups-panel-url">
+            <span>{at("backups_panel_source_url", {}, "In the backup")}</span>
+            <code
+              >{selectedArchive?.source_panel_api_url ||
+                at("backups_panel_unknown", {}, "Not recorded")}</code
+            >
+          </div>
+          <div class="backups-panel-url">
+            <span>{at("backups_panel_current_url", {}, "On this server")}</span>
+            <code>{selectedArchive?.current_panel_api_url}</code>
+          </div>
+          <p>
+            {at(
+              "backups_panel_move_hint",
+              {},
+              "Choose how to handle saved panel links before restoring."
+            )}
+          </p>
+          <RadioGroup
+            value={panelBindingChoice}
+            onValueChange={(value) => (panelBindingChoice = value as "keep" | "rebind")}
+            aria-label={at("backups_panel_move_title")}
+          >
+            <div class="backups-panel-choice">
+              <RadioGroupItem
+                id="backup-panel-keep"
+                value="keep"
+                ariaLabel={at("backups_panel_keep")}
+              />
+              <label for="backup-panel-keep"
+                >{at("backups_panel_keep", {}, "Keep existing links for manual review")}</label
+              >
+            </div>
+            <div class="backups-panel-choice">
+              <RadioGroupItem
+                id="backup-panel-rebind"
+                value="rebind"
+                ariaLabel={at("backups_panel_rebind")}
+              />
+              <label for="backup-panel-rebind"
+                >{at("backups_panel_rebind", {}, "Verify links against the current panel")}</label
+              >
+            </div>
+          </RadioGroup>
+          <p>
+            {at(
+              "backups_panel_rebind_hint",
+              {},
+              "Verification keeps user IDs and checks account identity before reconnecting. Choose this only when you trust the current panel."
+            )}
+          </p>
+        </div>
+      {/if}
+      <label class="backups-confirmation">
+        <span>
+          {at(
+            "backups_restore_confirmation_label",
+            { name: selectedName },
+            "Type the archive name to confirm: {name}"
+          )}
+        </span>
+        <Input
+          value={restoreConfirmation}
+          disabled={!selectedArchive || backupsRestoring}
+          autocomplete="off"
+          placeholder={at("backups_restore_confirmation_placeholder", {}, "Archive name")}
+          oninput={(event) =>
+            (restoreConfirmation = (event.currentTarget as HTMLInputElement).value)}
+        />
+      </label>
+      <AdminButton variant="danger" onclick={restoreSelected} disabled={!canRestore}>
+        <RefreshCw size={14} />
+        {backupsRestoring
+          ? at("backups_restoring", {}, "Restoring...")
+          : at("backups_restore_run", {}, "Restore from backup")}
+      </AdminButton>
+    </div>
+    {#if restoreDatabase && restoreCompose}
+      <div class="backups-restore-note" role="status">
+        {at(
+          "backups_restore_separate_targets",
+          {},
+          "Restore the database and compose files separately so server settings can be reviewed."
+        )}
+      </div>
+    {:else if restoreDatabase}
+      <div class="backups-restore-note" role="status">
+        {at(
+          "backups_database_restart_note",
+          {},
+          "Backend and worker will restart automatically. The admin page may be briefly unavailable."
+        )}
+      </div>
+    {/if}
+    {#if backupsRestoring && restoreStatus}
+      <div class="backups-restore-note" role="status">
+        {restoreStatus === "queued"
+          ? at("backups_restore_queued", {}, "Preparing restore...")
+          : at("backups_restore_running", {}, "Restoring database and restarting services...")}
+      </div>
+    {/if}
+    {#if restoreError}
+      <div class="backups-restore-note" role="alert">{restoreError}</div>
+    {/if}
+    {#if lastRestore?.compose_pre_restore_archive}
+      <div class="backups-restore-note">
+        {at(
+          "backups_pre_restore_snapshot",
+          { path: lastRestore.compose_pre_restore_archive },
+          "Current compose folder was saved before replacement: {path}"
+        )}
+      </div>
+    {/if}
+    {#if lastRestore?.database_pre_restore_archive}
+      <div class="backups-restore-note">
+        {at(
+          "backups_pre_restore_database_snapshot",
+          { path: lastRestore.database_pre_restore_archive },
+          "Current database was backed up before replacement: {path}"
+        )}
+      </div>
+    {/if}
+  </article>
+
+  <div class="admin-table-wrap">
+    {#if backupsLoading}
+      <AdminTableSkeleton
+        headers={backupHeaders}
+        rows={6}
+        rowHeight={62}
+        class="backups-table"
+        widths={["minmax(220px, 1fr)", "150px", "80px"]}
+      />
+    {:else if !archives?.length}
+      <AdminEmptyState tone="card">
+        <span class="admin-muted">{at("backups_empty", {}, "No archives yet")}</span>
+      </AdminEmptyState>
+    {:else}
+      <RadioGroup
+        value={selectedName}
+        onValueChange={selectArchive}
+        class="backups-archive-radio-group"
+        aria-label="Backup archive"
+      >
+        <AdminTable class="backups-table">
+          <thead>
+            <tr>
+              <AdminSortableHeader
+                label={at("backups_col_archive", {}, "Archive")}
+                column={backupSortColumns[0]}
+                currentSort={backupsSort}
+                {at}
+                onSort={setBackupsSort}
+              />
+              <AdminSortableHeader
+                label={at("backups_col_created", {}, "Created")}
+                column={backupSortColumns[1]}
+                currentSort={backupsSort}
+                {at}
+                onSort={setBackupsSort}
+              />
+              <AdminSortableHeader
+                label={at("backups_col_size", {}, "Size")}
+                column={backupSortColumns[2]}
+                currentSort={backupsSort}
+                {at}
+                onSort={setBackupsSort}
+              />
+            </tr>
+          </thead>
+          <tbody>
+            {#each backupsTable.rows as archive (archive.name)}
+              <tr class="backups-row" class:is-selected={archive.name === selectedName}>
+                <td
+                  class="admin-cell-primary admin-cell-wrap backups-name"
+                  data-label={at("backups_col_archive", {}, "Archive")}
+                >
+                  <div class="backups-archive-choice">
+                    <RadioGroupItem
+                      id={`backup-${archive.name}`}
+                      value={archive.name}
+                      ariaLabel={archive.name}
+                    />
+                    <label for={`backup-${archive.name}`}>{archive.name}</label>
+                  </div>
+                </td>
+                <td class="backups-meta" data-label={at("backups_col_created", {}, "Created")}
+                  >{fmtDate(archiveDate(archive))}</td
+                >
+                <td class="backups-meta" data-label={at("backups_col_size", {}, "Size")}
+                  >{formatSize(archive.size_bytes)}</td
+                >
+              </tr>
+            {/each}
+          </tbody>
+        </AdminTable>
+      </RadioGroup>
+      {#if totalArchives > BACKUPS_PAGE_SIZE}
+        <AdminPagination
+          meta={backupsMeta}
+          table={backupsTable}
+          pageLabel={at("page_short", {}, "Page")}
+          ofLabel={at("pagination_of", {}, "of")}
+          jumpLabel={at("page_short", {}, "Page")}
+          jumpAriaLabel={at("pagination_jump_aria", {}, "Go to page")}
+          goLabel={at("pagination_go", {}, "Go")}
+          prevLabel={at("pagination_prev", {}, "Back")}
+          nextLabel={at("pagination_next", {}, "Next")}
+        />
+      {/if}
+    {/if}
+  </div>
+</div>
+
+<style>
+  .backups-layout {
+    display: grid;
+    gap: 12px;
+  }
+
+  .backups-upload-help {
+    margin: 0;
+    color: var(--admin-muted);
+    font-size: 12px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  .backups-dir-meta {
+    display: grid;
+    color: var(--admin-muted);
+    font-size: 13px;
+  }
+  .backups-dir-meta > span {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .backups-dir-meta > strong {
+    color: var(--admin-text);
+  }
+
+  :global(.backups-file-input) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .backups-dir,
+  .backups-selected-name,
+  .backups-name {
+    font-family: var(--font-mono);
+    word-break: break-word;
+  }
+
+  .backups-dir {
+    max-width: min(420px, 70vw);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .backups-restore-body {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(160px, 1fr));
+    gap: 10px;
+    align-items: center;
+  }
+
+  .backups-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 38px;
+    padding: 8px 10px;
+    border: 1px solid var(--admin-border);
+    border-radius: 8px;
+    background: var(--admin-surface-2);
+    color: var(--admin-text);
+    font-size: 13px;
+  }
+
+  .backups-check.is-disabled {
+    opacity: 0.55;
+  }
+
+  .backups-panel-move {
+    display: grid;
+    grid-column: 1 / -1;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--admin-ring, var(--accent));
+    border-radius: 8px;
+    background: var(--admin-surface-2);
+    font-size: 12px;
+  }
+
+  .backups-panel-move p {
+    margin: 0;
+    color: var(--admin-muted);
+  }
+
+  .backups-panel-url {
+    display: grid;
+    gap: 3px;
+  }
+
+  .backups-panel-url > span {
+    color: var(--admin-muted);
+  }
+
+  .backups-panel-url code {
+    overflow-wrap: anywhere;
+  }
+
+  .backups-panel-choice {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .backups-panel-choice label {
+    cursor: pointer;
+  }
+
+  .backups-confirmation {
+    display: grid;
+    grid-column: 1 / -1;
+    gap: 6px;
+    color: var(--admin-muted);
+    font-size: 12px;
+  }
+
+  :global(.backups-restore-body .admin-btn) {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+
+  .backups-restore-note {
+    border-top: 1px solid var(--admin-border);
+    padding: 10px 14px;
+    color: var(--admin-muted);
+    font-size: 12px;
+  }
+
+  .backups-restore-note p {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 6px 0 0;
+    overflow-wrap: anywhere;
+  }
+
+  :global(.backups-table tbody tr.is-selected) {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+
+  .backups-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  :global(.backups-archive-radio-group) {
+    display: block;
+  }
+
+  :global(.backups-archive-choice) {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 44px;
+    cursor: pointer;
+    line-height: 1.45;
+  }
+
+  :global(.backups-archive-choice > label) {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 760px) {
+    .backups-restore-body {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    :global(.backups-restore-body .admin-btn) {
+      width: 100%;
+    }
+  }
+
+  @media (max-width: 720px) {
+    .backups-layout :global(.backups-table tbody tr.backups-row) {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px 16px;
+    }
+
+    .backups-layout :global(.backups-table .backups-row.is-selected) {
+      border-color: color-mix(in srgb, var(--accent) 55%, var(--admin-border));
+      background: color-mix(in srgb, var(--accent) 6%, var(--admin-surface-2));
+    }
+
+    .backups-layout :global(.backups-table .backups-row td) {
+      min-width: 0;
+      padding: 0;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 4px;
+    }
+
+    .backups-layout :global(.backups-table .backups-row .backups-name) {
+      grid-column: 1 / -1;
+      margin: 0;
+      padding-bottom: 10px;
+    }
+
+    :global(.backups-archive-choice) {
+      font-size: 13px;
+    }
+  }
+</style>

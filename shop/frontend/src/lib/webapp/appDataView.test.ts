@@ -1,0 +1,234 @@
+import { describe, expect, it } from "vitest";
+
+import { computeAppDataView } from "./appDataView.js";
+
+const MOCK_DATA = {
+  payment_methods: [{ id: "mock-method" }],
+  plans: [{ id: "mock-plan" }],
+  referral: {
+    bonus_details: [{ kind: "period" }],
+    one_bonus_per_referee: true,
+    welcome_bonus_days: 7,
+  },
+  settings: {
+    my_devices_enabled: true,
+    subscription_guides_enabled: true,
+    support_tickets_enabled: true,
+  },
+  subscription: { active: true },
+};
+
+describe("computeAppDataView", () => {
+  it("keeps future registered providers available for sign-in and linking", () => {
+    const view = computeAppDataView({
+      cfg: {},
+      data: {
+        settings: { auth_providers: [" Google ", "discord", "Future-Provider", "future-provider"] },
+      },
+      fallbackBrandTitle: "Subscription",
+      mockData: {},
+    });
+    expect(view.authProviders).toEqual(["google", "discord", "future-provider"]);
+  });
+  it("uses config brand values and falls back to mock collections", () => {
+    const view = computeAppDataView({
+      cfg: {
+        faviconUrl: "",
+        logoUrl: "/logo.png",
+        title: "Panel",
+      },
+      data: null,
+      fallbackBrandTitle: "Subscription",
+      mockData: MOCK_DATA,
+    });
+
+    expect(view.brandTitle).toBe("Panel");
+    expect(view.brand.logoUrl).toBe("/logo.png");
+    expect(view.faviconBrand.faviconUrl).toBe("/logo.png");
+    expect(view.plans).toEqual([{ id: "mock-plan" }]);
+    expect(view.methods).toEqual([]);
+  });
+
+  it("prefers loaded data over mock data", () => {
+    const view = computeAppDataView({
+      cfg: {},
+      data: {
+        payment_methods: [{ id: "card" }],
+        pending_payment: {
+          payment_id: 17,
+          payment_url: "https://pay.example/17",
+          promo_code: "SAVE20",
+        },
+        suggested_promo_code: " PERSONAL15 ",
+        plans: [{ id: "live-plan" }],
+        settings: {
+          my_devices_enabled: false,
+          partner_program_enabled: true,
+          referral_program_enabled: false,
+          subscription_guides_enabled: false,
+          support_tickets_enabled: false,
+        },
+        subscription: { active: false },
+      },
+      fallbackBrandTitle: "Subscription",
+      mockData: MOCK_DATA,
+    });
+
+    expect(view.plans).toEqual([{ id: "live-plan" }]);
+    expect(view.methods).toEqual([{ id: "card" }]);
+    expect(view.pendingPayment).toEqual({
+      payment_id: 17,
+      payment_url: "https://pay.example/17",
+      promo_code: "SAVE20",
+    });
+    expect(view.suggestedPromoCode).toBe("PERSONAL15");
+    expect(view.devicesEnabled).toBe(false);
+    expect(view.installGuidesEnabled).toBe(false);
+    expect(view.partnerProgramEnabled).toBe(true);
+    expect(view.referralProgramEnabled).toBe(false);
+    expect(view.supportEnabled).toBe(false);
+    expect(view.subscription).toEqual({ active: false });
+  });
+
+  it("normalizes a missing pending payment to null", () => {
+    const view = computeAppDataView({
+      cfg: {},
+      data: {},
+      fallbackBrandTitle: "Subscription",
+      mockData: MOCK_DATA,
+    });
+
+    expect(view.pendingPayment).toBeNull();
+    expect(view.suggestedPromoCode).toBe("");
+  });
+
+  it("keeps Stars available only inside a Telegram Mini App", () => {
+    const input = {
+      cfg: {},
+      data: { payment_methods: [{ id: "stars" }, { id: "card" }] },
+      fallbackBrandTitle: "Subscription",
+      mockData: {},
+    };
+
+    expect(computeAppDataView(input).methods).toEqual([
+      {
+        id: "stars",
+        disabled: true,
+        disabled_reason: "telegram_stars_mini_app_required",
+      },
+      { id: "card" },
+    ]);
+    expect(computeAppDataView({ ...input, telegramMiniAppContext: true }).methods).toEqual([
+      { id: "stars" },
+      { id: "card" },
+    ]);
+  });
+
+  it("treats false and string false as disabled email auth", () => {
+    expect(
+      computeAppDataView({
+        cfg: { emailAuthEnabled: true },
+        data: { settings: { email_auth_enabled: false } },
+        fallbackBrandTitle: "Subscription",
+        mockData: {},
+      }).emailAuthEnabled
+    ).toBe(false);
+
+    expect(
+      computeAppDataView({
+        cfg: { emailAuthEnabled: true },
+        data: { settings: { email_auth_enabled: "false" } },
+        fallbackBrandTitle: "Subscription",
+        mockData: {},
+      }).emailAuthEnabled
+    ).toBe(false);
+  });
+
+  it("defaults notification preferences to enabled and honors explicit false", () => {
+    expect(
+      computeAppDataView({
+        cfg: {},
+        data: { settings: {} },
+        fallbackBrandTitle: "Subscription",
+        mockData: {},
+      }).notificationPreferencesEnabled
+    ).toBe(true);
+
+    expect(
+      computeAppDataView({
+        cfg: { notificationPreferencesEnabled: true },
+        data: { settings: { notification_preferences_enabled: "false" } },
+        fallbackBrandTitle: "Subscription",
+        mockData: {},
+      }).notificationPreferencesEnabled
+    ).toBe(false);
+  });
+
+  it("normalizes configured auth providers and falls back to current capabilities", () => {
+    expect(
+      computeAppDataView({
+        cfg: { emailAuthEnabled: false },
+        data: { settings: { auth_providers: [" Telegram ", "OIDC", "oidc"] } },
+        fallbackBrandTitle: "Subscription",
+        mockData: {},
+      }).authProviders
+    ).toEqual(["telegram", "oidc"]);
+
+    expect(
+      computeAppDataView({
+        cfg: { emailAuthEnabled: false },
+        data: { settings: {} },
+        fallbackBrandTitle: "Subscription",
+        mockData: {},
+      }).authProviders
+    ).toEqual(["telegram"]);
+  });
+
+  it("normalizes recommended auth providers without requiring every available method", () => {
+    expect(
+      computeAppDataView({
+        cfg: { emailAuthEnabled: true },
+        data: {
+          settings: {
+            auth_providers: ["telegram", "email", "google"],
+            recommended_auth_providers: [" Email ", "email", "unknown"],
+          },
+        },
+        fallbackBrandTitle: "Subscription",
+        mockData: {},
+      }).recommendedAuthProviders
+    ).toEqual(["email"]);
+
+    expect(
+      computeAppDataView({
+        cfg: { authProviders: ["telegram", "email"], recommendedAuthProviders: [] },
+        data: { settings: {} },
+        fallbackBrandTitle: "Subscription",
+        mockData: {},
+      }).recommendedAuthProviders
+    ).toEqual([]);
+
+    expect(
+      computeAppDataView({
+        cfg: { authProviders: ["telegram", "email"] },
+        data: { settings: {} },
+        fallbackBrandTitle: "Subscription",
+        mockData: {},
+      }).recommendedAuthProviders
+    ).toEqual(["telegram", "email"]);
+  });
+
+  it("normalizes missing referral fields", () => {
+    const view = computeAppDataView({
+      cfg: {},
+      data: { referral: { welcome_bonus_days: -3 } },
+      fallbackBrandTitle: "Subscription",
+      mockData: {},
+    });
+
+    expect(view.referralBonusDetails).toEqual([]);
+    expect(view.referralWelcomeBonusDays).toBe(0);
+    expect(view.referralOneBonusPerReferee).toBe(false);
+    expect(view.referralProgramEnabled).toBe(true);
+  });
+});

@@ -1,0 +1,909 @@
+﻿<script lang="ts">
+  import { onMount, untrack } from "svelte";
+  import { Tooltip } from "$components/ui/primitives.js";
+
+  import AdminPanelLayout from "./AdminPanelLayout.svelte";
+  import { adminExtensionRevision } from "./sections/extensionRegistry";
+  import {
+    ADMIN_SECTION_GROUPS,
+    ADMIN_SECTIONS,
+    defaultQueryForAdminSection,
+    isAdminSectionVisible,
+    requiredFeatureForAdminSection,
+    resolveAdminSectionId,
+  } from "./sections/registry";
+  import { createAdminSectionComponentLoader, type DynamicComponent } from "./adminLazyComponents";
+  import { createAdminStores, type AdminApi } from "./adminStores";
+  import {
+    fmtDate,
+    fmtDateShort,
+    fmtMoney,
+    paymentStatusVariant,
+    trafficLeftLabel,
+    trafficOfLabel,
+    trafficPercentValue,
+  } from "../lib/admin/format.js";
+  import {
+    createGravatarCache,
+    openTelegramProfileLink,
+    userAvatarUrl,
+    userDisplayName,
+    userInitials,
+    userSecondaryName,
+    userTelegramProfileLink,
+    userTelegramProfileLinkKind,
+  } from "../lib/admin/users.js";
+  import { adminErrorMessage } from "../lib/admin/errors.js";
+  import {
+    adminPaymentsUserIdFromPath,
+    adminSettingsPathFromPath,
+    adminUserIdFromPath,
+    stripRoutePrefix,
+    withRoutePrefix,
+  } from "../lib/webapp/routes.js";
+  import { buildAdminPaymentsExportPath } from "../lib/webapp/publicApi";
+  import type { ApiClient } from "../lib/webapp/publicApi";
+  import {
+    DEFAULT_USERS_ROUTE_FILTERS,
+    normalizeUsersRouteFilters,
+    readUsersRouteFilters,
+    usersRouteFiltersEqual,
+    writeUsersRouteFilters,
+    type UsersFilter,
+    type UsersRouteFilters,
+  } from "../lib/admin/usersRouteFilters";
+  import type { AdminSectionDescriptor } from "./sections/registry";
+  import type { SettingsSavedPayload } from "../lib/admin/stores/settingsStore";
+  import type { TariffsCatalog } from "../lib/admin/stores/tariffsStore";
+  import type { TranslationsSavedPayload } from "../lib/admin/stores/translationsStore";
+  import type { AdminUser } from "../lib/admin/stores/usersStore";
+
+  type TranslateFn = (key: string, params?: Record<string, unknown>, fallback?: string) => string;
+  type AdminSectionId = string;
+  type SettingsPath = string[];
+  type LanguageOption = { value: string; label: string; flag?: string };
+  type LanguageChangeMeta = { section: "admin"; adminSection: string };
+  type SectionMeta = { title: string; subtitle: string };
+  type NavGroup = {
+    id: string;
+    order: number;
+    label: string;
+    items: Array<AdminSectionDescriptor & { label: string }>;
+  };
+  type PanelStatusBadge = { label: string; variant: "success" | "danger" | "warning" | "muted" };
+
+  let {
+    api,
+    apiBlob,
+    onClose = () => {},
+    onToast = () => {},
+    initialSection = "stats",
+    initialSettingsPath = [],
+    initialPaymentId = null,
+    initialPaymentUserId = null,
+    initialUserId = null,
+    onSectionChange = () => {},
+    onSettingsSaved = () => {},
+    onTariffsSaved = () => {},
+    onThemesSaved = () => {},
+    onTranslationsSaved = () => {},
+    routePrefix = "",
+    brand = {},
+    brandTitle = "Subscription",
+    appFaviconUrl = "",
+    appFaviconUseCustom = false,
+    appVersion = "dev+local",
+    appRepositoryUrl = "https://minishop.minidoc.cc/",
+    currentLang = "ru",
+    languageOptions = [],
+    languageBusy = false,
+    onLanguageChange = () => {},
+    t = (key, _params = {}, fallback = "") => fallback || key,
+  }: {
+    api: AdminApi;
+    apiBlob: ApiClient["apiBlob"];
+    onClose?: () => void;
+    onToast?: (message: string) => void;
+    initialSection?: string;
+    initialSettingsPath?: SettingsPath;
+    initialPaymentId?: number | null;
+    initialPaymentUserId?: number | string | null;
+    initialUserId?: number | string | null;
+    onSectionChange?: (section: string, userId?: number) => void;
+    onSettingsSaved?: (payload: SettingsSavedPayload) => void | Promise<void>;
+    onTariffsSaved?: (catalog: TariffsCatalog) => void | Promise<void>;
+    onThemesSaved?: () => void | Promise<void>;
+    onTranslationsSaved?: (payload: TranslationsSavedPayload) => void | Promise<void>;
+    routePrefix?: string;
+    brand?: Record<string, unknown>;
+    brandTitle?: string;
+    appFaviconUrl?: string;
+    appFaviconUseCustom?: boolean;
+    appVersion?: string;
+    appRepositoryUrl?: string;
+    currentLang?: string;
+    languageOptions?: LanguageOption[];
+    languageBusy?: boolean;
+    onLanguageChange?: (value: string, meta: LanguageChangeMeta) => void;
+    t?: TranslateFn;
+  } = $props();
+
+  const at: TranslateFn = (key, params = {}, fallback = "") =>
+    t(`admin_${key}`, params, fallback || key);
+
+  function initialApi(): AdminApi {
+    return api;
+  }
+
+  function initialApiBlob(): ApiClient["apiBlob"] {
+    return apiBlob;
+  }
+
+  function initialRoutePrefix(): string {
+    return routePrefix;
+  }
+
+  function initialTariffsSaved(): (catalog: TariffsCatalog) => void | Promise<void> {
+    return onTariffsSaved;
+  }
+
+  function initialThemesSaved(): () => void | Promise<void> {
+    return onThemesSaved;
+  }
+
+  const stableApi = initialApi();
+  const stableApiBlob = initialApiBlob();
+  const stableRoutePrefix = initialRoutePrefix();
+  const stableOnTariffsSaved = initialTariffsSaved();
+  const stableOnThemesSaved = initialThemesSaved();
+  const {
+    adminQueryClient,
+    adsStore,
+    documentsStore,
+    healthStore,
+    logsStore,
+    paymentsStore,
+    promosStore,
+    settingsStore,
+    statsStore,
+    supportStore,
+    tariffsStore,
+    translationsStore,
+    usersStore,
+  } = createAdminStores({
+    api: stableApi,
+    apiBlob: stableApiBlob,
+    onToast: flash,
+    at,
+    routePrefix: stableRoutePrefix,
+    onTariffsSaved: stableOnTariffsSaved,
+    onThemesSaved: stableOnThemesSaved,
+  });
+
+  const featureSet = $derived(new Set<string>((settingsStore.features || []) as string[]));
+  const visibleSections: AdminSectionDescriptor[] = $derived.by(() => {
+    void $adminExtensionRevision;
+    return ADMIN_SECTIONS.filter(
+      (section) => !section.hideInNavigation && isAdminSectionVisible(section, featureSet)
+    );
+  });
+  const NAV_GROUPS: NavGroup[] = $derived.by(() => {
+    void $adminExtensionRevision;
+    return ADMIN_SECTION_GROUPS.map((group) => ({
+      id: group.id,
+      order: group.order,
+      label: at(group.i18nKey, {}, group.fallbackLabel),
+      items: visibleSections
+        .filter((section) => section.group === group.id)
+        .sort((a, b) => a.order - b.order || a.id.localeCompare(b.id))
+        .map((section) => ({
+          ...section,
+          label: at(section.i18nKey, {}, section.fallbackLabel),
+        })),
+    })).filter((group) => group.items.length);
+  });
+  const SECTION_META: Record<string, SectionMeta> = $derived.by(() => {
+    void $adminExtensionRevision;
+    return Object.fromEntries(
+      ADMIN_SECTIONS.map((section) => [
+        section.id,
+        {
+          title: at(section.titleI18nKey, {}, section.fallbackTitle),
+          subtitle: at(section.subtitleI18nKey, {}, section.fallbackSubtitle),
+        },
+      ])
+    );
+  });
+  const SECTION_BY_ID = $derived.by(() => {
+    void $adminExtensionRevision;
+    return new Map(ADMIN_SECTIONS.map((section) => [section.id, section]));
+  });
+
+  // Route slugs validate against the full build-time registry (including
+  // extension sections and their aliases), never against the feature-filtered
+  // navigation: a requested section that is merely feature-locked or still
+  // waiting for feature discovery keeps its slug and renders its own locked or
+  // pending state. Only slugs unknown to the registry fall back to the
+  // dashboard.
+  const normalizeSection = (value: unknown): AdminSectionId =>
+    resolveAdminSectionId(value) || "stats";
+  const settingsPathKey = (path: unknown): string => (Array.isArray(path) ? path : []).join("/");
+
+  function initialActiveSection(): AdminSectionId {
+    return normalizeSection(initialSection);
+  }
+
+  function initialSettingsPathValue(): SettingsPath {
+    return Array.isArray(initialSettingsPath) ? initialSettingsPath : [];
+  }
+
+  const initialActive = initialActiveSection();
+  const initialSettingsPathSnapshot = initialSettingsPathValue();
+  let active = $state(initialActive);
+  let lastInitialSection = $state(initialActive);
+  let settingsPath = $state<SettingsPath>(initialSettingsPathSnapshot);
+  let lastInitialSettingsPathKey = $state(settingsPathKey(initialSettingsPathSnapshot));
+
+  if (initialActive === "users") {
+    applyUsersRouteFilters(readCurrentUsersRouteFilters());
+  }
+
+  $effect(() => {
+    // Canonicalize aliases and reject slugs unknown to the section registry.
+    const resolved = normalizeSection(active);
+    if (resolved !== active) {
+      active = resolved;
+    }
+  });
+
+  $effect(() => {
+    const nextInitialSection = normalizeSection(initialSection);
+    if (nextInitialSection !== lastInitialSection) {
+      active = nextInitialSection;
+      lastInitialSection = nextInitialSection;
+    }
+  });
+
+  $effect(() => {
+    const nextInitialSettingsPathKey = settingsPathKey(initialSettingsPath);
+    if (nextInitialSettingsPathKey !== lastInitialSettingsPathKey) {
+      settingsPath = Array.isArray(initialSettingsPath) ? initialSettingsPath : [];
+      lastInitialSettingsPathKey = nextInitialSettingsPathKey;
+    }
+  });
+
+  let sidebarOpen = $state(false);
+  let dismissedUserRouteKey = $state("");
+  let handledUserRouteKey = $state("");
+  let handledPaymentRouteKey = $state("");
+
+  function flash(text: string): void {
+    onToast(text);
+  }
+
+  const sectionComponentLoader = createAdminSectionComponentLoader();
+  let sectionLoadToken = 0;
+  let activeSectionComponent = $state<DynamicComponent | null>(null);
+  let activeSectionLoading = $state(false);
+
+  function warmSectionComponent(section: AdminSectionDescriptor): void {
+    sectionComponentLoader.warm(section);
+  }
+
+  $effect(() => {
+    usersStore.setActive(active);
+    paymentsStore.setActive(active);
+    promosStore.setActive(active);
+    supportStore.setActive(active);
+  });
+
+  // Includes sections that own their own contract (the referral bonus
+  // matrix), so the single header Save enables for their edits too.
+  const dirtyCount = $derived(
+    Object.keys(settingsStore.settingsDirty || {}).length +
+      Number(settingsStore.extraDirtyCount || 0)
+  );
+  const translationsDirtyCount = $derived(
+    Object.keys(translationsStore.translationsDirty || {}).length
+  );
+  const syncBusy = $derived(statsStore.syncBusy);
+  const settingsSaving = $derived(settingsStore.settingsSaving);
+  const translationsSaving = $derived(translationsStore.translationsSaving);
+  const meta = $derived(SECTION_META[active] || { title: active, subtitle: "" });
+  const activeSection = $derived(SECTION_BY_ID.get(active));
+  const availableFeatures = $derived([...featureSet].sort());
+  const featuresResolved = $derived(Boolean(settingsStore.featuresResolved));
+  const activeSectionFeatureAvailable = $derived(
+    !activeSection ||
+      !requiredFeatureForAdminSection(activeSection) ||
+      featureSet.has(requiredFeatureForAdminSection(activeSection))
+  );
+  const openSectionUserCard = $derived(
+    active === "payments"
+      ? openPaymentUserCard
+      : active === "logs"
+        ? openLogsUserCard
+        : openUserCard
+  );
+  const gravatarCache = createGravatarCache(() =>
+    usersStore.updateState({ users: [...usersStore.users] })
+  );
+
+  $effect(() => {
+    const section = activeSection;
+    const token = ++sectionLoadToken;
+    activeSectionComponent = null;
+    if (!section) {
+      activeSectionLoading = false;
+      return;
+    }
+    activeSectionLoading = true;
+    void sectionComponentLoader
+      .load(section)
+      .then((component) => {
+        if (token !== sectionLoadToken) return;
+        activeSectionComponent = component;
+      })
+      .catch((error: unknown) => {
+        if (token !== sectionLoadToken) return;
+        flash(error instanceof Error ? error.message : String(error || "section_load_failed"));
+      })
+      .finally(() => {
+        if (token === sectionLoadToken) activeSectionLoading = false;
+      });
+  });
+
+  function setActive(id: string): void {
+    const next = normalizeSection(id);
+    sidebarOpen = false;
+    if (active === next && !usersStore.openedUser) return;
+    userReturnPath = "";
+    userReturnScrollTop = 0;
+    active = next;
+    settingsPath = [];
+    usersStore.closeUser();
+    paymentsStore.closePayment();
+    promosStore.closeEditPromo({ skipPush: true });
+    supportStore.closeTicketView();
+    onSectionChange(next);
+    // Direct extension deep links can be rendered before the outer application
+    // has synchronized its screen state. Keep the browser route in sync even
+    // in that transient state; the outer action normally writes the same URL.
+    syncActiveSectionPath(next);
+    applySectionRouteDefaults(next);
+    replaceCurrentUsersRouteFilters(
+      next === "users" ? currentUsersRouteFilters() : DEFAULT_USERS_ROUTE_FILTERS
+    );
+  }
+
+  function syncActiveSectionPath(sectionId: string): void {
+    if (typeof window === "undefined" || window.location.protocol === "file:") return;
+    const targetPath = withRoutePrefix(`/admin/${sectionId}`, routePrefix);
+    const targetUrl = new URL(window.location.href);
+    targetUrl.pathname = targetPath;
+    targetUrl.searchParams.delete("extensionTab");
+    const nextUrl = `${targetUrl.pathname}${targetUrl.search}${targetUrl.hash}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (nextUrl !== currentUrl)
+      window.history[window.location.pathname === targetPath ? "replaceState" : "pushState"](
+        null,
+        "",
+        nextUrl
+      );
+  }
+
+  function applySectionRouteDefaults(sectionId: string): void {
+    if (typeof window === "undefined" || window.location.protocol === "file:") return;
+    const descriptor = ADMIN_SECTIONS.find((section) => section.id === sectionId);
+    const defaults = defaultQueryForAdminSection(descriptor, featureSet);
+    const entries = Object.entries(defaults).filter(([key, value]) => key && value);
+    if (!entries.length) return;
+    const query = new URLSearchParams(window.location.search);
+    for (const [key, value] of entries) query.set(key, value);
+    const search = query.toString();
+    const nextUrl = `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (nextUrl !== currentUrl) window.history.replaceState(window.history.state, "", nextUrl);
+  }
+
+  function currentUsersRouteFilters(): UsersRouteFilters {
+    return normalizeUsersRouteFilters({
+      usersFilter: usersStore.usersFilter,
+      usersPanelStatus: usersStore.usersPanelStatus,
+      usersPremiumTraffic: usersStore.usersPremiumTraffic,
+      usersTariffFilter: usersStore.usersTariffFilter,
+    });
+  }
+
+  function readCurrentUsersRouteFilters(): UsersRouteFilters {
+    if (typeof window === "undefined") return DEFAULT_USERS_ROUTE_FILTERS;
+    return readUsersRouteFilters(window.location.search);
+  }
+
+  function applyUsersRouteFilters(
+    filters: UsersRouteFilters,
+    { resetQuery = false }: { resetQuery?: boolean } = {}
+  ): boolean {
+    const previous = currentUsersRouteFilters();
+    const changed = !usersRouteFiltersEqual(previous, filters);
+    if (!changed && !resetQuery) return false;
+    usersStore.updateState({
+      ...filters,
+      usersPage: 0,
+      ...(resetQuery ? { usersQuery: "" } : {}),
+    });
+    return changed;
+  }
+
+  function replaceCurrentUsersRouteFilters(filters: UsersRouteFilters): void {
+    if (typeof window === "undefined" || window.location.protocol === "file:") return;
+    const params = writeUsersRouteFilters(window.location.search, filters);
+    const search = params.toString();
+    const nextUrl = `${window.location.pathname}${search ? `?${search}` : ""}${window.location.hash}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (currentUrl !== nextUrl) {
+      window.history.replaceState(window.history.state, "", nextUrl);
+    }
+  }
+
+  function onUsersFiltersChange(filters: UsersRouteFilters): void {
+    if (active === "users") replaceCurrentUsersRouteFilters(filters);
+  }
+
+  function openUsersFilter(filter: UsersFilter, tariffFilter = "all"): void {
+    const filters = normalizeUsersRouteFilters({
+      ...DEFAULT_USERS_ROUTE_FILTERS,
+      usersFilter: filter,
+      usersTariffFilter: tariffFilter,
+    });
+    applyUsersRouteFilters(filters, { resetQuery: true });
+    sidebarOpen = false;
+    usersStore.closeUser();
+    paymentsStore.closePayment();
+    supportStore.closeTicketView();
+    active = normalizeSection("users");
+    usersStore.setActive(active);
+    onSectionChange(active);
+    replaceCurrentUsersRouteFilters(filters);
+  }
+
+  function openSettingsPath(path: unknown = []): void {
+    const nextPath = (Array.isArray(path) ? path : [])
+      .map((segment) => String(segment || "").trim())
+      .filter(Boolean)
+      .slice(0, 3);
+    const next = normalizeSection("settings");
+    sidebarOpen = false;
+    active = next;
+    settingsPath = nextPath;
+    usersStore.closeUser();
+    paymentsStore.closePayment();
+    supportStore.closeTicketView();
+    if (typeof window !== "undefined" && window.location.protocol !== "file:") {
+      const pathSuffix = nextPath.length ? `/${nextPath.map(encodeURIComponent).join("/")}` : "";
+      const targetPath = withRoutePrefix(`/admin/settings${pathSuffix}`, routePrefix);
+      const nextUrl = `${targetPath}${window.location.search}${window.location.hash}`;
+      if (
+        `${window.location.pathname}${window.location.search}${window.location.hash}` !== nextUrl
+      ) {
+        window.history.pushState(null, "", nextUrl);
+      }
+    }
+    onSectionChange(next);
+  }
+
+  function currentRoutePathname(): string {
+    if (typeof window === "undefined") return "/";
+    return stripRoutePrefix(window.location.pathname, routePrefix);
+  }
+
+  function readSectionFromPath(): AdminSectionId {
+    if (typeof window === "undefined") return "stats";
+    const match = currentRoutePathname().match(/^\/admin\/([a-z0-9_-]+)(?:\/.*)?$/i);
+    return normalizeSection(match ? match[1].toLowerCase() : "stats");
+  }
+
+  function readSettingsPathFromPath(): SettingsPath {
+    if (typeof window === "undefined") return [];
+    return adminSettingsPathFromPath(currentRoutePathname());
+  }
+
+  function readUserIdFromPath(): number | string | null {
+    if (typeof window === "undefined") return null;
+    return adminUserIdFromPath(window.location.pathname, routePrefix);
+  }
+
+  function readSupportTicketIdFromPath(): number | null {
+    if (typeof window === "undefined") return null;
+    const match = currentRoutePathname().match(/^\/admin\/support\/(\d+)$/);
+    return match ? Number(match[1]) : null;
+  }
+
+  function readPaymentIdFromPath(): number | null {
+    if (typeof window === "undefined") return null;
+    const match = currentRoutePathname().match(/^\/admin\/payments\/(\d+)$/);
+    return match ? Number(match[1]) : null;
+  }
+
+  function readPaymentUserIdFromPath(): number | string | null {
+    if (typeof window === "undefined") return null;
+    return adminPaymentsUserIdFromPath(window.location.pathname, routePrefix);
+  }
+
+  function readPromoIdFromPath(): number | null {
+    if (typeof window === "undefined") return null;
+    const match = currentRoutePathname().match(/^\/admin\/promos\/(\d+)$/);
+    return match ? Number(match[1]) : null;
+  }
+
+  function onPopState(): void {
+    const previousActive = active;
+    active = readSectionFromPath();
+    settingsPath = active === "settings" ? readSettingsPathFromPath() : [];
+    sidebarOpen = false;
+    if (active === "users") {
+      const filters = readCurrentUsersRouteFilters();
+      const changed = applyUsersRouteFilters(filters, {
+        resetQuery:
+          previousActive !== "users" ||
+          !usersRouteFiltersEqual(currentUsersRouteFilters(), filters),
+      });
+      replaceCurrentUsersRouteFilters(filters);
+      if (previousActive === "users" && changed) void usersStore.loadUsers();
+    }
+    const userId = readUserIdFromPath();
+    const paymentUserId = active === "payments" ? readPaymentUserIdFromPath() : null;
+    const contextualUserId = paymentUserId || userId;
+    if (contextualUserId) {
+      if (
+        !usersStore.openedUser ||
+        (usersStore.openedUser.user_id !== contextualUserId &&
+          usersStore.openedUser.minishop_id !== contextualUserId)
+      ) {
+        void usersStore.openUser(contextualUserId, {
+          skipPush: true,
+          pathContext: paymentUserId ? "payments" : "users",
+        });
+      }
+    } else if (usersStore.openedUser) {
+      usersStore.closeUser({ skipPush: true });
+    }
+    const paymentId = readPaymentIdFromPath();
+    if (active === "payments" && paymentId) {
+      if (!paymentsStore.openedPaymentId || paymentsStore.openedPaymentId !== paymentId) {
+        void paymentsStore.openPayment(paymentId, { skipPush: true });
+      }
+    } else if (paymentsStore.openedPaymentId) {
+      paymentsStore.closePayment({ skipPush: true });
+    }
+    const promoId = readPromoIdFromPath();
+    if (active === "promos" && promoId) {
+      if (!promosStore.promoEditing || promosStore.promoEditing.id !== promoId) {
+        void promosStore.openPromoById(promoId, { skipPush: true });
+      }
+    } else if (promosStore.promoEditing) {
+      promosStore.closeActivations();
+      promosStore.closeEditPromo({ skipPush: true });
+    }
+    const ticketId = readSupportTicketIdFromPath();
+    if (active === "support" && ticketId) {
+      if (!supportStore.openedTicketId || supportStore.openedTicketId !== ticketId) {
+        void supportStore.openTicket(ticketId, { skipPush: true });
+      }
+    } else if (active === "support" && supportStore.openedTicketId) {
+      supportStore.closeTicketView({ skipPush: true });
+    }
+  }
+
+  async function exportPayments(): Promise<void> {
+    if (typeof window === "undefined") return;
+    try {
+      const blob = await stableApiBlob(buildAdminPaymentsExportPath());
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "payments.csv";
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    } catch (error) {
+      flash(
+        at(
+          "payments_export_error",
+          { error: adminErrorMessage(error, at, "Export failed") },
+          "Export failed: {error}"
+        )
+      );
+    }
+  }
+
+  function openPaymentUserCard(userId: unknown): void {
+    openUserCard(userId);
+  }
+
+  /** Open a payment from anywhere (the partner commission list uses this). */
+  function openPaymentCard(paymentId: number): void {
+    const id = Number(paymentId);
+    if (!Number.isFinite(id) || id <= 0) return;
+    const next = normalizeSection("payments");
+    sidebarOpen = false;
+    if (active !== next) {
+      active = next;
+      usersStore.closeUser();
+      onSectionChange(next);
+    }
+    usersStore.setActive(next);
+    void paymentsStore.openPayment(id);
+  }
+
+  /** Open a partner card from anywhere (the payment card links back here). */
+  function openPartnerCard(partnerId: string): void {
+    const id = String(partnerId || "").trim();
+    if (!id) return;
+    const next = normalizeSection("partners");
+    sidebarOpen = false;
+    if (active !== next) {
+      active = next;
+      usersStore.closeUser();
+      paymentsStore.closePayment({ skipPush: true });
+      onSectionChange(next);
+    }
+    usersStore.setActive(next);
+    if (typeof window === "undefined") return;
+    const target = withRoutePrefix(
+      `/admin/partners/partner/${encodeURIComponent(id)}`,
+      routePrefix
+    );
+    window.history.pushState(null, "", `${target}${window.location.search}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }
+
+  function openPaymentPromoCard(promoId: number): void {
+    const id = Number(promoId);
+    if (!Number.isFinite(id) || id <= 0) return;
+    const next = normalizeSection("promos");
+    sidebarOpen = false;
+    paymentsStore.closePayment({ skipPush: true });
+    if (active !== next) {
+      active = next;
+      usersStore.closeUser();
+      onSectionChange(next);
+    }
+    usersStore.setActive(next);
+    promosStore.setActive(next);
+    void promosStore.openPromoById(id);
+  }
+
+  let userReturnPath = $state("");
+  let userReturnScrollTop = 0;
+
+  function openLogsUserCard(userId: unknown): void {
+    openUserCard(userId);
+  }
+
+  function openUserCard(userOrId: unknown): void {
+    const user = typeof userOrId === "object" && userOrId !== null ? (userOrId as AdminUser) : null;
+    const identifier =
+      user?.minishop_id ||
+      (typeof userOrId === "string" && userOrId.startsWith("ms_")
+        ? userOrId
+        : Number(user?.user_id ?? userOrId));
+    if (!identifier || (typeof identifier === "number" && !Number.isFinite(identifier))) return;
+    if (!usersStore.openedUser && typeof window !== "undefined") {
+      userReturnPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      userReturnScrollTop = document.querySelector(".admin-main")?.scrollTop || 0;
+    }
+    sidebarOpen = false;
+    paymentsStore.closePayment({ skipPush: true });
+    if (active !== "users") {
+      active = "users";
+      onSectionChange("users");
+    }
+    usersStore.setActive("users");
+    void usersStore.openUser(user || identifier);
+    window.history.replaceState(
+      {
+        ...window.history.state,
+        adminUserReturnPath: userReturnPath,
+        adminUserReturnScrollTop: userReturnScrollTop,
+      },
+      "",
+      window.location.href
+    );
+    document.querySelector(".admin-main")?.scrollTo({ top: 0 });
+  }
+
+  function userRouteKey(section: string): string {
+    if (section === "users" && initialUserId) return `users:${initialUserId}`;
+    if (section === "payments" && initialPaymentUserId) return `payments:${initialPaymentUserId}`;
+    return "";
+  }
+
+  function closeUserCard(): void {
+    dismissedUserRouteKey = userRouteKey(active);
+    usersStore.closeUser({ skipPush: true });
+    if (typeof window === "undefined") return;
+    const target =
+      userReturnPath ||
+      window.history.state?.adminUserReturnPath ||
+      `${withRoutePrefix("/admin/users", routePrefix)}${window.location.search}`;
+    const scrollTop =
+      userReturnScrollTop || Number(window.history.state?.adminUserReturnScrollTop || 0);
+    window.history.replaceState(null, "", target);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    userReturnPath = "";
+    userReturnScrollTop = 0;
+    window.setTimeout(() => document.querySelector(".admin-main")?.scrollTo({ top: scrollTop }), 0);
+  }
+
+  function resolvedAvatarUrl(user: AdminUser | null | undefined): string {
+    return userAvatarUrl(user) || (user?.email ? gravatarCache.gravatarUrl(user.email) : "");
+  }
+
+  function panelStatusBadge(user: AdminUser | null | undefined): PanelStatusBadge {
+    const status = String(user?.panel_status || "").toLowerCase();
+    if (user?.is_banned) return { label: at("status_banned", {}, "Banned"), variant: "danger" };
+    switch (status) {
+      case "active":
+        return { label: at("status_active", {}, "Active"), variant: "success" };
+      case "expired":
+        return {
+          label: user?.panel_status_expired_at
+            ? at(
+                "expired_badge",
+                { date: fmtDateShort(user.panel_status_expired_at) },
+                `Expired ${fmtDateShort(user.panel_status_expired_at)}`
+              )
+            : at("status_expired", {}, "Expired"),
+          variant: "warning",
+        };
+      case "limited":
+        return { label: at("status_limited", {}, "Limited"), variant: "warning" };
+      case "disabled":
+        return { label: at("status_disabled", {}, "Disabled"), variant: "muted" };
+      case "bot_only":
+        return { label: at("status_bot_only", {}, "Bot Only"), variant: "muted" };
+      default:
+        return { label: status || "—", variant: "muted" };
+    }
+  }
+
+  onMount(() => {
+    adminQueryClient.mount();
+    if (typeof window !== "undefined") {
+      window.addEventListener("popstate", onPopState);
+      if (active === "users") replaceCurrentUsersRouteFilters(currentUsersRouteFilters());
+      const promoId = readPromoIdFromPath();
+      if (active === "promos" && promoId) {
+        void promosStore.openPromoById(promoId, { skipPush: true });
+      }
+    }
+    void healthStore.loadHealth();
+    void settingsStore.loadFeatures();
+    // The sidebar shows how many support messages are waiting, so the panel —
+    // not the support screen — owns this poll. Started from the section, the
+    // count only ever arrived once the admin was already reading the tickets,
+    // which is exactly when the badge has nothing left to announce.
+    supportStore.startStatsPolling();
+    const healthTimer: ReturnType<typeof window.setInterval> | null =
+      typeof window !== "undefined"
+        ? window.setInterval(() => void healthStore.loadHealth(), 5 * 60 * 1000)
+        : null;
+    return () => {
+      if (typeof window !== "undefined") window.removeEventListener("popstate", onPopState);
+      if (healthTimer !== null) window.clearInterval(healthTimer);
+      supportStore.stopStatsPolling();
+      adminQueryClient.unmount();
+    };
+  });
+
+  $effect(() => {
+    const routeSection = normalizeSection(initialSection);
+    const routeKey = userRouteKey(routeSection);
+    if (!routeKey) {
+      handledUserRouteKey = "";
+      dismissedUserRouteKey = "";
+      return;
+    }
+    if (routeKey === handledUserRouteKey || routeKey === dismissedUserRouteKey) return;
+    handledUserRouteKey = routeKey;
+    if (routeSection === "users" && initialUserId) {
+      void untrack(() => usersStore.openUser(initialUserId, { skipPush: true }));
+    } else if (routeSection === "payments" && initialPaymentUserId) {
+      void untrack(() =>
+        usersStore.openUser(initialPaymentUserId, {
+          skipPush: true,
+          pathContext: "payments",
+        })
+      );
+    }
+  });
+
+  $effect(() => {
+    const routeSection = normalizeSection(initialSection);
+    const paymentId = routeSection === "payments" ? initialPaymentId : null;
+    if (!paymentId) {
+      handledPaymentRouteKey = "";
+      return;
+    }
+    const routeKey = `payments:${paymentId}`;
+    if (routeKey === handledPaymentRouteKey) return;
+    handledPaymentRouteKey = routeKey;
+    void untrack(() => paymentsStore.openPayment(paymentId, { skipPush: true }));
+  });
+</script>
+
+<!-- The admin bundle mounts as its own root, outside the webapp provider. -->
+<Tooltip.Provider>
+  <AdminPanelLayout
+    api={stableApi}
+    {active}
+    {activeSectionComponent}
+    {activeSectionLoading}
+    featureAvailable={activeSectionFeatureAvailable}
+    {featuresResolved}
+    {availableFeatures}
+    {adsStore}
+    {documentsStore}
+    {appFaviconUrl}
+    {appFaviconUseCustom}
+    {appRepositoryUrl}
+    {appVersion}
+    {at}
+    {brand}
+    {brandTitle}
+    {currentLang}
+    {dirtyCount}
+    {fmtDate}
+    {fmtDateShort}
+    {fmtMoney}
+    initialTicketId={readSupportTicketIdFromPath()}
+    {languageBusy}
+    {languageOptions}
+    {logsStore}
+    {meta}
+    {NAV_GROUPS}
+    {onClose}
+    {onLanguageChange}
+    onCloseUser={closeUserCard}
+    onExportPayments={exportPayments}
+    onOpenPaymentUserCard={openPaymentUserCard}
+    onOpenPaymentPromoCard={openPaymentPromoCard}
+    onOpenPartnerCard={openPartnerCard}
+    onOpenPaymentCard={openPaymentCard}
+    onOpenSettingsPath={openSettingsPath}
+    onOpenUserCard={openSectionUserCard}
+    onOpenUsersFilter={openUsersFilter}
+    {onUsersFiltersChange}
+    onSaveSettings={onSettingsSaved}
+    onSaveTranslations={onTranslationsSaved}
+    onSetActive={setActive}
+    onSettingsPathChange={(path: SettingsPath) => (settingsPath = path)}
+    {openTelegramProfileLink}
+    {paymentStatusVariant}
+    {panelStatusBadge}
+    {promosStore}
+    {resolvedAvatarUrl}
+    {routePrefix}
+    {settingsPath}
+    {settingsSaving}
+    {settingsStore}
+    bind:sidebarOpen
+    {statsStore}
+    {supportStore}
+    {syncBusy}
+    {tariffsStore}
+    {translationsDirtyCount}
+    {translationsSaving}
+    {translationsStore}
+    {trafficLeftLabel}
+    {trafficOfLabel}
+    {trafficPercentValue}
+    {userDisplayName}
+    {userInitials}
+    {userSecondaryName}
+    {userTelegramProfileLink}
+    {userTelegramProfileLinkKind}
+    {warmSectionComponent}
+    {t}
+  />
+</Tooltip.Provider>

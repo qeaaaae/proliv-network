@@ -1,0 +1,482 @@
+import asyncio
+
+from aiohttp import web
+
+from bot.app.web.admin_api_impl.plugin_packages import _active_frontends
+from bot.app.web.admin_api_impl.routes import (
+    setup_admin_routes,
+)
+from bot.plugins.packages import package_root
+
+from .account import (
+    account_avatar_route,
+    account_email_request_route,
+    account_email_verify_route,
+    account_language_route,
+    account_password_confirm_route,
+    account_password_request_route,
+    account_telegram_link_route,
+    me_route,
+)
+from .account_merge import (
+    account_telegram_merge_confirm_route,
+    account_telegram_merge_request_route,
+)
+from .account_merge_generic import (
+    account_merge_cancel_route,
+    account_merge_confirm_route,
+    account_merge_request_route,
+    account_merge_status_route,
+)
+from .asset_paths import (
+    WEBAPP_DEFAULT_LOGO_PATH,
+    WEBAPP_FAVICON_PATH,
+    WEBAPP_LOGO_PROXY_PATH,
+    WEBAPP_UPLOADED_LOGO_PATH,
+)
+from .assets import (
+    admin_css_asset_route,
+    admin_js_asset_route,
+    admin_js_chunk_asset_route,
+    app_deeplink_route,
+    bootstrap_route,
+    css_asset_route,
+    health_route,
+    i18n_route,
+    index_route,
+    js_asset_route,
+    js_chunk_asset_route,
+    provider_logo_asset_route,
+    robots_txt_route,
+    theme_asset_route,
+    theme_css_asset_route,
+    webapp_current_favicon_route,
+    webapp_default_logo_route,
+    webapp_favicon_route,
+    webapp_logo_route,
+    webapp_uploaded_logo_route,
+)
+from .assets_static import flag_font_asset_route
+from .auth import (
+    auth_token_route,
+    email_auth_magic_route,
+    email_auth_request_route,
+    email_auth_verify_route,
+    email_password_auth_route,
+    logout_route,
+    referral_welcome_bonus_claim_route,
+    session_route,
+    telegram_oauth_callback_route,
+    telegram_oauth_nonce_route,
+    telegram_oauth_start_route,
+)
+from .balance import balance_route, balance_topup_route
+from .billing import (
+    activate_trial_route,
+    apply_promo_route,
+    create_payment_route,
+    device_topup_options_route,
+    payment_status_route,
+    plans_viewed_route,
+    quote_promo_route,
+    subscription_auto_renew_route,
+    subscription_quote_route,
+    tariff_change_options_route,
+    tariff_change_payment_route,
+    tariff_change_route,
+    tariff_topup_options_route,
+)
+from .billing_payment_cancel import cancel_payment_route
+from .billing_qa import complete_qa_payment_route
+from .billing_subscription import (
+    promo_status_route,
+)
+from .contracts import register_webapp_route_contracts
+from .devices import (
+    devices_route,
+    disconnect_device_route,
+    rename_device_route,
+)
+from .documents import document_content_route, documents_list_route
+from .email_addresses import account_notification_email_route
+from .email_change import (
+    account_email_change_confirm_route,
+    account_email_change_current_request_route,
+    account_email_change_current_verify_route,
+    account_email_change_new_request_route,
+)
+from .extension_orders import (
+    extension_checkout_route,
+    extension_order_create_route,
+    extension_order_route,
+    extension_orders_route,
+    extension_payment_methods_route,
+)
+from .extension_runtime import (
+    extension_asset_route,
+    extension_resource_route,
+    extension_runtime_route,
+)
+from .external_identity_unlink import external_identity_unlink_route
+from .external_oauth import (
+    external_oauth_callback_route,
+    external_oauth_pending_cancel_route,
+    external_oauth_pending_request_route,
+    external_oauth_pending_status_route,
+    external_oauth_pending_verify_route,
+    external_oauth_start_route,
+)
+from .gifts import gift_claim_route, gift_options_route, gift_preview_route, gifts_route
+from .guides import (
+    public_subscription_guides_route,
+    subscription_guides_route,
+)
+from .notification_preferences import (
+    account_notification_preferences_route,
+    email_notification_preferences_route,
+    email_notification_preferences_update_route,
+)
+from .pages import (
+    INFORMATION_PAGE_ROUTE_PATTERN,
+    information_page_content_route,
+    information_page_route,
+)
+from .partner import (
+    partner_application_create_route,
+    partner_balance_renew_route,
+    partner_clients_route,
+    partner_commissions_route,
+    partner_overview_route,
+    partner_withdrawal_cancel_route,
+    partner_withdrawal_create_route,
+    partner_withdrawals_route,
+)
+from .passkeys import (
+    account_merge_passkey_options_route,
+    account_merge_passkey_verify_route,
+    account_passkey_delete_route,
+    account_passkey_options_route,
+    account_passkey_register_route,
+    passkey_auth_options_route,
+    passkey_auth_verify_route,
+)
+from .payloads import (
+    WebAppEmailPayload as WebAppEmailPayload,
+)
+from .payloads import (
+    WebAppPaymentCreatePayload as WebAppPaymentCreatePayload,
+)
+from .payment_history import payment_history_route
+from .qr_login import (
+    account_qr_login_approve_route,
+    account_qr_login_claim_route,
+    account_qr_login_deny_route,
+    qr_login_cancel_route,
+    qr_login_poll_route,
+    qr_login_start_route,
+)
+from .server_status import server_status_route
+from .subscription_gateway import subscription_gateway_route
+from .subscription_reissue import (
+    subscription_reissue_route,
+)
+from .support import (
+    support_create_ticket_route,
+    support_message_image_route,
+    support_ticket_detail_route,
+    support_ticket_emoji_route,
+    support_ticket_read_route,
+    support_ticket_reply_route,
+    support_ticket_typing_route,
+    support_tickets_route,
+    support_unread_route,
+)
+from .telegram_notifications import (
+    account_telegram_notifications_probe_route,
+)
+from .theme_effects import theme_effect_asset_route, theme_effects_route
+
+register_webapp_route_contracts()
+
+
+async def plugin_admin_index_route(request: web.Request) -> web.Response:
+    """Serve the SPA shell only for an active package's declared admin route."""
+    section = request.match_info["section"]
+    _, plugins = await asyncio.to_thread(_active_frontends, package_root())
+    for plugin in plugins:
+        for view in plugin.get("sections", []):
+            if not isinstance(view, dict):
+                continue
+            aliases = view.get("routeAliases")
+            if section == view.get("id") or (isinstance(aliases, list) and section in aliases):
+                return await index_route(request)
+    raise web.HTTPNotFound()
+
+
+def setup_subscription_webapp_routes(app: web.Application) -> None:
+    app.router.add_get("/api/theme-effects", theme_effects_route)
+    app.router.add_get(
+        "/api/theme-effects/assets/{key}/{digest}/{path:.+}", theme_effect_asset_route
+    )
+    app.router.add_get("/robots.txt", robots_txt_route)
+    app.router.add_get("/", index_route)
+    app.router.add_get("/login/password", index_route)
+    app.router.add_get("/home", index_route)
+    app.router.add_get("/extensions", index_route)
+    app.router.add_get(r"/extensions/{owner:[a-z][a-z0-9-]+}/{view:[a-z][a-z0-9-]+}", index_route)
+    app.router.add_get("/api/extensions/runtime", extension_runtime_route)
+    app.router.add_get(
+        r"/api/extensions/assets/{owner:[a-z][a-z0-9-]+}/{digest:[a-f0-9]{64}}/{path:.+}",
+        extension_asset_route,
+    )
+    app.router.add_get("/api/extensions/resource", extension_resource_route)
+    app.router.add_get("/api/extensions/orders", extension_orders_route)
+    app.router.add_get("/api/extensions/order", extension_order_route)
+    app.router.add_get("/api/extensions/payment-methods", extension_payment_methods_route)
+    app.router.add_post("/api/extensions/orders", extension_order_create_route)
+    app.router.add_post("/api/extensions/checkout", extension_checkout_route)
+    # Checkout has no screen of its own; the app renders home and opens plan
+    # selection, so the path only has to reach the SPA.
+    app.router.add_get("/plans", index_route)
+    app.router.add_get("/checkout", index_route)
+    app.router.add_get(r"/checkout/{tariff_access_code:[a-fA-F0-9]{32}}", index_route)
+    app.router.add_get("/install", index_route)
+    app.router.add_get("/trial", index_route)
+    app.router.add_get("/open-app", app_deeplink_route)
+    app.router.add_get(
+        r"/s/{share_token:[a-f0-9]{32}}", subscription_gateway_route, allow_head=False
+    )
+    app.router.add_get(
+        r"/s/{share_token:[a-f0-9]{32}}/{client_type:stash|singbox|mihomo|json|v2ray-json|clash}",
+        subscription_gateway_route,
+        allow_head=False,
+    )
+    app.router.add_get("/invite", index_route)
+    app.router.add_get("/partner", index_route)
+    app.router.add_get("/devices", index_route)
+    app.router.add_get("/settings", index_route)
+    app.router.add_get("/unsubscribe", index_route)
+    app.router.add_get("/settings/notifications", index_route)
+    app.router.add_get("/settings/security", index_route)
+    app.router.add_get("/settings/payments", index_route)
+    app.router.add_get("/status", index_route)
+    app.router.add_get("/support", index_route)
+    app.router.add_get("/support/new", index_route)
+    app.router.add_get("/support/{ticket_id:\\d+}", index_route)
+    app.router.add_get("/admin", index_route)
+    app.router.add_get("/admin/", index_route)
+    app.router.add_get(
+        (
+            "/admin/{section:stats|users|payments|gifts|promos|ads|broadcast|logs|tariffs|"
+            "appearance|settings|translations|support|backups|partners|documents|plugins}"
+        ),
+        index_route,
+    )
+    app.router.add_get(r"/admin/settings/{settings_path:.+}", index_route)
+    app.router.add_get("/admin/users/{user_id:-?[0-9]+|ms_[a-fA-F0-9]+}", index_route)
+    app.router.add_get("/admin/payments/users/{user_id:-?[0-9]+|ms_[a-fA-F0-9]+}", index_route)
+    app.router.add_get("/admin/payments/{payment_id:\\d+}", index_route)
+    app.router.add_get("/admin/support/{ticket_id:\\d+}", index_route)
+    app.router.add_get(r"/admin/{section:[a-z][a-z0-9-]+}", plugin_admin_index_route)
+    app.router.add_get("/auth/telegram/start", telegram_oauth_start_route)
+    app.router.add_get("/auth/telegram/callback", telegram_oauth_callback_route)
+    app.router.add_get(r"/auth/{provider:discord|google|yandex}/start", external_oauth_start_route)
+    app.router.add_get(
+        r"/auth/{provider:discord|google|yandex}/callback", external_oauth_callback_route
+    )
+    app.router.add_get("/health", health_route)
+    app.router.add_get("/favicon.ico", webapp_current_favicon_route)
+    app.router.add_get("/apple-touch-icon.png", webapp_current_favicon_route)
+    app.router.add_get("/apple-touch-icon-precomposed.png", webapp_current_favicon_route)
+    app.router.add_get("/icon-192.png", webapp_current_favicon_route)
+    app.router.add_get("/icon-512.png", webapp_current_favicon_route)
+    app.router.add_get(WEBAPP_DEFAULT_LOGO_PATH, webapp_default_logo_route)
+    app.router.add_get(WEBAPP_LOGO_PROXY_PATH, webapp_logo_route)
+    app.router.add_get(
+        rf"{WEBAPP_UPLOADED_LOGO_PATH}/{{filename:[A-Za-z0-9_.-]+}}",
+        webapp_uploaded_logo_route,
+    )
+    app.router.add_get(
+        rf"{WEBAPP_FAVICON_PATH}/{{digest:[0-9a-f]{{16}}}}/{{filename:[A-Za-z0-9_.-]+}}",
+        webapp_favicon_route,
+    )
+    app.router.add_get("/subscription_webapp.{asset_hash:[0-9a-f]{8}}.css", css_asset_route)
+    app.router.add_get("/subscription_webapp.css", css_asset_route)
+    app.router.add_get(
+        "/subscription_webapp_admin.{asset_hash:[0-9a-f]{8}}.css",
+        admin_css_asset_route,
+    )
+    app.router.add_get("/subscription_webapp_admin.css", admin_css_asset_route)
+    app.router.add_get(r"/webapp-theme-css/{path:.+}", theme_css_asset_route)
+    app.router.add_get(r"/webapp-theme-assets/{path:.+}", theme_asset_route)
+    app.router.add_get(
+        r"/provider-logos/{filename:[A-Za-z0-9_-]+\.png}",
+        provider_logo_asset_route,
+    )
+    app.router.add_get("/fonts/TwemojiCountryFlags.woff2", flag_font_asset_route)
+    # Order matters: the ``.min.<hash>`` entries are registered before the chunk
+    # patterns, which would otherwise swallow them as a chunk called "min".
+    # ``chunk_name`` allows dots because a chunk inherits them from its entry
+    # module — a store written in ``*.svelte.ts`` produces
+    # ``subscription_webapp_admin.<store>.svelte.<hash>.js``.
+    app.router.add_get("/subscription_webapp.min.{asset_hash}.js", js_asset_route)
+    app.router.add_get("/subscription_webapp.js", js_asset_route)
+    app.router.add_get(
+        r"/subscription_webapp.{chunk_name:[A-Za-z0-9_.-]+}.{asset_hash:[A-Za-z0-9_-]+}.js",
+        js_chunk_asset_route,
+    )
+    app.router.add_get("/subscription_webapp_admin.min.{asset_hash}.js", admin_js_asset_route)
+    app.router.add_get("/subscription_webapp_admin.js", admin_js_asset_route)
+    app.router.add_get(
+        r"/subscription_webapp_admin.{chunk_name:[A-Za-z0-9_.-]+}.{asset_hash:[A-Za-z0-9_-]+}.js",
+        admin_js_chunk_asset_route,
+    )
+    app.router.add_post("/api/auth/telegram/nonce", telegram_oauth_nonce_route)
+    app.router.add_post("/api/auth/token", auth_token_route)
+    app.router.add_post("/api/auth/email/request", email_auth_request_route)
+    app.router.add_post("/api/auth/email/verify", email_auth_verify_route)
+    app.router.add_post("/api/auth/email/magic", email_auth_magic_route)
+    app.router.add_post("/api/auth/email/password", email_password_auth_route)
+    app.router.add_post("/api/auth/external/pending", external_oauth_pending_status_route)
+    app.router.add_post("/api/auth/external/request", external_oauth_pending_request_route)
+    app.router.add_post("/api/auth/external/verify", external_oauth_pending_verify_route)
+    app.router.add_post("/api/auth/external/cancel", external_oauth_pending_cancel_route)
+    app.router.add_post("/api/auth/passkey/options", passkey_auth_options_route)
+    app.router.add_post("/api/auth/passkey/verify", passkey_auth_verify_route)
+    app.router.add_post("/api/auth/qr/start", qr_login_start_route)
+    app.router.add_post("/api/auth/qr/poll", qr_login_poll_route)
+    app.router.add_post("/api/auth/qr/cancel", qr_login_cancel_route)
+    app.router.add_get("/api/auth/session", session_route)
+    app.router.add_post("/api/auth/logout", logout_route)
+    app.router.add_get("/api/bootstrap", bootstrap_route)
+    app.router.add_get("/api/i18n", i18n_route)
+    app.router.add_get(
+        "/api/notification-preferences/unsubscribe",
+        email_notification_preferences_route,
+    )
+    app.router.add_post(
+        "/api/notification-preferences/unsubscribe",
+        email_notification_preferences_update_route,
+    )
+    app.router.add_get("/api/me", me_route)
+    app.router.add_get("/api/balance", balance_route)
+    app.router.add_get("/api/payments/history", payment_history_route)
+    app.router.add_post("/api/balance/topup", balance_topup_route)
+    app.router.add_get("/api/status", server_status_route)
+    app.router.add_get("/api/documents", documents_list_route)
+    app.router.add_get(
+        r"/api/documents/{slug:.+}",
+        document_content_route,
+    )
+    app.router.add_get(r"/api/pages/{page_path:.+}", information_page_content_route)
+    app.router.add_get("/api/subscription-guides", subscription_guides_route)
+    app.router.add_get(
+        r"/api/subscription-guides/public/{share_token:[a-f0-9]{32}}",
+        public_subscription_guides_route,
+    )
+    app.router.add_get("/api/account/avatar", account_avatar_route)
+    app.router.add_post("/api/account/language", account_language_route)
+    app.router.add_post(
+        "/api/account/notification-preferences",
+        account_notification_preferences_route,
+    )
+    app.router.add_post("/api/account/email/request", account_email_request_route)
+    app.router.add_post("/api/account/email/verify", account_email_verify_route)
+    app.router.add_post(
+        "/api/account/email/change/current/request",
+        account_email_change_current_request_route,
+    )
+    app.router.add_post(
+        "/api/account/email/change/current/verify",
+        account_email_change_current_verify_route,
+    )
+    app.router.add_post(
+        "/api/account/email/change/new/request",
+        account_email_change_new_request_route,
+    )
+    app.router.add_post("/api/account/email/change/confirm", account_email_change_confirm_route)
+    app.router.add_post("/api/account/email/notification", account_notification_email_route)
+    app.router.add_post("/api/account/password/request", account_password_request_route)
+    app.router.add_post("/api/account/password/confirm", account_password_confirm_route)
+    app.router.add_post("/api/account/passkeys/options", account_passkey_options_route)
+    app.router.add_post("/api/account/passkeys/register", account_passkey_register_route)
+    app.router.add_post("/api/account/passkeys/delete", account_passkey_delete_route)
+    app.router.add_post("/api/account/qr-login/claim", account_qr_login_claim_route)
+    app.router.add_post("/api/account/qr-login/approve", account_qr_login_approve_route)
+    app.router.add_post("/api/account/qr-login/deny", account_qr_login_deny_route)
+    app.router.add_post("/api/account/identities/unlink", external_identity_unlink_route)
+    app.router.add_post("/api/account/telegram/link", account_telegram_link_route)
+    app.router.add_post("/api/account/telegram/merge/request", account_telegram_merge_request_route)
+    app.router.add_post("/api/account/telegram/merge/confirm", account_telegram_merge_confirm_route)
+    app.router.add_post("/api/account/merge/passkey/options", account_merge_passkey_options_route)
+    app.router.add_post("/api/account/merge/passkey/verify", account_merge_passkey_verify_route)
+    app.router.add_get("/api/account/merge/status", account_merge_status_route)
+    app.router.add_post("/api/account/merge/request", account_merge_request_route)
+    app.router.add_post("/api/account/merge/confirm", account_merge_confirm_route)
+    app.router.add_post("/api/account/merge/cancel", account_merge_cancel_route)
+    app.router.add_post(
+        "/api/account/telegram/notifications/probe",
+        account_telegram_notifications_probe_route,
+    )
+    app.router.add_post("/api/referral/welcome-bonus/claim", referral_welcome_bonus_claim_route)
+    app.router.add_post("/api/promo/apply", apply_promo_route)
+    app.router.add_post("/api/promo/status", promo_status_route)
+    app.router.add_post("/api/plans/viewed", plans_viewed_route)
+    from .trial_captcha import trial_captcha_route, trial_captcha_verify_route
+
+    app.router.add_get("/api/trial/captcha", trial_captcha_route)
+    app.router.add_post("/api/trial/captcha/verify", trial_captcha_verify_route)
+    app.router.add_post("/api/trial/activate", activate_trial_route)
+    app.router.add_post("/api/subscription/auto-renew", subscription_auto_renew_route)
+    app.router.add_post("/api/subscription/reissue", subscription_reissue_route)
+    app.router.add_post("/api/subscription/quote-promo", quote_promo_route)
+    app.router.add_post("/api/subscription/quote", subscription_quote_route)
+    app.router.add_get("/api/devices", devices_route)
+    app.router.add_get("/api/partner/overview", partner_overview_route)
+    app.router.add_post("/api/partner/applications", partner_application_create_route)
+    app.router.add_get("/api/partner/clients", partner_clients_route)
+    app.router.add_get("/api/partner/commissions", partner_commissions_route)
+    app.router.add_get("/api/partner/withdrawals", partner_withdrawals_route)
+    app.router.add_post("/api/partner/withdrawals", partner_withdrawal_create_route)
+    app.router.add_post(
+        "/api/partner/withdrawals/{id:\\d+}/cancel",
+        partner_withdrawal_cancel_route,
+    )
+    app.router.add_post("/api/partner/balance/renew", partner_balance_renew_route)
+    app.router.add_post("/api/devices/disconnect", disconnect_device_route)
+    app.router.add_post("/api/devices/rename", rename_device_route)
+    app.router.add_get("/api/devices/topup-options", device_topup_options_route)
+    app.router.add_get("/api/support/tickets", support_tickets_route)
+    app.router.add_post("/api/support/tickets", support_create_ticket_route)
+    app.router.add_get("/api/support/tickets/{id:\\d+}", support_ticket_detail_route)
+    app.router.add_get(
+        "/api/support/tickets/{id:\\d+}/emoji/{emoji_id}", support_ticket_emoji_route
+    )
+    app.router.add_post("/api/support/tickets/{id:\\d+}/messages", support_ticket_reply_route)
+    app.router.add_post("/api/support/tickets/{id:\\d+}/read", support_ticket_read_route)
+    app.router.add_post("/api/support/tickets/{id:\\d+}/typing", support_ticket_typing_route)
+    app.router.add_get("/api/support/unread", support_unread_route)
+    app.router.add_get(
+        r"/api/support/images/{image_id:[0-9a-f]{32}}",
+        support_message_image_route,
+    )
+    app.router.add_get("/api/tariffs/topup-options", tariff_topup_options_route)
+    app.router.add_get("/api/tariffs/change-options", tariff_change_options_route)
+    app.router.add_post("/api/tariffs/change", tariff_change_route)
+    app.router.add_post("/api/tariffs/change-payment", tariff_change_payment_route)
+    app.router.add_post("/api/payments", create_payment_route)
+    app.router.add_get("/api/gifts", gifts_route)
+    app.router.add_get("/api/gifts/options", gift_options_route)
+    app.router.add_post("/api/gifts/preview", gift_preview_route)
+    app.router.add_post("/api/gifts/claim", gift_claim_route)
+    app.router.add_get("/api/payments/{payment_id}", payment_status_route)
+    app.router.add_post("/api/payments/{payment_id}/cancel", cancel_payment_route)
+    app.router.add_post("/api/payments/{payment_id}/qa/complete", complete_qa_payment_route)
+    from .advertising import setup_advertising_public_routes
+
+    setup_advertising_public_routes(app.router)
+    setup_admin_routes(app)
+    # This must remain last: only existing data-backed information pages should
+    # receive the Mini App shell. It resolves managed documents first, including
+    # legacy /docs/<slug> URLs, then file-backed information pages.
+    app.router.add_get(f"/{{page_path:{INFORMATION_PAGE_ROUTE_PATTERN}}}", information_page_route)

@@ -1,0 +1,277 @@
+"""Cross-provider recurring (auto-renew) building blocks.
+
+Auto-renew used to be hard-wired to YooKassa. This module defines the small,
+provider-agnostic contract the renewal worker speaks to, so any provider that
+can charge a previously saved payment method (a YooKassa ``payment_method_id``,
+a CloudPayments ``Token``, etc.) participates through the same code path.
+
+A provider service opts in by implementing two members:
+
+* ``recurring_active`` - a property that is truthy when the provider is
+  configured *and* recurring charges are switched on for it.
+* ``charge_saved_payment_method(context)`` - an async method that initiates a
+  charge against the saved method and returns a :class:`RecurringChargeResult`.
+
+The renewal worker discovers such services through
+``SubscriptionService.recurring_service_for(provider)`` (wired in
+``build_core_services``) and never imports a concrete provider.
+
+A second, disjoint family exists: providers that own the schedule themselves
+(a Platega SBP subscription mandate). Nothing local may initiate their
+charges, so they implement :class:`ProviderManagedRecurringService` instead —
+``manages_recurrence`` plus a way to stop the mandate — and the local
+``Subscription.auto_renew_enabled`` flag only mirrors the provider's state.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from typing import Any, Protocol
+
+from config.subscription_periods import positive_period
+from db.models import UserPaymentMethod
+
+BALANCE_RECURRING_PROVIDERS = frozenset({"user_balance", "partner_balance"})
+
+
+@dataclass(frozen=True, slots=True)
+class BalancePaymentMethod:
+    """An internal funding source, never an external saved card or mandate."""
+
+    user_id: int
+    provider: str
+    method_id: None = None
+
+    @property
+    def provider_payment_method_id(self) -> str:
+        return f"{self.provider}:{self.user_id}"
+
+
+async def get_recurring_payment_method(
+    session: Any,
+    user_id: int,
+    *,
+    provider: str,
+) -> UserPaymentMethod | BalancePaymentMethod | None:
+    provider_key = str(provider or "").strip().lower()
+    if provider_key in BALANCE_RECURRING_PROVIDERS:
+        return BalancePaymentMethod(user_id=int(user_id), provider=provider_key)
+    from db.dal.user_billing_dal import get_user_default_payment_method
+
+    return await get_user_default_payment_method(session, user_id, provider=provider_key)
+
+
+async def has_recurring_payment_method(session: Any, user_id: int, *, provider: str) -> bool:
+    if str(provider or "").strip().lower() in BALANCE_RECURRING_PROVIDERS:
+        return True
+    from db.dal.user_billing_dal import user_has_saved_payment_method
+
+    return await user_has_saved_payment_method(session, user_id, provider=provider)
+
+
+@dataclass(frozen=True)
+class RecurringChargeContext:
+    """Everything a provider needs to charge a saved payment method.
+
+    ``metadata`` mirrors the YooKassa-style key/value bag.  YooKassa adds a
+    pre-created local payment id to it before charging, then validates the
+    successful webhook against that immutable order. Providers that finalize
+    the payment from their own DB record (e.g. CloudPayments) read the
+    structured fields and ``hwid_quote`` instead.
+    """
+
+    session: Any
+    user_id: int
+    subscription_id: int
+    saved_method: Any
+    amount: float
+    currency: str
+    months: int
+    sale_mode: str
+    description: str
+    metadata: Mapping[str, str] = field(default_factory=dict)
+    hwid_quote: Mapping[str, Any] | None = None
+    entitlement_context_snapshot: str | None = None
+    checkout_bundle_snapshot: str | None = None
+    # A provider-safe stable key for one renewal attempt.  YooKassa persists
+    # it on the local order and sends it as Idempotence-Key, while providers
+    # that do not support that contract may ignore it.
+    idempotence_key: str | None = None
+    renewal_cycle_end: datetime | None = None
+    consent_version: int = 0
+    payment_method_db_id: int | None = None
+    auto_renew_cycle_id: int | None = None
+    attempt_number: int = 1
+    retry_kind: str | None = None
+    duration_days: int | None = None
+    subscription_terms_snapshot: str | None = None
+
+
+def _snapshot_json_default(value: object) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    raise TypeError(f"Unsupported auto-renew snapshot value: {type(value).__name__}")
+
+
+@dataclass(frozen=True, slots=True)
+class RecurringRequestSnapshot:
+    """Immutable provider-neutral quote used to replay one renewal safely."""
+
+    amount: float
+    currency: str
+    months: int
+    sale_mode: str
+    description: str
+    metadata: dict[str, str]
+    hwid_quote: dict[str, Any] | None
+    entitlement_context_snapshot: str | None
+    checkout_bundle_snapshot: str | None = None
+    duration_days: int | None = None
+    subscription_terms_snapshot: str | None = None
+
+    def to_json(self) -> str:
+        return json.dumps(
+            {**asdict(self), "version": 2},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=_snapshot_json_default,
+        )
+
+    @classmethod
+    def from_json(cls, raw: str) -> RecurringRequestSnapshot:
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            raise ValueError("Auto-renew request snapshot must be an object")
+        if payload.get("version", 1) not in {1, 2}:
+            raise ValueError("Unsupported auto-renew snapshot version")
+        metadata = payload.get("metadata")
+        hwid_quote = payload.get("hwid_quote")
+        if not isinstance(metadata, dict):
+            raise ValueError("Auto-renew request snapshot metadata must be an object")
+        if hwid_quote is not None and not isinstance(hwid_quote, dict):
+            raise ValueError("Auto-renew request snapshot HWID quote must be an object")
+        return cls(
+            amount=float(payload["amount"]),
+            currency=str(payload["currency"]),
+            months=int(payload["months"]),
+            subscription_terms_snapshot=payload.get("subscription_terms_snapshot"),
+            duration_days=positive_period(payload["duration_days"])
+            if payload.get("duration_days") is not None
+            else None,
+            sale_mode=str(payload["sale_mode"]),
+            description=str(payload["description"]),
+            metadata={str(key): str(value) for key, value in metadata.items()},
+            hwid_quote=hwid_quote,
+            entitlement_context_snapshot=(
+                str(payload["entitlement_context_snapshot"])
+                if payload.get("entitlement_context_snapshot") is not None
+                else None
+            ),
+            checkout_bundle_snapshot=(
+                str(payload["checkout_bundle_snapshot"])
+                if payload.get("checkout_bundle_snapshot") is not None
+                else None
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class RecurringChargeResult:
+    """Outcome of a saved-method charge attempt.
+
+    ``initiated`` is True when the charge was accepted by the provider, either
+    finalized synchronously or left pending for the provider webhook to
+    complete. The renewal worker treats ``initiated`` as "handled".
+    """
+
+    initiated: bool
+    provider_payment_id: str | None = None
+    payment_db_id: int | None = None
+    status: str | None = None
+    message: str | None = None
+    retryable: bool = False
+    failure_kind: str | None = None
+    http_status: int | None = None
+    provider_code: str | None = None
+
+    @classmethod
+    def failed(
+        cls,
+        message: str | None = None,
+        *,
+        provider_payment_id: str | None = None,
+        payment_db_id: int | None = None,
+        retryable: bool = False,
+        failure_kind: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
+    ) -> RecurringChargeResult:
+        return cls(
+            initiated=False,
+            message=message,
+            provider_payment_id=provider_payment_id,
+            payment_db_id=payment_db_id,
+            retryable=retryable,
+            failure_kind=failure_kind,
+            http_status=http_status,
+            provider_code=provider_code,
+        )
+
+    @classmethod
+    def ok(
+        cls,
+        *,
+        provider_payment_id: str | None = None,
+        payment_db_id: int | None = None,
+        status: str | None = None,
+    ) -> RecurringChargeResult:
+        return cls(
+            initiated=True,
+            provider_payment_id=provider_payment_id,
+            payment_db_id=payment_db_id,
+            status=status,
+        )
+
+
+class RecurringProviderService(Protocol):
+    @property
+    def configured(self) -> bool: ...
+
+    @property
+    def recurring_active(self) -> bool: ...
+
+    async def charge_saved_payment_method(
+        self,
+        context: RecurringChargeContext,
+    ) -> RecurringChargeResult: ...
+
+
+class ProviderManagedRecurringService(Protocol):
+    """A provider that charges the payer on its own schedule.
+
+    ``cancel_provider_recurrence`` must be idempotent: it is called whenever a
+    customer turns local auto-renew off, and the provider may already have
+    stopped the mandate (payer self-service, terminal failure).
+    """
+
+    @property
+    def configured(self) -> bool: ...
+
+    @property
+    def manages_recurrence(self) -> bool: ...
+
+    async def cancel_provider_recurrence(self, session: Any, *, user_id: int) -> bool: ...
+
+
+def service_supports_recurring(service: object | None) -> bool:
+    """True when a wired provider service exposes an active recurring capability."""
+    return bool(service is not None and getattr(service, "recurring_active", False))
+
+
+def service_manages_recurrence(service: object | None) -> bool:
+    """True when a wired provider service owns the renewal schedule itself."""
+    return bool(service is not None and getattr(service, "manages_recurrence", False))

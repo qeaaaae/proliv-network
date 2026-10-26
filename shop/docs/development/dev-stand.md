@@ -1,0 +1,461 @@
+# Единый dev stand
+
+Единый dev stand - это локальный Docker Compose стенд для ручной и
+автоматизированной full-stack QA. Он поднимает Mini Shop, PostgreSQL, Redis,
+локальную Remnawave Panel, Remnawave Subscription Page и сиды для тестовых
+пользователей.
+
+Канонический короткий вход из корня репозитория:
+
+```powershell
+make dev
+```
+
+`make dev` применяет latest-пресет `3.4.5`, валидирует compose-конфиг и поднимает стенд.
+Для другого пресета используйте `$env:DEV_PRESET = "2.8.0"; make dev`. Эквивалентные npm-команды:
+
+```powershell
+npm run dev:stand:use:3.4.5
+npm run dev:stand:config
+npm run dev:stand:up
+```
+
+Старые compose-файлы не являются отдельными dev stand:
+
+- `docker-compose-dev.yml` - базовый локальный Mini Shop стек.
+- `docker-compose.remnawave-dev.yml` - overlay с Remnawave, Subscription Page и
+  dev-сидами. Именно вместе с базовым файлом он образует единый dev stand.
+- `docker-compose.test.yml` - изолированный runner для backend test suite.
+- `docker-compose.demo.yml` - nginx для статической docs-demo.
+- `docker-compose.yml` - production-like запуск приложения, не QA-стенд.
+
+## Версии
+
+Пинованные версии latest-пресета, проверенные 2026-10-09:
+
+- Remnawave Panel `v3.4.5` (`remnawave/backend:3.4.5`)
+- Remnawave Node `v3.3.0` (`remnawave/node:3.3.0`)
+- Remnawave Subscription Page `7.2.6`
+  (`remnawave/subscription-page:7.2.6`)
+
+Текущий автоматический dev stand поднимает локальную Panel и Subscription Page.
+Отдельная Remnawave Node не стартует без регистрации ноды в панели и `SECRET_KEY`;
+`REMNAWAVE_NODE_VERSION` фиксирует версию для локальной node-части стенда, если она
+поднимается отдельно.
+
+Чтобы вручную проверить другую связку Remnawave, поменяйте в `.env.remnawave-dev`:
+
+```env
+REMNAWAVE_DEV_VERSION=3.4.5
+REMNAWAVE_NODE_VERSION=3.3.0
+REMNAWAVE_SUBSCRIPTION_PAGE_VERSION=7.2.6
+```
+
+Эти же версии зафиксированы в `deploy/dev/remnawave-versions.lock.json`.
+Full-stack QA проверяет, что env example и lock-файл не разъехались.
+
+## Версионные пресеты
+
+Для проверки совместимости не копируйте весь compose-файл в папку версии. Dev stand использует
+один overlay `docker-compose.remnawave-dev.yml`, а версии и локальные volume names задаются
+маленькими пресетами в `deploy/dev/remnawave-stands/<panel-version>/`:
+
+- `stand.env` - теги Panel, Node, Subscription Page и version-specific volumes.
+- `versions.lock.json` - machine-readable lock для тестов и ревью.
+
+Пресет не равен заявлению о поддержке. Сертифицированная матрица Core сейчас включает:
+
+- **current**: `3.4.5`, `3.4.4`, `3.4.3`, `3.4.2`, `3.4.1`, `3.3.2`, `3.3.0`, `3.2.3`, `3.2.1`, `3.2.0`, `3.1.0`, `3.0.0` (поколение API с numeric user id);
+- **maintenance**: `2.8.1` (поколение API с UUID user id).
+
+`2.8.0` и `2.7.4` сохранены как исторические пресеты для ручной диагностики, но не входят в
+регулярную матрицу CI. Политика поддержки, список используемых API-вызовов и чек-лист новой
+версии генерируются в
+[каталог совместимости Remnawave API](../architecture/remnawave-api-compatibility.md).
+
+Panel `3.4.1` и `3.4.2` остаются в API-матрице для регрессии, однако их следует
+немедленно обновить как минимум до `3.4.3`: эта версия закрывает
+[GHSA-8mcp-v46j-fp26](https://github.com/remnawave/backend/security/advisories/GHSA-8mcp-v46j-fp26).
+Текущий [Panel `3.4.5`](https://f.docs.rw/t/topic/354/26) сохраняет используемые Core
+HTTP-контракты и исправляет точный фильтр по ID пользователя и принадлежность
+Torrent-Blocker отчётов. Выпуск также исправляет gRPC `multiMode` в генераторе
+Xray-конфига, добавляет схему плагина `postStart` и флаг панели
+`SERVICE_SNI_VERIFICATION` для соединения с нодой. Эти настройки принадлежат панели;
+дополнительные настройки Core для обновления не требуются.
+
+Доступны пятнадцать пресетов:
+
+- `3.4.5`: Panel `3.4.5`, Node `3.3.0`, Subscription Page `7.2.6`.
+- `3.4.4`: Panel `3.4.4`, Node `3.3.0`, Subscription Page `7.2.6`.
+- `3.4.3`: Panel `3.4.3`, Node `3.3.0`, Subscription Page `7.2.6`.
+- `3.4.2`: Panel `3.4.2`, Node `3.3.0`, Subscription Page `7.2.6`.
+- `3.4.1`: Panel `3.4.1`, Node `3.3.0`, Subscription Page `7.2.6`.
+- `3.3.2`: Panel `3.3.2`, Node `3.3.0`, Subscription Page `7.2.6`.
+- `3.3.0`: Panel `3.3.0`, Node `3.3.0`, Subscription Page `7.2.6`.
+- `3.2.3`: Panel `3.2.3`, Node `2.8.0`, Subscription Page `7.2.6`.
+- `3.2.1`: Panel `3.2.1`, Node `2.8.0`, Subscription Page `7.2.6`.
+- `3.2.0`: Panel `3.2.0`, Node `2.8.0`, Subscription Page `7.2.6`.
+- `3.1.0`: Panel `3.1.0`, Node `2.8.0`, Subscription Page `7.2.6`.
+- `3.0.0`: Panel `3.0.0`, Node `2.8.0`, Subscription Page `7.2.6`.
+- `2.8.1`: Panel `2.8.1`, Node `2.8.0`, Subscription Page `7.2.6`.
+- `2.8.0`: Panel `2.8.0`, Node `2.8.0`, Subscription Page `7.2.6`.
+- `2.7.4`: Panel `2.7.4`, Node `2.7.0`, Subscription Page `7.2.4`.
+
+Node `3.3.0` требует Panel `3.3.0` или новее, поэтому пресеты `3.3.x` и `3.4.x` пинуют эту
+версию Node. Новая Panel обратно совместима со старыми Node, но обратная связка не поддерживается.
+
+Переключение на previous compatibility preset:
+
+```powershell
+npm run dev:stand:down
+npm run dev:stand:use:2.8.1
+npm run dev:stand:config
+npm run dev:stand:up
+```
+
+Возврат на latest:
+
+```powershell
+npm run dev:stand:down
+npm run dev:stand:use:3.4.5
+npm run dev:stand:config
+npm run dev:stand:up
+```
+
+Пресеты используют разные Docker volumes (`*-274`, `*-280`, `*-281`, `*-300`, `*-310`,
+`*-320`, `*-321`, `*-323`, `*-330`, `*-332`, `*-341`, `*-342`, `*-343`, `*-344`), чтобы миграции разных
+версий панели не портили соседние базы. Одновременно эти стенды не запускаются: у compose остаются
+фиксированные container names и локальные порты. Если когда-нибудь понадобится параллельный запуск,
+тогда нужно будет параметризовать еще project name, container names и ports, но сейчас это лишний
+операционный вес.
+
+Политика поддержки: держим latest-пресет и один предыдущий совместимый пресет, пока реально
+поддерживаем upgrade path. Более старые версии добавляем только если релиз панели меняет API,
+webhook-контракты или схему данных так, что без отдельной регрессии высокий риск. Неактуальные
+пресеты можно удалять после явного решения, когда они больше не проверяются и не нужны пользователям.
+
+## Переменные окружения
+
+Файл `deploy/dev/remnawave-dev.env.example` уже содержит локальные безопасные
+значения. Скопируйте его в `.env.remnawave-dev` и меняйте только локально:
+
+```powershell
+Copy-Item deploy/dev/remnawave-dev.env.example .env.remnawave-dev
+```
+
+По умолчанию Mini Shop работает в dry-run режиме записи в панель:
+
+```env
+PANEL_WRITE_MODE=dry_run
+PANEL_DRY_RUN_VALIDATE_REMOTE=False
+PANEL_DRY_RUN_SYNTHETIC_CREATE=True
+```
+
+Это удобно для QA: приложение читает живую локальную Remnawave Panel, но
+опасные мутации можно прогонять без реального изменения panel-состояния. Если
+нужен live-режим против локальной панели, замените токен на токен из Remnawave
+Settings -> API Tokens и включите:
+
+```env
+PANEL_API_KEY=...
+REMNAWAVE_DEV_API_TOKEN=...
+PANEL_WRITE_MODE=live
+PANEL_DRY_RUN_VALIDATE_REMOTE=True
+```
+
+Детерминированный `REMNAWAVE_DEV_API_TOKEN` из example сидируется SQL-файлом
+`deploy/dev/seed-remnawave.sql`. Не меняйте
+`REMNAWAVE_DEV_APP_SECRET`, если не заменяете этот токен. Overlay передаёт его панели как
+`APP_SECRET` и как legacy `JWT_AUTH_SECRET`, чтобы тот же overlay работал с Panel 3.0.0,
+2.8.1 и 2.8.0. Удалённые в 3.0 переменные `JWT_AUTH_SECRET`,
+`JWT_API_TOKENS_SECRET` и `IS_DOCS_ENABLED` оставлены только для старых пресетов;
+Panel 3.x их игнорирует.
+
+Для автоматизированной QA в example включены только dev/test-safe хуки:
+
+```env
+QA_AUTH_ENABLED=True
+QA_PAYMENT_ENABLED=True
+QA_PAYMENT_SECRET=dev_qa_payment_secret_change_me
+```
+
+`QA_AUTH_ENABLED` возвращает одноразовый email-код в ответе
+`/api/auth/email/request`, но только в `APP_RUNTIME_MODE=development|test`.
+`QA_PAYMENT_ENABLED` включает локальный provider `qa`; его webhook принимает
+только HMAC-подписанные payload через `X-QA-Payment-Signature`.
+
+## Запуск
+
+```powershell
+npm run dev:stand:config
+npm run dev:stand:up
+npm run dev:stand:ps
+```
+
+Для ручной проверки разных состояний интерфейса можно вместо обычного запуска
+включить дополнительный профиль с мок-данными:
+
+```powershell
+npm run dev:stand:config:mocks
+npm run dev:stand:up:mocks
+```
+
+Профиль `mock-data` опционален: обычные `dev:stand:config` и `dev:stand:up` его не
+запускают. Если стенд уже работает, мок-набор можно безопасно применить повторно:
+
+```powershell
+npm run dev:stand:mocks
+```
+
+Логи основных сервисов:
+
+```powershell
+npm run dev:stand:logs
+```
+
+Full-stack QA поверх поднятого стенда:
+
+```powershell
+$env:QA_FULLSTACK = "1"
+$env:QA_API_BASE_URL = "http://127.0.0.1:18082"
+$env:QA_WEBHOOK_BASE_URL = "http://127.0.0.1:18080"
+$env:QA_FRONTEND_URL = "http://127.0.0.1:18082"
+$env:QA_REMNAWAVE_HEALTH_URL = "http://127.0.0.1:3001/health"
+$env:QA_DB_DSN = "postgresql://remnawave_minishop:remnawave_minishop@127.0.0.1:6768/remnawave_minishop"
+$env:QA_PAYMENT_SECRET = "dev_qa_payment_secret_change_me"
+npm run qa:fullstack
+```
+
+Без `QA_FULLSTACK=1` `tests/qa` пропускаются, чтобы обычный `pytest` не
+зависел от Docker Compose.
+
+Для обычного полного pytest на Windows используйте изолированный Linux runner:
+
+```powershell
+docker compose -f docker-compose.test.yml run --build --rm test-runner
+```
+
+Исходники копируются в образ; повторные запуски переиспользуют слои с Python-зависимостями.
+При работе с локальным Python тесты блокировки файлов выполняются на Windows, а проверки
+симлинков пропускаются только если у пользователя нет права на их создание. Для запуска
+проверок симлинков включите режим разработчика Windows или используйте Linux runner.
+
+### Все тесты без пропусков, включая Windows
+
+Для полного локального прогона используйте Docker Desktop с Linux-контейнерами,
+Python и Node.js 22+ с установленными зависимостями разработки:
+
+```powershell
+npm run qa:all
+```
+
+Команда собирает текущий Core и отдельный Linux-образ с `sh`, `bash`, OpenSSL и
+тестовыми зависимостями. Она поднимает изолированный стенд Remnawave 2.8.1,
+проверяет его API, обновляет панель до 3.4.5 на **той же базе** и выполняет весь
+`tests/`, включая установщик, триал, оплату и сверку идентификаторов после
+обновления. Затем запускаются проверки архитектуры, документации, линтеров,
+типов, интерфейса, сборка и Playwright. Пропуск любого серверного теста завершает
+команду с ошибкой.
+
+У каждого запуска свои имена контейнеров, сеть и тома; порты хоста не занимаются.
+Локальные `.env`, `.env.remnawave-dev`, каталог `data/` и существующие стенды не
+изменяются. Контейнеры и тома прогона удаляются после завершения, включая ошибку.
+Логи и JUnit-отчёты остаются в напечатанном каталоге `tmp/minishop-qa-…/`.
+Для диагностики можно сохранить стенд:
+
+```powershell
+npm run qa:all -- --keep-stand
+```
+
+Путь к отдельному Compose-файлу и имя проекта выводятся в конце такого запуска.
+Для его остановки используйте `docker compose` с напечатанными `--project-name`
+и `-f`, затем `down --volumes`; обычный dev-стенд при этом не затрагивается.
+
+Проверка read/write-контрактов конкретного пресета, включая version probe,
+идентификаторы пользователей, exact bulk-squad и multi-node bandwidth:
+
+```powershell
+$env:QA_FULLSTACK = "1"
+$env:QA_REMNAWAVE_PRESET = "3.4.5" # или 2.8.1 после смены пресета
+python -m pytest -q tests/qa/test_remnawave_panel_contract.py
+```
+
+Детерминированный performance-regression прогон на размерах, используемых при
+сертификации Remnawave 3.4.4:
+
+```powershell
+npm run bench:bot -- --users 200,1000,10000,30000
+```
+
+Секция `premium_usage_8_nodes_distinct_periods` сравнивает фактическое число
+multi-node вызовов с оценкой старого `users × nodes`; `premium_usage_1_node`
+проверяет переиспользование одного снимка для общего расчётного периода. Полный
+перечень маршрутов, поколений, fallback-правил и live-покрытия генерируется в
+[каталоге совместимости API](../architecture/remnawave-api-compatibility.md).
+
+Остановка без удаления БД:
+
+```powershell
+npm run dev:stand:down
+```
+
+Чтобы удалить локальные базы и сиды, выполните тот же compose `down -v`
+вручную:
+
+```powershell
+docker compose --env-file .env.remnawave-dev `
+  -f docker-compose-dev.yml `
+  -f docker-compose.remnawave-dev.yml `
+  --profile seed `
+  down -v
+```
+
+## Адреса сервисов
+
+Для dev stand закреплены отдельные порты хоста: **18082** для интерфейса и **18080**
+для backend. Они заданы в dev Compose и env example; переменные `FRONTEND_PORT` и
+`WEB_SERVER_PORT` позволяют переопределить их для параллельного стенда. При использовании
+старого `.env.remnawave-dev` обновите эти переменные, `SUBSCRIPTION_MINI_APP_URL` и
+`WEBHOOK_BASE_URL` на указанные ниже адреса.
+
+- Mini Shop frontend: `http://127.0.0.1:18082`
+- Mini Shop backend health: `http://127.0.0.1:18080/healthz`
+- Mini Shop PostgreSQL: `127.0.0.1:6768`
+- Remnawave Panel: `http://127.0.0.1:3000`
+- Remnawave metrics health: `http://127.0.0.1:3001/health`
+- Remnawave Subscription Page upstream: `http://127.0.0.1:3010`
+
+Subscription Page требует reverse proxy с HTTPS для прямого браузерного
+использования. В этом стенде `127.0.0.1:3010` - локальный upstream; plain HTTP
+запрос может вернуть empty reply, даже если сервис здоров и подключен к
+Remnawave Panel.
+
+## Сиды
+
+Профиль `seed` выполняет два идемпотентных SQL-файла:
+
+- `deploy/dev/seed-minishop.sql` - пользователи, подписки и платежи Mini Shop.
+- `deploy/dev/seed-remnawave.sql` - API token, пользователи Remnawave и
+  привязка к `Default-Squad`.
+
+Remnawave 3.0 удалил `users.uuid` и переименовал внутренний `t_id` в `id`.
+Seed определяет схему во время выполнения: для 2.8.1 использует UUID/`t_id`, а
+для 3.x — username/`id`. HWID и traffic seed используют тот же совместимый путь.
+
+Тестовые пользователи:
+
+| Telegram/user ID | Email | Состояние | HWID devices |
+| --- | --- | --- | --- |
+| `910000001` | `runes.admin@example.com` | активная standard-подписка, admin ID | 2 из 3 |
+| `910000002` | `runes.active@example.com` | активная premium-подписка около лимита трафика | 3 из 5 |
+| `910000003` | `runes.expired@example.com` | истекшая подписка | 1 из 1 |
+
+Во всех трёх базовых аккаунтах пароль `Minishop-Dev-2026!`. Мок-профиль поверх
+них загружает тот же анонимизированный снимок, который используется в интерактивном
+демо на сайте документации: 370 пользователей, 257 подписок, 482 платежа,
+1600 событий, 3 тикета с 28 сообщениями, 8 промокодов и 2 рекламные кампании.
+Дополнительно создаются завершённая, выполняющаяся и запланированная рассылки.
+
+Даты снимка сдвигаются относительно момента запуска, поэтому графики и фильтры
+«сегодня / неделя / месяц» остаются полезными. Запланированная рассылка установлена
+на 2099 год. Telegram ID в Minishop очищаются, уведомления блокируются, подписки
+не участвуют в фоновых уведомлениях, а email-адреса используют зарезервированный
+домен `client.example`. Поэтому просмотр и изменение сценариев не может отправить
+сообщение реальному получателю.
+
+Сиды Minishop и Remnawave генерируются из
+`frontend/src/lib/webapp/demoDataset.js`. Их можно пересобрать и проверить так:
+
+```powershell
+npm run dev:stand:generate:mocks
+npm run check:dev-mocks
+```
+
+Генератор использует зарезервированные ID исходного docs-demo и применяет записи
+через upsert. Повторный запуск не создаёт дубликаты и не удаляет данные, созданные
+вручную вне этих диапазонов.
+
+Повторный запуск сидов:
+
+```powershell
+docker compose --env-file .env.remnawave-dev `
+  -f docker-compose-dev.yml `
+  -f docker-compose.remnawave-dev.yml `
+  --profile seed `
+  run --rm dev-seed
+```
+
+Overlay использует version-specific volumes из выбранного пресета, например
+`remnawave-minishop-runes-dev-db-data-280` и
+`remnawave-minishop-runes-dev-redis-data-280`, чтобы не портить старый локальный
+dev-стек и не смешивать базы разных версий Remnawave.
+
+## Smoke-проверка стенда
+
+```powershell
+curl.exe -fsS http://127.0.0.1:18080/healthz
+curl.exe -fsS http://127.0.0.1:3001/health
+curl.exe -I -fsS http://127.0.0.1:18082/
+
+docker compose --env-file .env.remnawave-dev `
+  -f docker-compose-dev.yml `
+  -f docker-compose.remnawave-dev.yml `
+  --profile seed `
+  exec -T postgres psql -U remnawave_minishop -d remnawave_minishop `
+  -c "select count(*) from users; select count(*) from subscriptions; select count(*) from payments;"
+
+docker compose --env-file .env.remnawave-dev `
+  -f docker-compose-dev.yml `
+  -f docker-compose.remnawave-dev.yml `
+  --profile seed `
+  exec -T remnawave-db psql -U postgres -d postgres `
+  -c "select uuid from api_tokens where uuid='30000000-0000-4000-8000-000000000001'; select username from users where username like 'runes_%' order by username;"
+```
+
+## Автоматизация реальных QA-сценариев
+
+Реальный QA-слой находится в `tests/qa` и запускается командой
+`npm run qa:fullstack` поверх единого dev stand. Он покрывает сценарии, которые
+не должен был покрывать mock-smoke из runes-плана: mock-smoke проверяет
+статическую demo-сборку без backend, а full-stack QA проверяет живые auth,
+CSRF, платежный webhook, admin-save и состояние БД.
+
+Текущие сценарии:
+
+- Email auth через `/api/auth/email/request` и `/api/auth/email/verify`.
+- CSRF-protected пользовательский запрос `/api/account/language`.
+- Создание платежа через `/api/payments` с provider `qa`.
+- HMAC webhook `/webhook/qa-payment` и настоящий
+  `finalize_successful_payment` с активацией подписки.
+- Проверка `payments` и `subscriptions` в PostgreSQL после webhook.
+- Admin login и сохранение `SERVER_STATUS_URL` через `/api/admin/settings`.
+- Проверка Remnawave health и пина версий Panel/Subscription Page.
+
+CI workflow `.github/workflows/fullstack-qa.yml` запускает этот слой на:
+
+- `pull_request` в `main` и `dev`;
+- `push` в `main` и `dev`;
+- ручной `workflow_dispatch`.
+
+Каждый push/PR проверяет сертифицированные current и maintenance пресеты (`3.4.5`, `3.4.4`, `3.4.3`, `3.4.2`,
+`3.4.1`, `3.3.2`, `3.3.0`, `3.2.3`, `3.2.1`, `3.2.0`, `3.1.0`, `3.0.0`, `2.8.1`)
+отдельными job. По расписанию и вручную дополнительно выполняется same-database upgrade
+`2.8.1 → 3.4.5`:
+панель обновляется на существующем volume, затем Core синхронизирует сидированных пользователей и
+проверяет, что локальные UUID-алиасы заменились на decimal numeric ids без потери подписок.
+
+При падении workflow прикладывает Docker Compose logs как artifact.
+
+
+## Проверка рекламы в mock-профиле
+
+`npm run dev:stand:up:mocks` добавляет четыре кампании с пометкой **QA**: Web/Mini App,
+импорт, пауза и архив. Войдите как `runes.admin@example.com` с локальным паролем
+`Minishop-Dev-2026!`, откройте «Реклама», затем карточку QA-кампании. Доступны ссылки,
+предложения `ADS_QA_CHECKOUT`/`ADS_QA_WELCOME`, расходы, контакты, покупки в RUB/XTR,
+возврат и неоднозначное совпадение двух запусков. Для импорта используется
+синтетический кабинет и bot ID `qa_bot`; это не образец реального Telegram Ads.
+
+Рекламные фикстуры создаются один раз и сохраняют изменения оператора при повторном
+запуске. Они не вызывают платёжные провайдеры, выдачу подписки или бонусов.
+Для чистого повторения используйте отдельные локальные volumes по инструкции выше.

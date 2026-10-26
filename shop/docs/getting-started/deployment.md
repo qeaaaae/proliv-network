@@ -1,0 +1,789 @@
+# Production-развертывание
+
+Документ описывает продакшен-запуск после разделения проекта на `backend`, `frontend` и `worker`.
+Перед стартом заполните минимальный `.env` по [configuration.md](configuration.md). Полный справочник переменных лежит в [configuration/env-vars.md](../configuration/env-vars.md); после первого входа большинство продуктовых настроек удобнее менять через Web App админку.
+
+## Быстрый старт
+
+```bash
+cp .env.example .env
+nano .env
+docker compose up -d --build
+docker compose ps
+docker compose logs -f backend worker frontend
+```
+
+## Ротация журналов контейнеров
+
+Новые установки из поставляемых Compose-файлов ограничивают журналы каждого
+контейнера: драйвер `json-file`, до трёх файлов по `10m` (около 30 МБ суммарно).
+Лимит действует на backend, worker, frontend, миграции, базы и сервисы выбранного
+профиля. Он также задан в локальных dev/demo-конфигурациях и в файле Newt,
+который создаёт установщик. Команда `docker compose logs` работает как обычно.
+
+```yaml
+logging:
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+```
+
+Существующие установки автоматически не перенастраиваются. Обновление образов
+через `docker compose pull` не меняет их Compose-файлы. Docker применяет новые
+настройки журналов при создании или пересоздании контейнера; обычного перезапуска
+недостаточно. Подробности — в [документации Docker](https://docs.docker.com/engine/logging/drivers/json-file/).
+
+Эта настройка ограничивает stdout/stderr контейнеров. Системный `journald`,
+журналы внутри volumes, данные БД и архивы имеют собственные правила хранения.
+Проверка диска и необязательный лимит системного журнала описаны в
+[обслуживании](../troubleshooting/maintenance.md#место-на-диске-и-системный-журнал).
+
+## Интерактивный install wizard
+
+Для нового сервера скачайте install-скрипт и запустите его:
+
+```bash
+curl -fsSL https://gitlab.com/3252a8/remnawave-minishop/-/raw/main/scripts/install.sh -o install.sh
+sh install.sh
+```
+
+<!-- Альтернативная ссылка на install-скрипт в GitHub (disabled):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/3252a8/remnawave-minishop/main/scripts/install.sh -o install.sh
+sh install.sh
+```
+-->
+
+Wizard работает через меню с цифрами и подтверждениями `y/n`. Он умеет:
+
+- работать полностью на русском языке и по умолчанию предлагать папку
+  `/opt/remnawave-minishop`;
+- скачать выбранный compose-профиль (`Caddy`, `Angie`, `Nginx`, `Pangolin/Newt`, `no-proxy` или профиль существующего eGames reverse proxy);
+- встроиться в уже запущенный reverse proxy на сервере: помимо схемы eGames
+  wizard находит любые запущенные Nginx/Angie/Caddy контейнеры, подключает их к
+  Docker-сети Minishop (или проксирует на локальные порты для host-network),
+  дописывает managed-блоки конфига с маркерами `BEGIN/END remnawave-minishop`,
+  проверяет конфиг (`nginx -t` / `angie -t` / `caddy validate`) и откатывает
+  изменения при ошибке. Для eGames он повторяет фактическую схему TLS из
+  существующего конфига (`TCP/443` или Unix socket с PROXY protocol) и принимает
+  только сертификат, SAN которого покрывает добавляемый hostname;
+- подключить публикацию Web App через Pangolin (Newt) отдельным обратимым
+  шагом: пункты меню «Подключить Web App к Pangolin (Newt)» и «Отключить
+  Web App от Pangolin (Newt)» добавляют/убирают `docker-compose.pangolin.yml`
+  через `COMPOSE_FILE` в `.env`, не трогая основной профиль деплоя;
+- сгенерировать минимальный `.env`, включая пароли и стабильные secrets;
+- проверить A-записи `WEBHOOK_HOST` и `MINIAPP_HOST` перед выпуском TLS;
+- для Nginx выпустить сертификаты через Certbot Cloudflare DNS-01 или standalone
+  HTTP-01, либо принять уже разложенные файлы `ssl/<hostname>/`;
+- сохранить backup существующих файлов перед перезаписью;
+- подготовить writable `data/` для файлов приложения и при необходимости
+  обновить владельца каталога на пользователя контейнеров `10001:10001`;
+- запустить `docker compose pull && docker compose up -d`;
+- проверить текущий стек через `docker compose ps` и логи `migrate`;
+- запустить миграцию из поддерживаемых ботов: Remnashop и старый
+  `remnawave-tg-shop`;
+- выбрать связь frontend -> backend WebApp API: same-origin, protected upstream или Rathole tunnel;
+
+Wizard не спрашивает repository/ref в обычном сценарии. По умолчанию он берет
+`3252a8/remnawave-minishop` и ref `main`; для тестирования другой ветки, тега
+или форка задайте источник перед запуском:
+
+```bash
+MINISHOP_INSTALL_REPO=3252a8/remnawave-minishop \
+MINISHOP_INSTALL_REF=main \
+sh install.sh
+```
+
+Миграция Remnashop в wizard сначала запускает проверку без записи (`dry-run`),
+показывает короткую сводку и сохраняет полный JSON/raw-вывод в `.installer/`.
+Если выбрана текущая compose-БД, wizard предлагает сделать бэкап целевой БД и
+основных файлов деплоя в `backups/pre-remnashop-migration-*` с `restore.sh`.
+После успешной проверки подтверждение применения имеет дефолт `Y`: Enter
+применит миграцию, `n` остановит ее без записи. Если
+указать старый Remnashop `.env`, wizard передаст importer-у `APP_CRYPT_KEY`,
+Remnawave API settings и поддерживаемые payment provider settings из таблицы
+`payment_gateways`. После применения wizard обновляет совместимые настройки,
+перезапускает `backend`, `worker` и `frontend`, для профиля eGames делает
+`nginx -t` и reload/restart eGames Nginx, отправляет Telegram-уведомление
+админам/лог-чату и в самом конце печатает новые webhook URL для Remnawave Panel,
+Telegram и платежных провайдеров.
+Миграция со старого `remnawave-tg-shop` работает как upgrade совместимой БД:
+wizard автоматически пытается собрать source DSN из старого DB-контейнера,
+сохраняет `pg_dump` старой БД в `backups/pre-remnawave-tg-shop-source-*`,
+пересоздает целевой DB volume с новыми `POSTGRES_*` из `.env`,
+восстанавливает сохраненный дамп в целевую compose-БД и запускает сервис
+`migrate`. Старый DB volume `remnawave-tg-shop-db-data` не удаляется.
+
+### Что спрашивает install wizard
+
+Wizard старается предлагать безопасные значения по умолчанию. Если вы запускаете
+его на обычном VPS с публичными доменами, чаще всего можно нажимать Enter там,
+где уже показано подходящее значение.
+
+| Вопрос | Что это значит | Что обычно выбрать |
+| --- | --- | --- |
+| `Папка установки` | Каталог, куда будут скачаны `docker-compose.yml`, `.env`, прокси-конфиги и где появятся `data/` и `backups/`. | Оставьте `/opt/remnawave-minishop`, если на сервере нет особой схемы каталогов. |
+| `Профиль деплоя` | Как приложение будет опубликовано наружу. | `Caddy HTTPS` для нового публичного сервера; `Angie HTTPS` - те же автоматические сертификаты, но конфигурация в Nginx-синтаксисе; `Nginx HTTPS`, если уже управляете сертификатами; `Pangolin/Newt`, если входящие порты закрыты; `Без прокси`, если TLS завершается внешней платформой; профиль существующего reverse proxy, если на этом же хосте уже работает Remnawave через eGames или любой другой Nginx/Angie/Caddy контейнер. |
+| `Подключение к существующему reverse proxy` | Для профиля существующего прокси: автоопределяемая схема eGames (`TCP/443` или Unix socket), универсальное подключение к любому запущенному Nginx/Angie/Caddy контейнеру или пропуск. | Схему eGames — для установки Remnawave скриптом eGames; универсальное подключение — для остальных случаев. Wizard повторит фактический TLS-listener, проверит SAN найденных сертификатов для обоих новых hostname и откатит конфиг, если `nginx -t`/`angie -t`/`caddy validate` не пройдет. |
+| `Имя Docker Compose проекта` | Префикс Docker-сети, volumes и контейнеров. | Оставьте `remnawave-minishop`. Меняйте только если на одном сервере нужно несколько независимых стеков. |
+| `Тег Docker-образа` | Версия backend/worker/frontend образов. | Для обычной установки оставьте `latest` или укажите конкретный опубликованный релизный тег. |
+| `Включить Telegram-бота?` | Переключатель `TELEGRAM_ENABLED`. | Выберите «нет» для браузерного режима по email. |
+| `Токен Telegram бота` | `BOT_TOKEN` из BotFather. | Требуется только при включённом Telegram. |
+| `SOCKS5 proxy для исходящих запросов Telegram Bot API` | Необязательный `TELEGRAM_BOT_PROXY_URL` для `backend` и `worker`. | Оставьте пустым для прямого подключения либо укажите `socks5://host:port`; значение с credentials wizard показывает только в маскированном виде. |
+| `Использовать SOCKS5 proxy для server-side Telegram OAuth token/JWKS` | Необязательный `TELEGRAM_OAUTH_USE_BOT_PROXY` для `backend`. | По умолчанию «да», если proxy заполнен. Выберите «нет» только для прямого OAuth-маршрута; браузер пользователя этот выбор не затрагивает. |
+| `Старые Telegram ID администраторов` | Необязательный одноразовый импорт ролей по явной Telegram-привязке. Показывается при переносе старой конфигурации. | Для первого владельца новой установки используйте следующие два необязательных поля или ручную команду. |
+| `Telegram User ID первого владельца` / `Email первого владельца` | Необязательные `BOOTSTRAP_OWNER_TELEGRAM_ID` / `BOOTSTRAP_OWNER_EMAIL`. Первый аккаунт с совпавшей подтверждённой привязкой получает `owner` один раз; аккаунты не объединяются. | Заполните один идентификатор или оба для одного человека. Можно пропустить оба: мастер покажет команду `bootstrap_owner.py --minishop-id ms_<id>` для зарегистрированного аккаунта, без обязательной привязки Telegram/email. Enter сохраняет найденное значение, `-` очищает его. |
+| `Настроить SMTP для входа по email сейчас?` | Необязательная настройка почты при любом режиме Telegram. | Можно пропустить. До регистрации настройте доступный способ входа: Telegram, SMTP/email или внешний OAuth. См. [первого владельца](../features/telegram-optional.md#первый-владелец). |
+| `SMTP host` и `Email отправителя` | Почта для кодов входа; запрашивается при согласии настроить SMTP. | Требуются для входа по email; отдельно задайте SMTP-авторизацию, если она нужна серверу. |
+| `Пользователь/пароль/база PostgreSQL` | Учетные данные внутренней базы Minishop. | Пользователя и имя базы можно оставить по умолчанию; пароль wizard генерирует сам, его можно принять Enter. |
+| `Название Web App` | Название приложения в интерфейсе. | Можно оставить `remnawave-minishop` и позже поменять в настройках. |
+| `URL API Remnawave Panel` | Адрес API панели, обычно `https://panel.example.com/api`. | Укажите публичный URL панели с `/api` в конце. |
+| `API-ключ Remnawave Panel` | Token из Remnawave Panel для чтения/изменения пользователей. | Вставьте API token с нужными правами. Если панель закрыта cookie-proxy, заполните и вопрос про Cookie. |
+| `Способ доступа к Remnawave Panel` | Прямой Panel API или удалённая Panel за eGames reverse proxy. Этот выбор не зависит от профиля публикации самого Minishop. | Для Panel на другом сервере, установленной скриптом eGames, выберите второй вариант и вставьте access-cookie либо полный access URL. |
+| `Webhook-секрет Remnawave Panel` | Секрет, которым панель подписывает webhook в Minishop. | Можно принять сгенерированный секрет, но тот же секрет нужно указать в Remnawave Panel. |
+| `Telegram OAuth client secret` | Секрет BotFather Web Login для входа через браузер вне Telegram. | Можно оставить пустым, если нужен только Telegram Mini App. |
+| `WEBHOOK_HOST` / `MINIAPP_HOST` | Публичные домены без `https://`, пути и порта. | Например `webhooks.example.com` и `app.example.com`. Для Caddy/Angie/Nginx/eGames DNS должен указывать на сервер или на прокси перед ним. |
+| `HTTP_BIND` / `HTTPS_BIND` | На каком IP и портах Caddy/Angie/Nginx слушает входящий HTTP/HTTPS. | Обычно `0.0.0.0:80` и `0.0.0.0:443`. IP без порта указывать нельзя. |
+| `WEB_SERVER_BIND` / `FRONTEND_BIND` | Порты прямой публикации backend и frontend в no-proxy/eGames профилях. | Для no-proxy обычно `0.0.0.0:8080` и `0.0.0.0:8082`; для eGames лучше `127.0.0.1:8080` и `127.0.0.1:8082`, чтобы сервисы были доступны только локальному Nginx. |
+| `WEBHOOK_PUBLIC_URL` / `MINIAPP_PUBLIC_URL` | Публичные URL, по которым Telegram, платежные провайдеры и пользователи увидят приложение в no-proxy/eGames сценариях. | Для production это должны быть HTTPS URL. В no-proxy с локальной проверкой можно временно оставить `http://127.0.0.1:...`. |
+| `FRONTEND_BACKEND_MODE` | Как frontend nginx достигает WebApp API plane `8081`. | `same-origin` для обычного compose, `protected-upstream` для отдельного frontend-сервера, `rathole` для приватного туннеля. Browser API base остается `/api` во всех режимах. |
+| `WEBAPP_BACKEND_UPSTREAM` | Server-side upstream frontend nginx для `/api`, `/auth`, `/open-app` и Web App assets. | `http://backend:8081` в обычном compose, `https://bot.example.com` для protected backend-domain mode, `http://rathole-server:18081` для Rathole. |
+| `MINISHOP_EDGE_TOKEN` | Server-side secret между frontend nginx/API edge и backend WebApp API. | Используйте для protected public backend upstream. Не добавляйте этот token в frontend JS и не требуйте его на webhook plane `8080`. |
+
+Интеграция с Remnawave Panel настраивается отдельным шагом. На новой установке без найденных
+параметров обычный `Enter` пропускает этот шаг и записывает пустые значения вместо `change_me`.
+Minishop запустится, но синхронизация, выдача подписок и другие Panel-зависимые действия останутся
+недоступны до настройки.
+
+Если параметры введены, wizard делает безопасный запрос к `/system/stats` и проверяет HTTP-статус,
+`Content-Type: application/json` и структуру ответа. Для удалённой Panel за eGames можно вставить
+каноническое `name=value`, строку `Cookie: name=value`, `Set-Cookie: name=value; ...` или полный
+access URL вида `https://panel.example.com/auth/login?name=value`. Wizard извлекает и сохраняет
+только Cookie header; URL с несколькими query-параметрами, управляющие символы и JWT вместо cookie
+отклоняются. Access-cookie проходит внешний reverse proxy, но не заменяет `PANEL_API_KEY`.
+
+Профиль `Уже установленная Remnawave через eGames` нужен только тогда, когда Minishop встраивается
+в eGames Nginx на том же сервере. Для Panel на отдельном сервере можно выбрать любой подходящий
+профиль публикации Minishop, а eGames-защиту указать позже на отдельном шаге подключения Panel API.
+После неуспешной проверки по умолчанию предлагается пропустить интеграцию. Сохранить непроверенные
+значения можно только отдельным явным выбором — это полезно, когда Panel временно недоступна во
+время установки.
+
+Формат bind-полей (`HTTP_BIND`, `HTTPS_BIND`, `WEB_SERVER_BIND`,
+`FRONTEND_BIND`) особенно важен: используйте `PORT` или `IP:PORT`, например
+`80`, `0.0.0.0:80`, `<IP_СЕРВЕРА>:80`, `127.0.0.1:8080`. Значение
+с одним IP без порта некорректно: Docker Compose воспринимает его как
+порт хоста и падает с ошибкой `invalid hostPort`.
+
+В начале новой установки wizard проверяет Docker Engine и Docker Compose. Минимальные версии —
+Docker Engine `25.0.0` и Docker Compose `2.20.2`: они нужны для
+`healthcheck.start_interval` в актуальных Compose-профилях. Standalone-команда
+`docker-compose` больше не считается совместимым runtime: wizard требует современный Docker CLI
+plugin и использует только команду `docker compose`.
+
+Если runtime совместим, wizard показывает найденные версии и один раз предлагает обновить Docker
+Engine и Compose до latest stable; для уже рабочего сервера этот вопрос по умолчанию отвечает
+«нет», потому что обновление Engine может перезапустить daemon и кратковременно затронуть другие
+контейнеры. Если версии отсутствуют или ниже минимальных, обновление предлагается как рекомендуемое,
+а при отказе установка останавливается до скачивания и запуска стека.
+
+Engine обновляется до последнего пакета из настроенного системного репозитория (`apt`, `dnf/yum`,
+`apk`, `pacman`). Официальный Docker convenience installer используется только при чистой
+установке Engine: он не предназначен для обновления уже существующего production runtime. Compose
+plugin дополнительно скачивается из последнего официального GitHub release, проверяется по
+опубликованному SHA-256 и устанавливается атомарно. Если автоматическая установка не подходит
+серверу, установите актуальные Docker Engine и Docker Compose plugin вручную и запустите wizard
+повторно.
+
+После записи `.env` и compose-файлов wizard обязательно выполняет `docker compose config --quiet`.
+При несовместимой схеме, неизвестном `start_interval`, слишком старом Engine API или другой ошибке
+конфигурации команды `pull` и `up` не запускаются. Найденные версии и предметная подсказка печатаются
+сразу, а полный вывод сохраняется в `.installer/compose-last-error.log`.
+
+При ошибке `docker compose pull` или `docker compose up -d` wizard печатает не
+только сырой вывод Docker, но и русское объяснение для частых случаев:
+некорректный bind-адрес, занятый порт, IP не назначен серверу, не запущен
+Docker daemon, нет прав на Docker socket, недоступен registry или указан
+несуществующий `IMAGE_TAG`. Полный вывод последней Compose-ошибки сохраняется в
+`.installer/compose-last-error.log` внутри папки установки.
+
+### Telegram Bot API через SOCKS5
+
+Wizard принимает только `socks5://host:port` или
+`socks5://username:password@host:port`; специальные символы credentials должны быть
+percent-encoded. Значение сохраняется как `TELEGRAM_BOT_PROXY_URL` и применяется после рестарта
+к исходящим Bot API вызовам обоих процессов — `backend` и `worker`. Если proxy заполнен, wizard
+отдельно предлагает `backend` использовать его для OAuth token endpoint и JWKS; ответ по
+умолчанию — «да». Отказ записывает `TELEGRAM_OAUTH_USE_BOT_PROXY=False` как явный opt-out.
+
+Это не туннель для входящего webhook: Telegram по-прежнему должен достигать публичного HTTPS
+`WEBHOOK_PUBLIC_URL`/`WEBHOOK_BASE_URL`. Страница авторизации OAuth открывается сетью браузера,
+даже когда server-side token/JWKS идут через proxy. Panel API и платежные клиенты используют свои
+маршруты. В Docker не используйте `127.0.0.1` для proxy на host без отдельно настроенного host
+gateway: loopback принадлежит контейнеру. Проверяйте endpoint из обоих контейнеров.
+
+Подробные примеры, ограничения схем и rollback:
+[SOCKS5 proxy для Telegram Bot API](../configuration/env-vars.md#socks5-proxy-для-telegram-bot-api).
+
+Обычный `docker compose up -d --build` поднимает:
+
+- `postgres` и `redis` с проверками здоровья; PostgreSQL healthcheck проверяет именно логин/пароль
+  из `.env`, а не только открытый порт;
+- `migrate` как одноразовый сервис на backend-образе;
+- `backend` только после успешных миграций;
+- `worker` только после успешных миграций;
+- `frontend` как отдельный nginx-образ без Python runtime.
+
+Основной путь миграций — отдельный сервис `migrate`. `backend` и `worker` также выполняют
+безопасную проверку схемы на старте под PostgreSQL advisory lock, поэтому прямой запуск сервиса
+без compose тоже применит недостающие миграции и не создаст гонку на схеме БД.
+
+При повторном запуске wizard проверяет существующий Docker volume PostgreSQL. Если volume уже
+инициализирован старым паролем, wizard останавливает старт до запуска приложения и предлагает либо
+вернуть старый `POSTGRES_PASSWORD`, либо явно удалить volume для настоящей чистой установки.
+
+## Готовые папки запуска
+
+Для продакшена удобнее использовать не корневой compose, а отдельные Docker Compose-примеры из папки `deploy/examples`. В каждой папке лежат свой `docker-compose.yml`, `.env.example` и нужный конфиг прокси.
+
+Предпочтительный вариант для обычного публичного сервера - **Caddy**: он сам выпускает и продлевает HTTPS-сертификаты, а конфигурация получается короче, чем с ручным Nginx. Если ближе Nginx-синтаксис, тот же автоматический HTTPS дает **Angie** - форк Nginx с нативной поддержкой ACME.
+
+| Папка | Когда использовать |
+| --- | --- |
+| [`deploy/examples/caddy`](https://gitlab.com/3252a8/remnawave-minishop/-/tree/main/deploy/examples/caddy) | Нужен простой публичный HTTPS с автоматическими сертификатами Let's Encrypt. |
+| [`deploy/examples/angie`](https://gitlab.com/3252a8/remnawave-minishop/-/tree/main/deploy/examples/angie) | Нужен автоматический HTTPS как у Caddy, но с конфигурацией в Nginx-синтаксисе (Angie - форк Nginx с нативным ACME). |
+| [`deploy/examples/nginx`](https://gitlab.com/3252a8/remnawave-minishop/-/tree/main/deploy/examples/nginx) | Уже используете Nginx и готовы положить TLS-сертификаты рядом с примером. |
+| [`deploy/examples/newt`](https://gitlab.com/3252a8/remnawave-minishop/-/tree/main/deploy/examples/newt) | Публикуете сервисы через Pangolin/Newt без входящих портов на сервере приложения. |
+| [`deploy/examples/no-proxy`](https://gitlab.com/3252a8/remnawave-minishop/-/tree/main/deploy/examples/no-proxy) | Нужно напрямую открыть HTTP-порты backend/frontend или проверить стек за внешним TLS-терминатором. |
+| [`deploy/examples/split-protected-upstream`](https://gitlab.com/3252a8/remnawave-minishop/-/tree/main/deploy/examples/split-protected-upstream) | Frontend и backend на разных серверах; frontend nginx проксирует `/api` к protected/private backend upstream. |
+| [`deploy/examples/rathole`](https://gitlab.com/3252a8/remnawave-minishop/-/tree/main/deploy/examples/rathole) | Frontend и backend на разных серверах, WebApp API plane идет через приватный Rathole tunnel. |
+| `Уже установленная Remnawave через eGames - использовать ее Nginx/TLS` в wizard | Remnawave Panel уже стоит на этом же хосте через [`eGamesAPI/remnawave-reverse-proxy`](https://github.com/eGamesAPI/remnawave-reverse-proxy); wizard использует no-proxy compose, добавляет backend/Mini App маршруты в найденный `nginx.conf` eGames и после миграции перечитывает Nginx. |
+
+<!-- GitHub source URLs (disabled):
+https://github.com/3252a8/remnawave-minishop/tree/main/deploy/examples/caddy
+https://github.com/3252a8/remnawave-minishop/tree/main/deploy/examples/angie
+https://github.com/3252a8/remnawave-minishop/tree/main/deploy/examples/nginx
+https://github.com/3252a8/remnawave-minishop/tree/main/deploy/examples/newt
+https://github.com/3252a8/remnawave-minishop/tree/main/deploy/examples/no-proxy
+https://github.com/3252a8/remnawave-minishop/tree/main/deploy/examples/split-protected-upstream
+https://github.com/3252a8/remnawave-minishop/tree/main/deploy/examples/rathole
+-->
+
+## Caddy (рекомендуемый вариант)
+
+Caddy подходит, если DNS-записи `WEBHOOK_HOST` и `MINIAPP_HOST` смотрят на сервер приложения, а входящие `80/tcp` и `443/tcp` открыты.
+
+```bash
+cd deploy/examples/caddy
+cp .env.example .env
+nano .env
+docker compose up -d
+docker compose logs -f caddy backend worker frontend
+```
+
+Минимально поменяйте в `.env`:
+
+- `WEBHOOK_HOST` и `MINIAPP_HOST`;
+- `TELEGRAM_ENABLED=False` для автономного режима или `BOT_TOKEN` при включённом Telegram;
+- `EMAIL_AUTH_SECRET`, `PUBLIC_APP_URL`, SMTP и подтверждённый email первого владельца;
+- `POSTGRES_PASSWORD`;
+- `WEBAPP_SESSION_SECRET`, `WEBHOOK_SECRET_TOKEN`;
+- `PANEL_API_URL`, `PANEL_API_KEY`, `PANEL_WEBHOOK_SECRET`.
+
+Если нужна нестандартная логика Caddy, правьте `Caddyfile` рядом с compose и перезапускайте:
+
+```bash
+docker compose up -d --force-recreate caddy
+```
+
+В стандартном `Caddyfile` есть global log filter для `X-Telegram-Bot-Api-Secret-Token`;
+если заменяете файл целиком, сохраните этот фильтр, чтобы webhook secret не попадал в логи Caddy.
+
+## Angie
+
+Angie - форк Nginx от бывших разработчиков ядра Nginx с нативной поддержкой ACME:
+сертификаты Let's Encrypt выпускаются и продлеваются автоматически, как в Caddy, но
+конфигурация остается в привычном Nginx-синтаксисе. Вариант подходит, если DNS-записи
+`WEBHOOK_HOST` и `MINIAPP_HOST` смотрят на сервер приложения, а входящие `80/tcp` и
+`443/tcp` открыты.
+
+```bash
+cd deploy/examples/angie
+cp .env.example .env
+nano .env
+docker compose up -d
+docker compose logs -f angie backend worker frontend
+```
+
+Минимально поменяйте в `.env`:
+
+- `WEBHOOK_HOST` и `MINIAPP_HOST`;
+- `TELEGRAM_ENABLED=False` для автономного режима или `BOT_TOKEN` при включённом Telegram;
+- `EMAIL_AUTH_SECRET`, `PUBLIC_APP_URL` и SMTP для входа по email;
+- `POSTGRES_PASSWORD`;
+- `WEBAPP_SESSION_SECRET`, `WEBHOOK_SECRET_TOKEN`;
+- `PANEL_API_URL`, `PANEL_API_KEY`, `PANEL_WEBHOOK_SECRET`.
+
+Hostnames из `.env` подставляются в конфиг при старте контейнера: образ
+`docker.angie.software/angie:templated` рендерит `angie.conf.template` через gomplate
+(плейсхолдеры `{{.Env.WEBHOOK_HOST}}` и `{{.Env.MINIAPP_HOST}}`). ACME-аккаунт и
+сертификаты живут в volume `remnawave-minishop-angie-acme` (`/var/lib/angie/acme`),
+поэтому пересоздание контейнера не приводит к повторному выпуску сертификатов. После
+самого первого старта Angie начинает отвечать на `443` только после выпуска первого
+сертификата - обычно это занимает меньше минуты.
+
+Если нужна нестандартная логика Angie, правьте `angie.conf.template` рядом с compose и перезапускайте:
+
+```bash
+docker compose up -d --force-recreate angie
+```
+
+## Nginx
+
+Nginx-вариант поднимает Nginx в той же Docker-сети, что и приложение:
+
+- `WEBHOOK_HOST` проксируется в `backend:8080`;
+- `MINIAPP_HOST` проксируется в `frontend:80`;
+- `frontend` сам проксирует внутренние `/api`, `/auth` и ассеты тем в `backend:8081`.
+
+```bash
+cd deploy/examples/nginx
+cp .env.example .env
+nano .env
+```
+
+Положите TLS-сертификаты в `ssl/`:
+
+```text
+ssl/
+  webhooks.example.com/
+    fullchain.pem
+    privkey.pem
+  app.example.com/
+    fullchain.pem
+    privkey.pem
+```
+
+Имена папок должны совпадать с `WEBHOOK_HOST` и `MINIAPP_HOST` в `.env`.
+
+```bash
+docker compose up -d
+docker compose logs -f nginx backend worker frontend
+```
+
+Если нужно поменять заголовки, лимиты или TLS-настройки, правьте `nginx.conf.template` и перезапускайте Nginx:
+
+```bash
+docker compose up -d --force-recreate nginx
+```
+
+## Pangolin / Newt
+
+Этот вариант не открывает входящие порты на сервере приложения. Newt подключается к Pangolin, а публичные домены настраиваются ресурсами в панели Pangolin.
+
+```bash
+cd deploy/examples/newt
+cp .env.example .env
+nano .env
+docker compose up -d
+```
+
+В `.env` заполните:
+
+- `WEBHOOK_HOST` и `MINIAPP_HOST` - публичные домены ресурсов в Pangolin;
+- `PANGOLIN_ENDPOINT`, `NEWT_ID`, `NEWT_SECRET` - значения из настроек site/client в Pangolin;
+- обычные переменные приложения: `TELEGRAM_ENABLED`, `POSTGRES_PASSWORD`, секреты, SMTP и доступ к Remnawave; `BOT_TOKEN` нужен только при включённом Telegram.
+
+В Pangolin создайте два HTTP-ресурса для этого Newt site:
+
+| Публичный домен | Upstream |
+| --- | --- |
+| `https://webhooks.example.com` | `http://backend:8080` |
+| `https://app.example.com` | `http://frontend:80` |
+
+Проверка:
+
+```bash
+docker compose ps
+docker compose logs -f newt backend worker frontend
+```
+
+### Подключение Pangolin к уже установленному Minishop
+
+Профиль `Pangolin/Newt` выше делает Newt единственным входом в приложение. Если
+Minishop уже установлен с другим профилем (Caddy, Angie, Nginx, no-proxy, eGames),
+публикацию через Pangolin можно добавить позже обратимым шагом: в install wizard
+есть пункты меню «Подключить Web App к Pangolin (Newt)» и «Отключить Web App от
+Pangolin (Newt)».
+
+Подключение записывает `PANGOLIN_ENDPOINT`, `NEWT_ID` и `NEWT_SECRET` в `.env`,
+создает дополнительный `docker-compose.pangolin.yml` с контейнером `newt` в той
+же Docker-сети и включает его через `COMPOSE_FILE` в `.env`. Ресурсы в Pangolin
+указываются на `http://frontend:80` (Mini App) и `http://backend:8080`
+(API/webhook). Отключение останавливает и удаляет контейнер `newt`, убирает
+файл из `COMPOSE_FILE` и сохраняет значения `NEWT_*` в `.env` для быстрого
+повторного подключения.
+
+## Без обратного прокси
+
+Этот вариант напрямую публикует два HTTP-порта:
+
+- backend/вебхуки: `WEB_SERVER_BIND`, по умолчанию `0.0.0.0:8080`;
+- frontend/Mini App: `FRONTEND_BIND`, по умолчанию `0.0.0.0:8082`.
+
+```bash
+cd deploy/examples/no-proxy
+cp .env.example .env
+nano .env
+docker compose up -d
+```
+
+Важно: контейнеры приложения сами не выпускают TLS-сертификаты. Для реального вебхука Telegram и Mini App публичные URL должны быть HTTPS. Используйте этот вариант для локальной проверки, внутренней сети или ситуации, когда HTTPS завершается внешней платформой и дальше трафик приходит на эти порты.
+
+Проверка локально:
+
+```bash
+curl http://127.0.0.1:8080/healthz
+curl http://127.0.0.1:8082/health
+docker compose logs -f backend worker frontend
+```
+
+Корневой `docker-compose.yml` оставлен для локальной сборки из исходников. Примеры в `deploy/examples` используют готовые Docker Hub-образы и не требуют указывать `-f`.
+
+## Раздельное размещение frontend и backend
+
+В split-схеме браузер не обращается к backend напрямую. `WEBAPP_API_BASE_URL` остается `/api`, а frontend nginx проксирует server-side upstream:
+
+```text
+browser -> https://app.example.com/api -> frontend nginx -> WEBAPP_BACKEND_UPSTREAM
+```
+
+Backend при этом имеет две разные HTTP-плоскости:
+
+- `backend:8080` - публичная webhook plane для Telegram, платежных провайдеров и Remnawave Panel.
+- `backend:8081` - WebApp API/auth/assets plane для frontend nginx, private network, protected upstream или Rathole.
+
+Protected upstream без дополнительного backend API домена обычно выглядит так:
+
+```text
+Telegram/payments/Panel -> https://bot.example.com/webhook/... -> backend:8080
+frontend nginx         -> https://bot.example.com/api/...     -> backend:8081
+frontend nginx         -> https://bot.example.com/auth/...    -> backend:8081
+```
+
+Backend-side proxy должен требовать `X-Minishop-Edge-Token` только на `/api/*`, `/auth/*`, `/open-app`, logo/theme/favicon paths к `8081`. Webhook routes на `8080` не должны требовать этот token.
+
+Проверки:
+
+```bash
+docker compose -f deploy/examples/split-protected-upstream/frontend.docker-compose.yml config
+docker compose -f deploy/examples/split-protected-upstream/backend.docker-compose.yml config
+```
+
+Для Rathole frontend-сервер запускает `rathole-server`, backend-сервер запускает `rathole-client`, а frontend nginx использует `WEBAPP_BACKEND_UPSTREAM=http://rathole-server:18081`. Откройте между серверами только Rathole control port, например `2333`; service port `18081` наружу не публикуется.
+
+Rathole checklist:
+
+- одинаковый service token в `rathole.server.toml` и `rathole.client.toml`;
+- backend client видит `backend:8081`;
+- frontend nginx upstream указывает на `rathole-server:18081`;
+- payment/provider/Panel webhook по-прежнему указывают на backend `WEBHOOK_BASE_URL`, а не frontend-домен.
+
+## Миграции
+
+При обычном старте миграции применяются автоматически:
+
+```bash
+docker compose up -d --build
+```
+
+Для ручного повторного запуска:
+
+```bash
+docker compose run --rm migrate
+```
+
+Проверить логи миграций:
+
+```bash
+docker compose logs migrate
+```
+
+`backend` и `worker` зависят от `migrate` через `service_completed_successfully`; если миграции
+падают, приложение не стартует поверх неподготовленной БД. При прямом запуске `backend` или
+`worker` без compose тот же `init_db` применяет недостающие миграции перед стартом логики сервиса.
+
+## Сервисы
+
+- `backend`: aiohttp API, вебхук Telegram, платежные вебхуки, вебхуки панели, проверка здоровья `/healthz`.
+- `worker`: TariffTrafficWorker, задачи синхронизации с панелью, обработка рассылок, потребители очереди вебхуков.
+- `frontend`: статические Svelte-ассеты через nginx.
+- `postgres`: PostgreSQL 17.
+- `redis`: Redis 7 для FSM, кеша, rate-limit, очередей и locks.
+
+В продакшен-примерах внешний доступ добавляют `caddy`, `angie`, `nginx`, `newt` или прямые `ports` в соответствующем варианте из `deploy/examples`.
+
+## Логи и проверка
+
+```bash
+docker compose ps
+docker compose logs -f backend
+docker compose logs -f worker
+docker compose logs -f frontend
+```
+
+Эндпоинты проверки здоровья:
+
+```bash
+curl http://127.0.0.1:8080/healthz
+curl http://127.0.0.1:8080/health
+```
+
+В обычном compose backend публикуется на `127.0.0.1:${WEB_SERVER_PORT:-8080}`, frontend на
+`127.0.0.1:${FRONTEND_PORT:-8082}`. В новых продакшен-примерах проверяйте bind-переменные
+конкретной папки: `HTTP_BIND`, `HTTPS_BIND`, `WEB_SERVER_BIND` или `FRONTEND_BIND`.
+
+## Обновление
+
+Локальная сборка из репозитория:
+
+```bash
+git pull
+docker compose up -d --build
+docker compose logs -f migrate backend worker
+```
+
+Если нужно пересобрать только образы приложения:
+
+```bash
+docker compose build frontend backend worker
+docker compose up -d
+```
+
+## Образы Docker Hub
+
+Образы приложения называются единообразно:
+
+```text
+docker.io/3252a8/remnawave-minishop-backend:<tag>
+docker.io/3252a8/remnawave-minishop-worker:<tag>
+docker.io/3252a8/remnawave-minishop-frontend:<tag>
+```
+
+Чтобы собрать и сразу опубликовать все три образа в Docker Hub, сначала выполните логин:
+
+```bash
+docker login docker.io
+IMAGE_TAG=3.6.1 bash scripts/docker-build-push-images.sh
+```
+
+PowerShell-вариант:
+
+```powershell
+$env:IMAGE_TAG = "3.6.1"
+docker login docker.io
+powershell -ExecutionPolicy Bypass -File .\scripts\docker-build-push-images.ps1
+```
+
+По умолчанию скрипты используют:
+
+- `IMAGE_REGISTRIES=docker.io`
+- `IMAGE_NAMESPACE=3252a8`
+- `IMAGE_PREFIX=remnawave-minishop`
+- `TARGETS=backend worker frontend`
+- `DOCKERFILE=deploy/docker/Dockerfile`
+
+Если нужен свой registry или другой namespace, переопределите переменные:
+
+```bash
+IMAGE_REGISTRIES=registry.example.com IMAGE_NAMESPACE=other IMAGE_TAG=3.6.1 bash scripts/docker-build-push-images.sh
+```
+
+Старые раздельные команды тоже остаются:
+
+```bash
+IMAGE_TAG=3.6.1 scripts/docker-build-images.sh
+IMAGE_TAG=3.6.1 scripts/docker-push-images.sh
+```
+
+Для PowerShell есть варианты `scripts/docker-build-images.ps1` и
+`scripts/docker-push-images.ps1`. Если публикуете образы в другой registry, namespace или с другим
+префиксом имени, переопределите `IMAGE_NAMESPACE`, `IMAGE_REGISTRY` или `IMAGE_PREFIX`.
+
+Для совместимости оставлены Docker Hub-only скрипты:
+
+```bash
+docker login
+IMAGE_TAG=3.6.1 bash scripts/dockerhub-build-push-images.sh
+```
+
+PowerShell-вариант:
+
+```powershell
+$env:IMAGE_TAG = "3.6.1"
+docker login
+powershell -ExecutionPolicy Bypass -File .\scripts\dockerhub-build-push-images.ps1
+```
+
+Если PowerShell блокирует локальные скрипты ошибкой `PSSecurityException` / Execution Policy,
+запустите те же скрипты с обходом политики только для текущего процесса:
+
+```powershell
+$env:IMAGE_TAG = "3.6.1"
+docker login docker.io
+powershell -ExecutionPolicy Bypass -File .\scripts\docker-build-images.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\docker-push-images.ps1
+```
+
+Этот bypass действует только для запущенного процесса `powershell` и не меняет системную политику.
+
+## Масштабирование
+
+В текущих Compose-файлах заданы явные `container_name`, поэтому `docker compose --scale` для
+`backend`, `frontend` и `worker` не используется: Docker не может создать несколько контейнеров с
+одним именем. Если понадобится горизонтальное масштабирование, уберите `container_name` у
+масштабируемых сервисов или перенесите конфигурацию в orchestrator.
+
+Состояние FSM, rate-limit и краткоживущие кеши вынесены в Redis, а tariff tick защищен Redis
+distributed lock; код подготовлен к нескольким репликам, но текущие Compose-файлы ориентированы на
+фиксированные имена контейнеров.
+
+## Данные и volumes
+
+Продакшен compose использует именованные volumes:
+
+- `postgres-data`;
+- `redis-data`;
+В Caddy-варианте также используются `caddy-data` и `caddy-config`, в Angie-варианте - `angie-acme` (ACME-аккаунт и сертификаты Let's Encrypt).
+
+Файлы приложения монтируются из локальной папки `./data` рядом с выбранным `docker-compose.yml` в
+`/app/data`; внутри нее лежат тарифы, темы, логотипы и прочие файловые данные приложения.
+
+Тот же `/app/data` должен быть смонтирован в `migrate`, `backend` и `worker`. Это важно для `data/tariffs.json`: `docker compose run --rm migrate` читает тот же каталог тарифов, что и приложение. В текущих compose-файлах этот mount уже есть у всех трех сервисов.
+
+Перед первым запуском на сервере заранее дайте права пользователю контейнера `10001`:
+
+```bash
+mkdir -p data/themes data/webapp-logo data/tariffs
+touch data/locales-overrides.json
+chown -R 10001:10001 data
+chmod -R u+rwX data
+docker compose run --rm migrate
+docker compose up -d --force-recreate backend worker
+```
+
+Проверка прав:
+
+```bash
+docker compose exec backend sh -lc 'id; touch /app/data/themes/test && rm /app/data/themes/test'
+```
+
+## Резервная копия PostgreSQL
+
+Для штатных автоматических ZIP-бэкапов, отправки в Telegram и восстановления через админку используйте раздел [бэкапы и восстановление](../features/backups.md). Команды ниже - минимальный ручной fallback для PostgreSQL.
+
+```bash
+docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB"' > backup.sql
+```
+
+Восстановление в чистую БД:
+
+```bash
+docker compose stop backend worker
+docker compose exec postgres sh -c 'dropdb -U "$POSTGRES_USER" --if-exists "$POSTGRES_DB"'
+docker compose exec postgres sh -c 'createdb -U "$POSTGRES_USER" "$POSTGRES_DB"'
+docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < backup.sql
+docker compose run --rm migrate
+docker compose up -d backend worker
+```
+
+## Обратный прокси
+
+Готовые reverse-proxy примеры описаны выше:
+
+- [Caddy](#caddy-рекомендуемый-вариант) - автоматический HTTPS;
+- [Angie](#angie) - автоматический HTTPS в Nginx-синтаксисе;
+- [Nginx](#nginx) - сертификаты кладутся рядом в `ssl/`;
+- [Newt/Pangolin](#pangolin--newt) - без входящих портов на сервере приложения.
+
+Во всех вариантах схема одинаковая:
+
+- webhook/backend-домен целиком идет в `backend:8080`;
+- Mini App/frontend-домен целиком идет в `frontend:80`;
+- API/auth/theme routes Mini App дальше проксируются frontend nginx в `backend:8081`.
+
+Для платежных провайдеров с IP allowlist важно, чтобы reverse proxy передавал реальный IP
+отправителя в `X-Forwarded-For`, а backend доверял IP последнего proxy-hop через
+`TRUSTED_PROXIES`. Готовые профили и приложение доверяют loopback и отдельным адресам
+сервисов `frontend`, `caddy`, `nginx`, `angie`, `newt`, `newt-2`. Переменную можно не
+задавать; отсутствующие сервисы игнорируются, а адреса контейнеров обновляются раз в минуту.
+Для собственного proxy добавьте его точный IP/CIDR или имя через `host:` к
+[стандартному списку](../configuration/security.md). Установщик добавляет выбранный
+контейнер автоматически, включая точный Docker gateway для host-network.
+Для домена за Cloudflare backend безопасно принимает реальный адрес из
+`CF-Connecting-IP`, когда ближайший внешний hop входит в официальные сети Cloudflare;
+добавлять эти сети в `TRUSTED_PROXIES` не требуется. Trust-all режим возможен через
+`0.0.0.0/0,::/0`, но используйте его
+только когда backend недоступен напрямую, а внешний proxy очищает входящий `X-Forwarded-For`.
+
+Минимальная логика Caddy:
+
+```caddyfile
+webhooks.example.com {
+	reverse_proxy backend:8080
+}
+
+app.example.com {
+	reverse_proxy frontend:80
+}
+```
+
+Минимальная логика Nginx такая же: `webhooks.example.com` проксируется в `backend:8080`,
+`app.example.com` - в `frontend:80`. В `deploy/examples/nginx/nginx.conf.template` уже есть
+заголовки `X-Forwarded-*`, редирект HTTP -> HTTPS и пути сертификатов.
+
+## Переменный env-файл
+
+По умолчанию compose читает `.env`. Для smoke-тестов или отдельного окружения можно подставить
+другой файл:
+
+```bash
+APP_ENV_FILE=.env.staging docker compose --env-file .env.staging up -d --build
+```
+
+## Dev dry-run рядом с production
+
+Для проверки фичей на той же Remnawave Panel поднимайте dev-стек с отдельным
+env-файлом, отдельным Telegram-ботом и локальной БД.
+В dev-режиме приложение продолжает читать пользователей, squads, devices и
+статистику из живой панели, но записи в пользователей Remnawave не отправляет:
+payload валидируется, а в логах появляется строка вида
+`[PANEL DRY-RUN OK] would PATCH /users ...`.
+
+Минимальный фрагмент `.env.dev`:
+
+```env
+APP_RUNTIME_MODE=development
+PANEL_WRITE_MODE=dry_run
+PANEL_DRY_RUN_VALIDATE_REMOTE=True
+PANEL_DRY_RUN_SYNTHETIC_CREATE=True
+
+REDIS_KEY_PREFIX=remnawave-tg-shop-dev
+BACKUP_ENABLED=False
+```
+
+Запуск:
+
+```bash
+APP_ENV_FILE=.env.dev docker compose --env-file .env.dev up -d --build
+```
+
+`PANEL_WRITE_MODE=live` можно поставить только для отдельной тестовой Remnawave
+Panel, потому что этот режим реально меняет пользователей панели.
+
+Если второй стек запускается на том же хосте, дополнительно разведите порты:
+для корневого compose используйте `WEB_SERVER_PORT` и `FRONTEND_PORT`, а для
+production examples без встроенного TLS - `WEB_SERVER_BIND` и `FRONTEND_BIND`.
+Если production на другом сервере, локальные порты можно оставить стандартными.

@@ -1,0 +1,100 @@
+<script lang="ts">
+  import { Check, ChevronsUpDown, Globe2 } from "$components/ui/icons.js";
+  import { Select } from "$components/ui/primitives.js";
+
+  type LanguageOption = {
+    value: string;
+    label: string;
+    flag?: string;
+  };
+
+  let {
+    open = $bindable(false),
+    value = "ru",
+    currentOption = null,
+    userLanguage = "",
+    options = [],
+    disabled = false,
+    clickGuard = false,
+    clickGuardArmed = false,
+    closeLabel = "Close",
+    label = "Language",
+    onOpenChange = () => {},
+    onValueChange = () => {},
+  }: {
+    open?: boolean;
+    value?: string;
+    currentOption?: LanguageOption | null;
+    userLanguage?: string;
+    options?: LanguageOption[];
+    disabled?: boolean;
+    clickGuard?: boolean;
+    clickGuardArmed?: boolean;
+    closeLabel?: string;
+    label?: string;
+    onOpenChange?: (open: boolean) => void;
+    onValueChange?: (value: string) => void;
+  } = $props();
+
+  const selectContentProps = { trapFocus: false } as Record<string, unknown>;
+
+  function closeFromGuard(event: MouseEvent | PointerEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (clickGuardArmed) onOpenChange(false);
+  }
+</script>
+
+{#if open || clickGuard}
+  <button
+    class="language-select-guard"
+    class:language-select-guard--armed={clickGuardArmed}
+    type="button"
+    aria-label={closeLabel}
+    onpointerdown={closeFromGuard}
+    onclick={closeFromGuard}
+  ></button>
+{/if}
+
+<div class="settings-row settings-row-language">
+  <Globe2 size={21} />
+  <Select.Root
+    type="single"
+    bind:open
+    {value}
+    items={options}
+    {disabled}
+    {onOpenChange}
+    {onValueChange}
+  >
+    <Select.Trigger class="language-select-trigger" aria-label={label}>
+      <span class="language-select-copy">
+        <strong>{label}</strong>
+        <small class="language-select-current">
+          <span class="emoji-flag" aria-hidden="true">{currentOption?.flag || "🏳️"}</span>
+          {currentOption?.label || userLanguage}
+        </small>
+      </span>
+      <ChevronsUpDown size={16} />
+    </Select.Trigger>
+    <Select.Content
+      class="language-select-content"
+      side="bottom"
+      align="end"
+      sideOffset={6}
+      {...selectContentProps}
+    >
+      <Select.Viewport class="language-select-viewport">
+        {#each options as option (option.value)}
+          <Select.Item value={option.value} label={option.label} class="language-select-item">
+            <span class="language-select-item-main">
+              <span class="emoji-flag" aria-hidden="true">{option.flag}</span>
+              <span>{option.label}</span>
+            </span>
+            <Check size={15} class="language-select-item-check" />
+          </Select.Item>
+        {/each}
+      </Select.Viewport>
+    </Select.Content>
+  </Select.Root>
+</div>

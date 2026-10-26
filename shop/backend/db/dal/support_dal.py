@@ -1,0 +1,554 @@
+# SQLAlchemy legacy Column declarations expose instance attributes as Column[T]
+# to mypy; this DAL intentionally mutates loaded ORM instances.
+# mypy: disable-error-code=assignment
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from sqlalchemy import and_, case, desc, func, or_, update
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
+
+from db.activity_models import SupportChangeClock
+from db.support_contracts import SupportTicketChange
+
+from ..models import SupportTicket, SupportTicketMessage, User
+
+ACTIVE_STATUSES = {"open", "awaiting_user", "awaiting_admin"}
+CLOSED_STATUSES = {"resolved", "closed"}
+_UNSET = object()
+
+
+async def advance_ticket_revision(
+    session: AsyncSession, ticket: SupportTicket, *, created: bool = False
+) -> None:
+    # A sequence alone is not a safe polling cursor: transaction 2 can commit
+    # before transaction 1. The counter row remains locked until this commit,
+    # so a consumer cannot advance past a change that is still uncommitted.
+    result = await session.execute(
+        update(SupportChangeClock)
+        .where(SupportChangeClock.id == 1)
+        .values(cursor=SupportChangeClock.cursor + 1)
+        .returning(SupportChangeClock.cursor)
+    )
+    ticket.change_cursor = int(result.scalar_one())
+    ticket.revision = 1 if created else int(ticket.revision or 1) + 1
+
+
+async def get_change_cursor(session: AsyncSession) -> int:
+    result = await session.execute(
+        select(SupportChangeClock.cursor).where(SupportChangeClock.id == 1)
+    )
+    return int(result.scalar_one())
+
+
+async def list_changed_tickets(
+    session: AsyncSession, *, after_cursor: int = 0, limit: int = 100
+) -> list[SupportTicketChange]:
+    if after_cursor < 0 or not 1 <= limit <= 500:
+        raise ValueError("invalid_support_change_page")
+    latest_public_message = (
+        select(func.max(SupportTicketMessage.message_id))
+        .where(
+            SupportTicketMessage.ticket_id == SupportTicket.ticket_id,
+            SupportTicketMessage.is_internal_note.is_(False),
+        )
+        .correlate(SupportTicket)
+        .scalar_subquery()
+    )
+    result = await session.execute(
+        select(
+            SupportTicket.change_cursor,
+            SupportTicket.ticket_id,
+            SupportTicket.user_id,
+            SupportTicket.revision,
+            latest_public_message,
+            SupportTicket.status,
+        )
+        .where(SupportTicket.change_cursor > after_cursor)
+        .order_by(SupportTicket.change_cursor)
+        .limit(limit)
+    )
+    return [
+        SupportTicketChange(
+            int(cursor),
+            int(ticket_id),
+            int(user_id),
+            int(revision),
+            int(message_id or 0),
+            str(status),
+        )
+        for cursor, ticket_id, user_id, revision, message_id, status in result.all()
+    ]
+
+
+def _status_condition(status: str | None) -> Any:
+    normalized = (status or "").strip().lower()
+    if not normalized or normalized in {"all", "any"}:
+        return None
+    if normalized == "active":
+        return SupportTicket.status.in_(ACTIVE_STATUSES)
+    if normalized == "closed":
+        return SupportTicket.status.in_(CLOSED_STATUSES)
+    return SupportTicket.status == normalized
+
+
+async def create_ticket(
+    session: AsyncSession,
+    user_id: int,
+    subject: str,
+    category: str,
+    priority: str,
+    first_message_body: str,
+    first_message_format: str = "text",
+    image_id: str | None = None,
+) -> SupportTicket:
+    now = datetime.now(UTC)
+    ticket = SupportTicket(
+        user_id=user_id,
+        subject=subject,
+        category=category,
+        priority=priority,
+        status="awaiting_admin",
+        last_message_at=now,
+        last_message_role="user",
+        unread_admin_count=1,
+        unread_user_count=0,
+        admin_last_notified_at=now,
+        admin_last_emailed_at=now,
+    )
+    session.add(ticket)
+    await session.flush()
+    message = SupportTicketMessage(
+        ticket_id=ticket.ticket_id,
+        author_role="user",
+        author_user_id=user_id,
+        body=first_message_body,
+        body_format=first_message_format,
+        image_id=image_id,
+        is_internal_note=False,
+        created_at=now,
+    )
+    session.add(message)
+    await advance_ticket_revision(session, ticket, created=True)
+    await session.flush()
+    await session.refresh(ticket)
+    return ticket
+
+
+async def add_message(
+    session: AsyncSession,
+    ticket_id: int,
+    author_role: str,
+    author_user_id: int | None,
+    body: str,
+    is_internal_note: bool = False,
+    body_format: str = "text",
+    buttons: str | None = None,
+    image_id: str | None = None,
+    connector_source: str | None = None,
+    author_label: str | None = None,
+    idempotency_key: str | None = None,
+) -> SupportTicketMessage | None:
+    stmt = (
+        select(SupportTicket)
+        .where(SupportTicket.ticket_id == ticket_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    result = await session.execute(stmt)
+    ticket = result.scalar_one_or_none()
+    if not ticket:
+        return None
+
+    now = datetime.now(UTC)
+    message = SupportTicketMessage(
+        ticket_id=ticket_id,
+        author_role=author_role,
+        author_user_id=author_user_id,
+        body=body,
+        body_format=body_format,
+        buttons=buttons,
+        image_id=image_id,
+        is_internal_note=bool(is_internal_note),
+        created_at=now,
+        connector_source=connector_source,
+        author_label=author_label,
+        idempotency_key=idempotency_key,
+    )
+    session.add(message)
+
+    ticket.last_message_at = now
+    ticket.last_message_role = author_role
+    ticket.updated_at = now
+    if author_role == "user":
+        ticket.unread_admin_count = int(ticket.unread_admin_count or 0) + 1
+        if ticket.status not in CLOSED_STATUSES:
+            ticket.status = "awaiting_admin"
+    elif author_role in {"admin", "connector"} and not is_internal_note:
+        ticket.unread_user_count = int(ticket.unread_user_count or 0) + 1
+        if ticket.status not in CLOSED_STATUSES:
+            ticket.status = "awaiting_user"
+
+    await advance_ticket_revision(session, ticket)
+    await session.flush()
+    await session.refresh(message)
+    return message
+
+
+async def record_admin_notification(
+    session: AsyncSession,
+    ticket_id: int,
+    *,
+    notified_at: datetime | None = None,
+    emailed_at: datetime | None = None,
+) -> None:
+    values = {}
+    if notified_at is not None:
+        values["admin_last_notified_at"] = notified_at
+    if emailed_at is not None:
+        values["admin_last_emailed_at"] = emailed_at
+    if not values:
+        return
+    await session.execute(
+        update(SupportTicket).where(SupportTicket.ticket_id == ticket_id).values(**values)
+    )
+    await session.flush()
+
+
+async def get_ticket(
+    session: AsyncSession,
+    ticket_id: int,
+    *,
+    include_internal: bool = False,
+    after_message_id: int | None = None,
+    user_id: int | None = None,
+    limit: int | None = None,
+) -> tuple[SupportTicket | None, list[SupportTicketMessage]]:
+    stmt = (
+        select(SupportTicket)
+        .where(SupportTicket.ticket_id == ticket_id)
+        .options(selectinload(SupportTicket.user))
+    )
+    if user_id is not None:
+        stmt = stmt.where(SupportTicket.user_id == user_id)
+    result = await session.execute(stmt)
+    ticket = result.scalar_one_or_none()
+    if not ticket:
+        return None, []
+
+    msg_stmt = select(SupportTicketMessage).where(SupportTicketMessage.ticket_id == ticket_id)
+    if after_message_id is not None:
+        msg_stmt = msg_stmt.where(SupportTicketMessage.message_id > after_message_id)
+    if not include_internal:
+        msg_stmt = msg_stmt.where(SupportTicketMessage.is_internal_note.is_(False))
+    if limit is not None:
+        if not 1 <= limit <= 500:
+            raise ValueError("invalid_support_message_page")
+        msg_stmt = msg_stmt.order_by(SupportTicketMessage.message_id.desc()).limit(limit)
+    else:
+        msg_stmt = msg_stmt.order_by(
+            SupportTicketMessage.created_at.asc(),
+            SupportTicketMessage.message_id.asc(),
+        )
+    msg_result = await session.execute(msg_stmt)
+    messages = list(msg_result.scalars().all())
+    if limit is not None:
+        messages.reverse()
+    return ticket, messages
+
+
+async def list_user_tickets(
+    session: AsyncSession,
+    user_id: int,
+    *,
+    limit: int,
+    offset: int,
+    status_filter: str | None = None,
+) -> list[SupportTicket]:
+    stmt = select(SupportTicket).where(SupportTicket.user_id == user_id)
+    status_cond = _status_condition(status_filter)
+    if status_cond is not None:
+        stmt = stmt.where(status_cond)
+    stmt = (
+        stmt.order_by(desc(SupportTicket.last_message_at), desc(SupportTicket.ticket_id))
+        .limit(limit)
+        .offset(offset)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def list_admin_tickets(
+    session: AsyncSession,
+    *,
+    status: str | None = None,
+    priority: str | None = None,
+    category: str | None = None,
+    assigned_admin_id: int | None = None,
+    search: str | None = None,
+    sort: str = "updated_desc",
+    limit: int,
+    offset: int,
+) -> list[SupportTicket]:
+    stmt = select(SupportTicket).join(User, User.user_id == SupportTicket.user_id)
+    status_cond = _status_condition(status)
+    if status_cond is not None:
+        stmt = stmt.where(status_cond)
+    if priority:
+        stmt = stmt.where(SupportTicket.priority == priority)
+    if category:
+        stmt = stmt.where(SupportTicket.category == category)
+    if assigned_admin_id is not None:
+        stmt = stmt.where(SupportTicket.assigned_admin_id == assigned_admin_id)
+    if search:
+        pattern = f"%{search.strip().lower()}%"
+        stmt = stmt.where(
+            or_(
+                func.lower(SupportTicket.subject).like(pattern),
+                func.lower(User.username).like(pattern),
+                func.lower(User.first_name).like(pattern),
+                func.lower(User.email).like(pattern),
+            )
+        )
+    priority_rank = case(
+        (SupportTicket.priority == "urgent", 4),
+        (SupportTicket.priority == "high", 3),
+        (SupportTicket.priority == "normal", 2),
+        (SupportTicket.priority == "low", 1),
+        else_=0,
+    )
+    sort_key = (sort or "updated_desc").strip().lower()
+    sort_map = {
+        "updated_desc": (SupportTicket.last_message_at.desc().nullslast(),),
+        "updated_asc": (SupportTicket.last_message_at.asc().nullslast(),),
+        "created_desc": (SupportTicket.created_at.desc().nullslast(),),
+        "created_asc": (SupportTicket.created_at.asc().nullslast(),),
+        "importance_desc": (
+            priority_rank.desc(),
+            SupportTicket.last_message_at.desc().nullslast(),
+        ),
+        "importance_asc": (
+            priority_rank.asc(),
+            SupportTicket.last_message_at.desc().nullslast(),
+        ),
+    }
+    order_by = sort_map.get(sort_key, sort_map["updated_desc"])
+    stmt = stmt.options(selectinload(SupportTicket.user)).order_by(
+        *order_by,
+        desc(SupportTicket.ticket_id),
+    )
+    stmt = stmt.limit(limit).offset(offset)
+    result = await session.execute(stmt)
+    return list(result.scalars().unique().all())
+
+
+async def user_ticket_counts(session: AsyncSession, user_id: int) -> dict:
+    stmt = (
+        select(SupportTicket.status, func.count())
+        .where(SupportTicket.user_id == user_id)
+        .group_by(SupportTicket.status)
+    )
+    result = await session.execute(stmt)
+    by_status = {str(status): int(count or 0) for status, count in result.all()}
+    active = sum(by_status.get(status, 0) for status in ACTIVE_STATUSES)
+    closed = sum(by_status.get(status, 0) for status in CLOSED_STATUSES)
+    return {
+        **by_status,
+        "active": active,
+        "closed": closed,
+        "total": active + closed,
+    }
+
+
+async def mark_read(session: AsyncSession, ticket_id: int, role: str) -> None:
+    now = datetime.now(UTC)
+    if role == "user":
+        await session.execute(
+            update(SupportTicket)
+            .where(SupportTicket.ticket_id == ticket_id)
+            .values(unread_user_count=0, updated_at=now)
+        )
+        await session.execute(
+            update(SupportTicketMessage)
+            .where(
+                and_(
+                    SupportTicketMessage.ticket_id == ticket_id,
+                    SupportTicketMessage.author_role.in_({"admin", "connector"}),
+                    SupportTicketMessage.is_internal_note.is_(False),
+                    SupportTicketMessage.read_by_user_at.is_(None),
+                )
+            )
+            .values(read_by_user_at=now)
+        )
+    elif role == "admin":
+        await session.execute(
+            update(SupportTicket)
+            .where(SupportTicket.ticket_id == ticket_id)
+            .values(unread_admin_count=0, updated_at=now)
+        )
+        await session.execute(
+            update(SupportTicketMessage)
+            .where(
+                and_(
+                    SupportTicketMessage.ticket_id == ticket_id,
+                    SupportTicketMessage.author_role == "user",
+                    SupportTicketMessage.read_by_admin_at.is_(None),
+                )
+            )
+            .values(read_by_admin_at=now)
+        )
+    await session.flush()
+
+
+async def update_ticket(
+    session: AsyncSession,
+    ticket_id: int,
+    *,
+    status: str | None = None,
+    priority: str | None = None,
+    category: str | None = None,
+    assigned_admin_id: object = _UNSET,
+    closed_by_admin_id: int | None = None,
+) -> SupportTicket | None:
+    result = await session.execute(
+        select(SupportTicket)
+        .where(SupportTicket.ticket_id == ticket_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    ticket = result.scalar_one_or_none()
+    if not ticket:
+        return None
+    now = datetime.now(UTC)
+    if status is not None:
+        ticket.status = status
+        if status == "closed":
+            ticket.closed_at = now
+            ticket.closed_by_admin_id = closed_by_admin_id
+        elif status != "closed":
+            ticket.closed_at = None
+            ticket.closed_by_admin_id = None
+    if priority is not None:
+        ticket.priority = priority
+    if category is not None:
+        ticket.category = category
+    if assigned_admin_id is not _UNSET:
+        ticket.assigned_admin_id = assigned_admin_id
+    ticket.updated_at = now
+    await advance_ticket_revision(session, ticket)
+    await session.flush()
+    await session.refresh(ticket)
+    return ticket
+
+
+async def count_user_unread(session: AsyncSession, user_id: int) -> int:
+    stmt = select(func.coalesce(func.sum(SupportTicket.unread_user_count), 0)).where(
+        SupportTicket.user_id == user_id
+    )
+    result = await session.execute(stmt)
+    return int(result.scalar_one() or 0)
+
+
+async def admin_stats(session: AsyncSession) -> dict:
+    status_result = await session.execute(
+        select(SupportTicket.status, func.count()).group_by(SupportTicket.status)
+    )
+    by_status = {str(status): int(count or 0) for status, count in status_result.all()}
+    unread_result = await session.execute(
+        select(func.coalesce(func.sum(SupportTicket.unread_admin_count), 0))
+    )
+    active = sum(by_status.get(status, 0) for status in ACTIVE_STATUSES)
+    closed = sum(by_status.get(status, 0) for status in CLOSED_STATUSES)
+    return {
+        **by_status,
+        "active": active,
+        "closed": closed,
+        "total": active + closed,
+        "open": by_status.get("open", 0),
+        "awaiting_admin": by_status.get("awaiting_admin", 0),
+        "awaiting_user": by_status.get("awaiting_user", 0),
+        "total_unread_admin": int(unread_result.scalar_one() or 0),
+    }
+
+
+async def count_recent_tickets_for_user(
+    session: AsyncSession,
+    user_id: int,
+    window_seconds: int,
+) -> int:
+    cutoff = datetime.now(UTC) - timedelta(seconds=max(1, int(window_seconds)))
+    stmt = (
+        select(func.count())
+        .select_from(SupportTicket)
+        .where(SupportTicket.user_id == user_id, SupportTicket.created_at >= cutoff)
+    )
+    result = await session.execute(stmt)
+    return int(result.scalar_one() or 0)
+
+
+async def count_recent_messages_for_user(
+    session: AsyncSession,
+    user_id: int,
+    window_seconds: int,
+    *,
+    images_only: bool = False,
+) -> int:
+    cutoff = datetime.now(UTC) - timedelta(seconds=max(1, int(window_seconds)))
+    conditions = [
+        SupportTicketMessage.author_role == "user",
+        SupportTicketMessage.author_user_id == user_id,
+        SupportTicketMessage.created_at >= cutoff,
+    ]
+    if images_only:
+        conditions.append(SupportTicketMessage.image_id.is_not(None))
+    stmt = select(func.count()).select_from(SupportTicketMessage).where(*conditions)
+    result = await session.execute(stmt)
+    return int(result.scalar_one() or 0)
+
+
+async def user_can_access_image(session: AsyncSession, user_id: int, image_id: str) -> bool:
+    stmt = (
+        select(SupportTicketMessage.message_id)
+        .join(SupportTicket, SupportTicket.ticket_id == SupportTicketMessage.ticket_id)
+        .where(
+            SupportTicket.user_id == user_id,
+            SupportTicketMessage.image_id == image_id,
+            SupportTicketMessage.is_internal_note.is_(False),
+        )
+        .limit(1)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none() is not None
+
+
+async def user_can_access_ticket_emoji(
+    session: AsyncSession, user_id: int, ticket_id: int, emoji_id: str
+) -> bool:
+    """Only entities or button icons in the owner's public messages authorize media."""
+    from config.telegram_menu import CUSTOM_EMOJI_ID_RE
+
+    if not CUSTOM_EMOJI_ID_RE.fullmatch(emoji_id):
+        return False
+    stmt = (
+        select(SupportTicketMessage.message_id)
+        .join(SupportTicket, SupportTicket.ticket_id == SupportTicketMessage.ticket_id)
+        .where(
+            SupportTicket.user_id == user_id,
+            SupportTicket.ticket_id == ticket_id,
+            SupportTicketMessage.is_internal_note.is_(False),
+            or_(
+                and_(
+                    SupportTicketMessage.body_format == "html",
+                    SupportTicketMessage.body.contains(f'<tg-emoji emoji-id="{emoji_id}">'),
+                ),
+                # IDs are validated decimal strings; the writer's canonical JSON
+                # distinguishes this property from escaped text in a caption.
+                SupportTicketMessage.buttons.contains(f'"icon_custom_emoji_id": "{emoji_id}"'),
+            ),
+        )
+        .limit(1)
+    )
+    return (await session.execute(stmt)).scalar_one_or_none() is not None

@@ -1,0 +1,370 @@
+import logging
+from datetime import UTC, datetime
+from typing import Any
+
+from aiohttp import web
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import sessionmaker
+
+from bot.app.web.context import (
+    get_session_factory,
+    get_settings,
+    get_subscription_service,
+)
+from bot.infra import events
+from bot.infra.event_payloads import ReferralBonusGrantedPayload
+from bot.services.partner_program_service import PartnerProgramService
+from bot.services.referral_welcome_trial import referral_welcome_bonus_joins_trial
+from bot.services.registration_invite_gate import (
+    RegistrationInviteRequiredError,
+    evaluate_registration_invite,
+    referral_program_enabled,
+    resolve_referrer_user_id,
+)
+from bot.services.subscription_service_impl.core import SubscriptionService
+from bot.utils.text_sanitizer import sanitize_display_name, sanitize_username
+from config.settings import Settings
+from config.tariffs_config import referral_welcome_bonus_tariff_key_for_settings
+from db.dal import subscription_dal, user_dal
+from db.models import User
+
+from .assets import (
+    _enforce_webapp_rate_limit,
+)
+from .auth_common import (
+    _referral_welcome_telegram_required_reason,
+    _telegram_photo_url_value,
+)
+from .common import (
+    _invalidate_webapp_user_caches,
+    _json_error,
+    _normalize_language,
+    _require_user_id,
+)
+from .response_helpers import json_response
+
+logger = logging.getLogger(__name__)
+
+
+async def _resolve_referrer_id(
+    session: AsyncSession,
+    raw_referral_param: str | None,
+    *,
+    current_user_id: int | None,
+    settings: Settings | None = None,
+) -> int | None:
+    if settings is None:
+        return None
+    return await resolve_referrer_user_id(
+        session,
+        raw_referral_param,
+        settings=settings,
+        current_user_id=current_user_id,
+        source="webapp",
+    )
+
+
+async def _apply_referral_to_existing_user(
+    request: web.Request,
+    session: AsyncSession,
+    user: User,
+    raw_referral_param: str | None,
+) -> bool:
+    if not raw_referral_param or user.referred_by_id is not None:
+        return False
+
+    locked_user = await user_dal.lock_user_by_id(session, int(user.user_id))
+    if not locked_user or locked_user.referred_by_id is not None:
+        return False
+    user = locked_user
+
+    referred_by_id = await _resolve_referrer_id(
+        session,
+        raw_referral_param,
+        current_user_id=int(user.user_id),
+        settings=get_settings(request),
+    )
+    if not referred_by_id:
+        return False
+
+    subscription_service: SubscriptionService = get_subscription_service(request)
+    try:
+        is_active_now = await subscription_service.has_active_subscription(
+            session,
+            int(user.user_id),
+        )
+    except Exception:
+        is_active_now = False
+    if is_active_now:
+        return False
+
+    user.referred_by_id = referred_by_id
+    await session.flush()
+    return True
+
+
+async def _apply_referral_welcome_bonus_if_needed(
+    request: web.Request,
+    session: AsyncSession,
+    user: User,
+    raw_referral_param: str | None,
+) -> datetime | None:
+    if not raw_referral_param:
+        return None
+
+    settings: Settings = get_settings(request)
+    if _referral_welcome_telegram_required_reason(settings, user):
+        return None
+
+    return await _grant_referral_welcome_bonus_if_eligible(request, session, user)
+
+
+async def _apply_ad_attribution_if_needed(
+    session: AsyncSession,
+    user_id: int,
+    raw_start_param: str | None,
+    *,
+    event_key: str | None = None,
+    is_new_user: bool | None = None,
+) -> None:
+    if not raw_start_param:
+        return
+    from bot.services.advertising.capture import capture_contact
+
+    await capture_contact(
+        session,
+        code=raw_start_param,
+        user_id=user_id,
+        channel="telegram",
+        event_key=event_key,
+        is_new_user=is_new_user,
+    )
+
+
+async def _grant_referral_welcome_bonus_if_eligible(
+    request: web.Request,
+    session: AsyncSession,
+    user: User,
+) -> datetime | None:
+    locked_user = await user_dal.lock_user_by_id(session, int(user.user_id))
+    if not locked_user:
+        return None
+    user = locked_user
+
+    # One-time grant: once a user has claimed the welcome bonus, never grant it
+    # again. Without this marker the bonus could be re-claimed every time the
+    # previous grant expired (has_active_subscription alone is not enough).
+    if getattr(user, "referral_welcome_bonus_claimed_at", None) is not None:
+        return None
+
+    settings: Settings = get_settings(request)
+    eligible_source = referral_program_enabled(settings) and bool(user.referred_by_id)
+    if not eligible_source:
+        eligible_source = await PartnerProgramService(settings).client_welcome_bonus_eligible(
+            session,
+            user_id=int(user.user_id),
+        )
+    if not eligible_source:
+        return None
+
+    if await subscription_dal.has_any_subscription_for_user(session, int(user.user_id)):
+        return None
+
+    referral_welcome_days = max(0, int(settings.referral_settings.welcome_bonus_days))
+    if referral_welcome_days <= 0:
+        return None
+    if referral_welcome_bonus_joins_trial(settings):
+        # The bonus is added to the trial when the user activates it.
+        return None
+
+    subscription_service: SubscriptionService = get_subscription_service(request)
+    welcome_tariff_key = referral_welcome_bonus_tariff_key_for_settings(settings)
+    end_date = await subscription_service.extend_active_subscription_days(
+        session,
+        int(user.user_id),
+        referral_welcome_days,
+        reason="referral_welcome_bonus",
+        tariff_key=welcome_tariff_key,
+    )
+    if end_date:
+        # Persisted together with the grant on the caller's commit (the extend
+        # call does not commit on its own), so the bonus and its claimed-marker
+        # stay atomic.
+        user.referral_welcome_bonus_claimed_at = datetime.now(UTC)
+        await events.emit_model(
+            ReferralBonusGrantedPayload(
+                referee_user_id=int(user.user_id),
+                referee_bonus_days=referral_welcome_days,
+                referee_new_end_date=end_date,
+                inviter_bonus_applied=False,
+                payment_db_id=None,
+                reason="welcome",
+            ),
+            exclude_unset=True,
+        )
+    return end_date
+
+
+async def _grant_deferred_referral_welcome_bonus_after_telegram_link(
+    request: web.Request,
+    user_id: int,
+) -> datetime | None:
+    """Best-effort grant after Telegram linking without risking the link transaction."""
+
+    settings: Settings = get_settings(request)
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        try:
+            user = await user_dal.get_user_by_id(session, user_id)
+            if (
+                not user
+                or user.is_banned
+                or _referral_welcome_telegram_required_reason(settings, user)
+            ):
+                await session.rollback()
+                return None
+
+            end_date = await _grant_referral_welcome_bonus_if_eligible(
+                request,
+                session,
+                user,
+            )
+            if not end_date:
+                await session.rollback()
+                return None
+
+            await session.commit()
+            return end_date
+        except Exception:
+            await session.rollback()
+            logger.exception(
+                "Deferred referral welcome bonus failed after Telegram link for user %s",
+                user_id,
+            )
+            return None
+
+
+def _webapp_datetime_text(value: datetime | None) -> str | None:
+    if not value:
+        return None
+    normalized = value if value.tzinfo else value.replace(tzinfo=UTC)
+    return normalized.strftime("%d.%m.%Y %H:%M")
+
+
+async def referral_welcome_bonus_claim_route(request: web.Request) -> web.Response:
+    user_id = _require_user_id(request)
+    rate_limit_response = await _enforce_webapp_rate_limit(
+        request,
+        user_id=user_id,
+        action="referral_welcome_claim",
+    )
+    if rate_limit_response:
+        return rate_limit_response
+
+    settings: Settings = get_settings(request)
+    async_session_factory: sessionmaker = get_session_factory(request)
+    async with async_session_factory() as session:
+        try:
+            db_user = await user_dal.get_user_by_id(session, user_id)
+            if not db_user or db_user.is_banned:
+                await session.rollback()
+                return _json_error(403, "access_denied", "Access denied")
+
+            reason = _referral_welcome_telegram_required_reason(settings, db_user)
+            if reason:
+                await session.rollback()
+                return _json_error(400, "referral_welcome_telegram_required", reason)
+
+            end_date = await _grant_referral_welcome_bonus_if_eligible(
+                request,
+                session,
+                db_user,
+            )
+            if not end_date:
+                await session.rollback()
+                return _json_error(
+                    400,
+                    "referral_welcome_unavailable",
+                    "Referral welcome bonus is not available",
+                )
+
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            logger.exception("Referral welcome bonus claim failed")
+            return _json_error(500, "referral_welcome_failed", "Referral welcome bonus failed")
+
+    await _invalidate_webapp_user_caches(settings, user_id, include_devices=True)
+    return json_response(
+        {
+            "ok": True,
+            "claimed": True,
+            "end_date": end_date.isoformat() if isinstance(end_date, datetime) else None,
+            "end_date_text": _webapp_datetime_text(end_date),
+        }
+    )
+
+
+async def _ensure_user_from_telegram(
+    session: AsyncSession,
+    telegram_user: dict[str, Any],
+    settings: Settings,
+    *,
+    referral_param: str | None = None,
+) -> User:
+    telegram_user_id = int(telegram_user["id"])
+    telegram_language_code = _normalize_language(
+        telegram_user.get("language_code") or settings.DEFAULT_LANGUAGE
+    )
+
+    profile_data = {
+        "telegram_id": telegram_user_id,
+        "username": sanitize_username(telegram_user.get("username")),
+        "first_name": sanitize_display_name(telegram_user.get("first_name")),
+        "last_name": sanitize_display_name(telegram_user.get("last_name")),
+    }
+    telegram_photo_url = _telegram_photo_url_value(telegram_user)
+    if telegram_photo_url:
+        profile_data["telegram_photo_url"] = telegram_photo_url
+
+    db_user = await user_dal.get_user_by_telegram_id(session, telegram_user_id)
+    if not db_user:
+        invite_check = await evaluate_registration_invite(
+            session,
+            referral_param or telegram_user.get("start_param"),
+            current_user_id=None,
+            settings=settings,
+            source="webapp",
+        )
+        if invite_check.requires_invite:
+            raise RegistrationInviteRequiredError(invite_check.status)
+
+        db_user, created = await user_dal.create_user(
+            session,
+            {
+                **profile_data,
+                "language_code": telegram_language_code,
+                "referred_by_id": invite_check.referrer_user_id,
+                "registration_date": datetime.now(UTC),
+            },
+            partner_user_id=invite_check.partner_user_id,
+        )
+        if created and invite_check.partner_code:
+            await PartnerProgramService(settings).attribute_user(
+                session,
+                user=db_user,
+                partner_code=invite_check.partner_code,
+                source="partner_web_link",
+                registered_via_partner_link=True,
+            )
+        db_user._webapp_created = bool(created)
+        return db_user
+
+    update_data = {
+        **profile_data,
+        "language_code": _normalize_language(db_user.language_code or telegram_language_code),
+    }
+    changed = {key: value for key, value in update_data.items() if getattr(db_user, key) != value}
+    if changed:
+        db_user = await user_dal.update_user(session, db_user.user_id, changed) or db_user
+    return db_user

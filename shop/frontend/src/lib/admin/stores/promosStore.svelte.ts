@@ -1,0 +1,681 @@
+import { legacyMonthsToDays } from "../../webapp/subscriptionPeriods";
+import { adminErrorMessage } from "../errors.js";
+import { copyTextToClipboard } from "../../webapp/clipboard.js";
+import { withRoutePrefix } from "../../webapp/routes.js";
+import {
+  unwrap,
+  type ApiClient,
+  type GetResponse,
+  type PostPayload,
+  buildAdminPromoActivationsPath,
+  buildAdminPromosPath,
+  buildAdminPromoPath,
+} from "../../webapp/publicApi";
+import type { components } from "../../api/openapi.generated";
+import { snapshotForPayload } from "./snapshotForPayload.svelte";
+import { defineRawStateProperty } from "./rawStateProperty";
+import {
+  fetchAdminQuery,
+  invalidateAdminQuery,
+  type AdminQueryClient,
+  type AdminQueryKey,
+} from "./adminQueryCache";
+
+type AdminErrorResponse = { ok?: false; error?: string; message?: string; detail?: string };
+type AdminApi = ApiClient["api"];
+type ToastFn = (message: string) => void;
+type TranslateFn = (key: string, params?: Record<string, unknown>, fallback?: string) => string;
+type Promo = components["schemas"]["PromoOut"];
+/** Which promo tab is listed; the backend pages each kind separately. */
+export type PromoKind = "shared" | "personal" | "all";
+export type PromoStatusFilter = "" | "active" | "disabled" | "expired" | "used_up";
+export type PromoScopeFilter = "" | "all" | "subscription" | "traffic" | "traffic_topup" | "hwid";
+type PromoActivation = components["schemas"]["PromoActivationOut"];
+type PromoRevenueSummary = components["schemas"]["PromoRevenueSummaryOut"];
+type PromoDraft = Omit<components["schemas"]["PromoCreateBody"], "valid_days"> & {
+  valid_days: number;
+};
+type PromoPatch = components["schemas"]["PromoUpdateBody"];
+type PromoEffectPayload = {
+  bonus_days?: number | null;
+  regular_traffic_gb?: number | null;
+  premium_traffic_gb?: number | null;
+  discount_percent?: number | null;
+  duration_multiplier?: number | null;
+  traffic_multiplier?: number | null;
+  bonus_requires_payment?: boolean | null;
+};
+type PromosListResponse = GetResponse<"/api/admin/promos">;
+type PromoDetailResponse = GetResponse<"/api/admin/promos/{promo_id}">;
+type PromoActivationsResponse = GetResponse<"/api/admin/promos/{promo_id}/activations">;
+type PromosState = {
+  promos: Promo[];
+  promosTotal: number;
+  promosPage: number;
+  promosSort: string;
+  promosSearch: string;
+  promosStatus: PromoStatusFilter;
+  promosScope: PromoScopeFilter;
+  promoKind: PromoKind;
+  promoOwnedTotal: number;
+  promosLoading: boolean;
+  promoCreateOpen: boolean;
+  promoDraft: PromoDraft;
+  promoEditOpen: boolean;
+  promoEditing: Promo | null;
+  promoEditDraft: PromoPatch;
+  promoActivationsOpen: boolean;
+  promoActivationsPromo: Promo | null;
+  promoActivations: PromoActivation[];
+  promoActivationsTotal: number;
+  promoActivationsPage: number;
+  promoActivationsSort: string;
+  promoActivationsLoading: boolean;
+  promoRevenueSummary: PromoRevenueSummary;
+};
+type PromosStoreOptions = {
+  api: AdminApi;
+  onToast: ToastFn;
+  at?: TranslateFn;
+  routePrefix?: string;
+  queryClient?: AdminQueryClient | null;
+};
+type PromoOpenOptions = { skipPush?: boolean };
+export type PromosStore = PromosState & {
+  setActive: (section: string) => void;
+  loadPromos: (options?: { refresh?: boolean }) => Promise<void>;
+  createPromo: () => Promise<void>;
+  savePromo: () => Promise<void>;
+  togglePromo: (promo: Promo) => Promise<void>;
+  deletePromo: (promo: Promo) => Promise<void>;
+  openEditPromo: (promo: Promo, options?: PromoOpenOptions) => void;
+  openPromoById: (promoId: number, options?: PromoOpenOptions) => Promise<void>;
+  closeEditPromo: (options?: PromoOpenOptions) => void;
+  updateEditDraft: (fields: Partial<PromoPatch>) => void;
+  copyToClipboard: (text: string | null | undefined, successMessage?: string) => Promise<void>;
+  openActivations: (promo: Promo) => Promise<void>;
+  closeActivations: () => void;
+  loadActivations: (page?: number) => Promise<void>;
+  setActivationsPage: (page: number) => void;
+  setPage: (page: number) => void;
+  setSort: (sort: string) => void;
+  setSearch: (search: string) => void;
+  setStatus: (status: PromoStatusFilter) => void;
+  setScope: (scope: PromoScopeFilter) => void;
+  setActivationsSort: (sort: string) => void;
+  setPromoKind: (kind: PromoKind) => void;
+  setCreateOpen: (open: boolean) => void;
+  updateDraft: (fields: Partial<PromoDraft>) => void;
+  PROMOS_PAGE_SIZE: number;
+  ACTIVATIONS_PAGE_SIZE: number;
+};
+
+function isOkResponse<T extends { ok: true }>(response: T | AdminErrorResponse): response is T {
+  return response.ok === true;
+}
+
+const PROMOS_QUERY_KEY = ["admin", "promos"] as const;
+const PROMO_ACTIVATIONS_QUERY_KEY = ["admin", "promos", "activations"] as const;
+
+const defaultPromoRevenueSummary = (): PromoRevenueSummary => ({
+  payments_total: 0,
+  revenue_payments: 0,
+  currencies: [],
+});
+
+class AdminPromosError extends Error {
+  payload: unknown;
+
+  constructor(message: string, payload: unknown) {
+    super(message);
+    this.payload = payload;
+  }
+}
+
+const defaultPromoDraft = (): PromoDraft => ({
+  code: "",
+  bonus_days: 7,
+  regular_traffic_gb: 0,
+  premium_traffic_gb: 0,
+  discount_percent: null,
+  duration_multiplier: null,
+  traffic_multiplier: null,
+  bonus_requires_payment: false,
+  applies_to: "all",
+  min_subscription_months: null,
+  min_subscription_days: null,
+  min_traffic_gb: null,
+  origin: "admin",
+  max_activations: 1,
+  valid_days: 30,
+});
+
+const defaultPromoPatchDraft = (): PromoPatch => ({
+  is_active: null,
+  bonus_days: null,
+  regular_traffic_gb: null,
+  premium_traffic_gb: null,
+  discount_percent: null,
+  duration_multiplier: null,
+  traffic_multiplier: null,
+  bonus_requires_payment: null,
+  applies_to: null,
+  min_subscription_months: null,
+  min_subscription_days: null,
+  min_traffic_gb: null,
+  origin: null,
+  max_activations: null,
+  valid_until: null,
+  clear_valid_until: null,
+});
+
+function promoToPatchDraft(promo: Promo): PromoPatch {
+  return {
+    is_active: promo.is_active,
+    bonus_days: promo.bonus_days,
+    regular_traffic_gb: promo.regular_traffic_gb,
+    premium_traffic_gb: promo.premium_traffic_gb,
+    discount_percent: promo.discount_percent,
+    duration_multiplier: promo.duration_multiplier,
+    traffic_multiplier: promo.traffic_multiplier,
+    bonus_requires_payment: promo.bonus_requires_payment,
+    applies_to: promo.applies_to,
+    min_subscription_months: null,
+    min_subscription_days:
+      promo.min_subscription_days ?? legacyMonthsToDays(promo.min_subscription_months),
+    min_traffic_gb: promo.min_traffic_gb,
+    origin: promo.origin,
+    max_activations: promo.max_activations,
+    valid_until: promo.valid_until,
+    clear_valid_until: false,
+  };
+}
+
+function finiteNumber(value: number | null | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeEffectPayload<T extends PromoEffectPayload>(payload: T): T {
+  const bonusDays = Math.max(0, Math.trunc(finiteNumber(payload.bonus_days, 0)));
+  const regularTrafficGb = Math.max(0, finiteNumber(payload.regular_traffic_gb, 0));
+  const premiumTrafficGb = Math.max(0, finiteNumber(payload.premium_traffic_gb, 0));
+  const discountPercent = finiteNumber(payload.discount_percent, 0);
+  const durationMultiplier = finiteNumber(payload.duration_multiplier, 1);
+  const trafficMultiplier = finiteNumber(payload.traffic_multiplier, 1);
+  return {
+    ...payload,
+    bonus_days: bonusDays,
+    regular_traffic_gb: regularTrafficGb,
+    premium_traffic_gb: premiumTrafficGb,
+    discount_percent: discountPercent > 0 ? discountPercent : null,
+    duration_multiplier: durationMultiplier > 1 ? durationMultiplier : null,
+    traffic_multiplier: trafficMultiplier > 1 ? trafficMultiplier : null,
+    bonus_requires_payment:
+      bonusDays > 0 || regularTrafficGb > 0 || premiumTrafficGb > 0
+        ? Boolean(payload.bonus_requires_payment)
+        : false,
+  } as T;
+}
+
+export function createPromosStore({
+  api,
+  onToast,
+  at = (key, _params, fallback) => fallback || key,
+  routePrefix = "",
+  queryClient = null,
+}: PromosStoreOptions): PromosStore {
+  let promos = $state.raw<Promo[]>([]);
+  let promoActivations = $state.raw<PromoActivation[]>([]);
+  const state = $state<Omit<PromosState, "promos" | "promoActivations">>({
+    promosTotal: 0,
+    promosPage: 0,
+    promosSort: "",
+    promosSearch: "",
+    promosStatus: "",
+    promosScope: "",
+    promoKind: "shared",
+    promoOwnedTotal: 0,
+    promosLoading: false,
+    promoCreateOpen: false,
+    promoDraft: defaultPromoDraft(),
+    promoEditOpen: false,
+    promoEditing: null,
+    promoEditDraft: defaultPromoPatchDraft(),
+    promoActivationsOpen: false,
+    promoActivationsPromo: null,
+    promoActivationsTotal: 0,
+    promoActivationsPage: 0,
+    promoActivationsSort: "date_desc",
+    promoActivationsLoading: false,
+    promoRevenueSummary: defaultPromoRevenueSummary(),
+  });
+  const store = Object.create(state) as PromosStore;
+  defineRawStateProperty(store, "promos", {
+    get: () => promos,
+    set: (value) => {
+      promos = value;
+    },
+  });
+  defineRawStateProperty(store, "promoActivations", {
+    get: () => promoActivations,
+    set: (value) => {
+      promoActivations = value;
+    },
+  });
+
+  const PROMOS_PAGE_SIZE = 25;
+  const ACTIVATIONS_PAGE_SIZE = 25;
+  let promosRequestSeq = 0;
+  let activationsRequestSeq = 0;
+  let active = "stats";
+
+  function setActive(section: string): void {
+    active = section;
+  }
+
+  function pushPromoPath(promoId: number | null): void {
+    if (typeof window === "undefined" || window.location.protocol === "file:") return;
+    if (active !== "promos") return;
+    const target = withRoutePrefix(
+      promoId ? buildAdminPromoPath(promoId) : buildAdminPromosPath(),
+      routePrefix
+    );
+    if (window.location.pathname === target) return;
+    window.history.pushState(null, "", `${target}${window.location.search}${window.location.hash}`);
+  }
+
+  function promosQueryKey(
+    page: number,
+    kind: PromoKind,
+    sort: string,
+    search: string,
+    status: PromoStatusFilter,
+    scope: PromoScopeFilter
+  ): AdminQueryKey {
+    return [
+      PROMOS_QUERY_KEY[0],
+      PROMOS_QUERY_KEY[1],
+      {
+        page,
+        kind,
+        sort,
+        search,
+        status,
+        scope,
+      },
+    ];
+  }
+
+  async function requestPromos(
+    page: number,
+    kind: PromoKind,
+    sort: string,
+    search: string,
+    status: PromoStatusFilter,
+    scope: PromoScopeFilter
+  ): Promise<PromosListResponse> {
+    const params = new URLSearchParams({
+      page: String(page),
+      page_size: String(PROMOS_PAGE_SIZE),
+      sort,
+    });
+    // The backend pages each kind on its own, so a tab never mixes the two.
+    if (kind !== "all") params.set("kind", kind);
+    if (search) params.set("search", search);
+    if (status) params.set("status", status);
+    if (scope) params.set("scope", scope);
+    const data = await api(buildAdminPromosPath(params));
+    if (!isOkResponse(data)) {
+      throw new AdminPromosError(adminErrorMessage(data, at, "Error"), data);
+    }
+    return data;
+  }
+
+  function promoActivationsQueryKey(promoId: number, page: number, sort: string): AdminQueryKey {
+    return [
+      PROMO_ACTIVATIONS_QUERY_KEY[0],
+      PROMO_ACTIVATIONS_QUERY_KEY[1],
+      PROMO_ACTIVATIONS_QUERY_KEY[2],
+      promoId,
+      page,
+      sort,
+    ];
+  }
+
+  async function requestPromoActivations(
+    promoId: number,
+    page: number,
+    sort: string
+  ): Promise<PromoActivationsResponse> {
+    const params = new URLSearchParams({
+      page: String(page),
+      page_size: String(ACTIVATIONS_PAGE_SIZE),
+      sort,
+    });
+    const data = await api(buildAdminPromoActivationsPath(promoId, params));
+    if (!isOkResponse(data)) {
+      throw new AdminPromosError(adminErrorMessage(data, at, "Error"), data);
+    }
+    return data;
+  }
+
+  function invalidatePromosQueries(): void {
+    invalidateAdminQuery(queryClient, PROMOS_QUERY_KEY);
+    invalidateAdminQuery(queryClient, PROMO_ACTIVATIONS_QUERY_KEY);
+  }
+
+  async function loadPromos({ refresh = false }: { refresh?: boolean } = {}): Promise<void> {
+    const requestSeq = ++promosRequestSeq;
+    state.promosLoading = true;
+    const currentPage = state.promosPage;
+    const currentKind = state.promoKind;
+    const currentSort = state.promosSort;
+    const currentSearch = state.promosSearch;
+    const currentStatus = state.promosStatus;
+    const currentScope = state.promosScope;
+    try {
+      const data = await fetchAdminQuery({
+        queryClient,
+        queryKey: promosQueryKey(
+          currentPage,
+          currentKind,
+          currentSort,
+          currentSearch,
+          currentStatus,
+          currentScope
+        ),
+        queryFn: () =>
+          requestPromos(
+            currentPage,
+            currentKind,
+            currentSort,
+            currentSearch,
+            currentStatus,
+            currentScope
+          ),
+        refresh,
+      });
+      const payload = unwrap(data);
+      if (requestSeq !== promosRequestSeq) return;
+      promos = payload.promos || [];
+      state.promosTotal = payload.total || 0;
+      state.promoOwnedTotal = payload.owned_total || 0;
+      // Nothing issues codes for a named customer here, so drop back to the
+      // plain single list instead of stranding the admin on an empty tab.
+      if (!state.promoOwnedTotal && currentKind !== "shared") {
+        state.promoKind = "shared";
+        state.promosPage = 0;
+        void loadPromos({ refresh });
+      }
+    } catch (error) {
+      if (requestSeq !== promosRequestSeq) return;
+      if (error instanceof AdminPromosError) {
+        onToast(adminErrorMessage(error.payload, at, "Error"));
+      } else {
+        onToast(error instanceof Error ? error.message : String(error || "Error"));
+      }
+    } finally {
+      if (requestSeq === promosRequestSeq) state.promosLoading = false;
+    }
+  }
+
+  async function createPromo(): Promise<void> {
+    const draft = normalizeEffectPayload(snapshotForPayload(state.promoDraft));
+
+    const res = await api(buildAdminPromosPath(), {
+      method: "POST",
+      body: JSON.stringify(draft satisfies PostPayload<"/api/admin/promos">),
+    });
+
+    if (isOkResponse(res)) {
+      invalidatePromosQueries();
+      onToast(at("promo_created_toast", {}, "Code created"));
+      state.promoCreateOpen = false;
+      state.promoDraft = defaultPromoDraft();
+      await loadPromos({ refresh: true });
+    } else {
+      onToast(adminErrorMessage(res, at, "Error"));
+    }
+  }
+
+  async function savePromo(): Promise<void> {
+    const promo = snapshotForPayload(state.promoEditing);
+    if (!promo) return;
+    const path = buildAdminPromoPath(promo.id);
+    const draft = normalizeEffectPayload(snapshotForPayload(state.promoEditDraft));
+    const res = await api(path, {
+      method: "PATCH" as const,
+      body: JSON.stringify(draft),
+    });
+    if (isOkResponse(res)) {
+      invalidatePromosQueries();
+      const payload = unwrap(res);
+      promos = promos.map((p) => (p.id === promo.id ? payload.promo : p));
+      state.promoEditing = payload.promo;
+      state.promoEditDraft = promoToPatchDraft(payload.promo);
+      closeEditPromo();
+      onToast(at("promo_saved_toast", {}, "Code saved"));
+    } else {
+      onToast(adminErrorMessage(res, at, "Error"));
+    }
+  }
+
+  async function togglePromo(promo: Promo): Promise<void> {
+    const promoSnapshot = snapshotForPayload(promo);
+    const path = buildAdminPromoPath(promoSnapshot.id);
+    const body = { is_active: !promoSnapshot.is_active } satisfies Partial<PromoPatch>;
+    const res = await api(path, {
+      method: "PATCH" as const,
+      body: JSON.stringify(body),
+    });
+    if (isOkResponse(res)) {
+      invalidatePromosQueries();
+      const payload = unwrap(res);
+      promos = promos.map((p) => (p.id === promo.id ? payload.promo : p));
+    } else {
+      onToast(adminErrorMessage(res, at, "Error"));
+    }
+  }
+
+  async function deletePromo(promo: Promo): Promise<void> {
+    const path = buildAdminPromoPath(promo.id);
+    const res = await api(path, { method: "DELETE" });
+    if (isOkResponse(res)) {
+      invalidatePromosQueries();
+      promos = promos.filter((p) => p.id !== promo.id);
+      if (state.promoEditing?.id === promo.id) closeEditPromo();
+      if (state.promoActivationsPromo?.id === promo.id) closeActivations();
+      onToast(at("promo_deleted_toast", {}, "Code deleted"));
+    } else {
+      onToast(adminErrorMessage(res, at, "Error"));
+    }
+  }
+
+  function openEditPromo(promo: Promo, options: PromoOpenOptions = {}): void {
+    state.promoCreateOpen = false;
+    state.promoEditing = promo;
+    state.promoEditDraft = promoToPatchDraft(promo);
+    state.promoEditOpen = true;
+    if (!options.skipPush) pushPromoPath(promo.id);
+  }
+
+  async function openPromoById(promoId: number, options: PromoOpenOptions = {}): Promise<void> {
+    if (!options.skipPush) pushPromoPath(promoId);
+    const cached = promos.find((promo) => promo.id === promoId);
+    if (cached) {
+      openEditPromo(cached, { skipPush: true });
+      return;
+    }
+    try {
+      const response: PromoDetailResponse = await api(buildAdminPromoPath(promoId));
+      if (!isOkResponse(response)) {
+        onToast(adminErrorMessage(response, at, "promo_load_failed"));
+        if (!options.skipPush) pushPromoPath(null);
+        return;
+      }
+      const promo = unwrap(response).promo;
+      openEditPromo(promo, { skipPush: true });
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : String(error || "promo_load_failed"));
+      if (!options.skipPush) pushPromoPath(null);
+    }
+  }
+
+  function closeEditPromo(options: PromoOpenOptions = {}): void {
+    const wasOpen = state.promoEditOpen || Boolean(state.promoEditing);
+    state.promoEditOpen = false;
+    state.promoEditing = null;
+    state.promoEditDraft = defaultPromoPatchDraft();
+    if (wasOpen && !options.skipPush) pushPromoPath(null);
+  }
+
+  function updateEditDraft(fields: Partial<PromoPatch>): void {
+    state.promoEditDraft = { ...state.promoEditDraft, ...fields };
+  }
+
+  async function copyToClipboard(
+    text: string | null | undefined,
+    successMessage = at("link_copied", {}, "Link copied")
+  ): Promise<void> {
+    if (!text) return;
+    await copyTextToClipboard(text);
+    onToast(successMessage);
+  }
+
+  async function openActivations(promo: Promo): Promise<void> {
+    state.promoActivationsPromo = promo;
+    state.promoActivationsOpen = true;
+    state.promoActivationsPage = 0;
+    await loadActivations(0);
+  }
+
+  function closeActivations(): void {
+    activationsRequestSeq += 1;
+    state.promoActivationsOpen = false;
+    state.promoActivationsPromo = null;
+    promoActivations = [];
+    state.promoActivationsTotal = 0;
+    state.promoActivationsPage = 0;
+    state.promoRevenueSummary = defaultPromoRevenueSummary();
+  }
+
+  async function loadActivations(page = state.promoActivationsPage): Promise<void> {
+    const promo = state.promoActivationsPromo;
+    if (!promo) return;
+    const requestSeq = ++activationsRequestSeq;
+    state.promoActivationsLoading = true;
+    state.promoActivationsPage = page;
+    try {
+      const data = await fetchAdminQuery({
+        queryClient,
+        queryKey: promoActivationsQueryKey(promo.id, page, state.promoActivationsSort),
+        queryFn: () => requestPromoActivations(promo.id, page, state.promoActivationsSort),
+      });
+      const payload = unwrap(data);
+      if (requestSeq !== activationsRequestSeq || state.promoActivationsPromo?.id !== promo.id)
+        return;
+      promoActivations = payload.activations || [];
+      state.promoActivationsTotal = payload.total || 0;
+      state.promoRevenueSummary = payload.revenue_summary || defaultPromoRevenueSummary();
+    } catch (error) {
+      if (requestSeq !== activationsRequestSeq) return;
+      if (error instanceof AdminPromosError) {
+        onToast(adminErrorMessage(error.payload, at, "Error"));
+      } else {
+        onToast(error instanceof Error ? error.message : String(error || "Error"));
+      }
+    } finally {
+      if (requestSeq === activationsRequestSeq) state.promoActivationsLoading = false;
+    }
+  }
+
+  function setActivationsPage(page: number): void {
+    void loadActivations(page);
+  }
+
+  function setPage(page: number): void {
+    state.promosPage = page;
+    void loadPromos();
+  }
+
+  function setSort(sort: string): void {
+    state.promosSort = sort;
+    state.promosPage = 0;
+    void loadPromos();
+  }
+
+  function setSearch(search: string): void {
+    state.promosSearch = search.trim();
+    state.promosPage = 0;
+    void loadPromos();
+  }
+
+  function setStatus(status: PromoStatusFilter): void {
+    if (state.promosStatus === status) return;
+    state.promosStatus = status;
+    state.promosPage = 0;
+    void loadPromos();
+  }
+
+  function setScope(scope: PromoScopeFilter): void {
+    if (state.promosScope === scope) return;
+    state.promosScope = scope;
+    state.promosPage = 0;
+    void loadPromos();
+  }
+
+  function setActivationsSort(sort: string): void {
+    state.promoActivationsSort = sort;
+    void loadActivations(0);
+  }
+
+  function setPromoKind(kind: PromoKind): void {
+    if (state.promoKind === kind) return;
+    state.promoKind = kind;
+    // Each tab has its own paging, so switching starts from the first page.
+    state.promosPage = 0;
+    void loadPromos();
+  }
+
+  function setCreateOpen(open: boolean): void {
+    if (open) {
+      closeEditPromo();
+      closeActivations();
+    }
+    state.promoCreateOpen = open;
+  }
+
+  function updateDraft(fields: Partial<PromoDraft>): void {
+    state.promoDraft = { ...state.promoDraft, ...fields };
+  }
+
+  return Object.assign(store, {
+    setActive,
+    loadPromos,
+    createPromo,
+    savePromo,
+    togglePromo,
+    deletePromo,
+    openEditPromo,
+    openPromoById,
+    closeEditPromo,
+    updateEditDraft,
+    copyToClipboard,
+    openActivations,
+    closeActivations,
+    loadActivations,
+    setActivationsPage,
+    setPage,
+    setSort,
+    setSearch,
+    setStatus,
+    setScope,
+    setActivationsSort,
+    setPromoKind,
+    setCreateOpen,
+    updateDraft,
+    PROMOS_PAGE_SIZE,
+    ACTIVATIONS_PAGE_SIZE,
+  });
+}

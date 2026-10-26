@@ -1,0 +1,1066 @@
+import json
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from pydantic import ValidationError
+
+from bot.app.web.admin_payment_method_order import payment_method_order_options
+from bot.services import settings_override_service
+from config.settings import Settings
+from config.telegram_proxy import redact_telegram_proxy_credentials
+
+
+class SettingsTests(unittest.TestCase):
+    def _settings(self, **overrides) -> Settings:
+        values = {
+            "_env_file": None,
+            "BOT_TOKEN": "token",
+            "POSTGRES_USER": "app_user",
+            "POSTGRES_PASSWORD": "app_password",
+        }
+        values.update(overrides)
+        return Settings(**values)
+
+    def test_user_theme_mode_selection_defaults_on_and_can_be_disabled(self):
+        self.assertTrue(self._settings().webapp_settings.user_theme_mode_enabled)
+        self.assertFalse(
+            self._settings(
+                WEBAPP_USER_THEME_MODE_ENABLED=False
+            ).webapp_settings.user_theme_mode_enabled
+        )
+
+    def test_compact_home_defaults_off_and_can_be_enabled(self):
+        self.assertFalse(self._settings().webapp_settings.compact_home_enabled)
+        self.assertTrue(
+            self._settings(WEBAPP_COMPACT_HOME_ENABLED=True).webapp_settings.compact_home_enabled
+        )
+
+    def test_admin_theme_effects_default_off_and_can_be_enabled(self):
+        self.assertFalse(self._settings().webapp_settings.admin_theme_effects_enabled)
+        self.assertTrue(
+            self._settings(
+                WEBAPP_ADMIN_THEME_EFFECTS_ENABLED=True
+            ).webapp_settings.admin_theme_effects_enabled
+        )
+
+    def test_compact_login_defaults_on_and_wide_buttons_only_include_available_providers(self):
+        self.assertTrue(self._settings().webapp_settings.compact_login_enabled)
+        self.assertFalse(
+            self._settings(WEBAPP_COMPACT_LOGIN_ENABLED=False).webapp_settings.compact_login_enabled
+        )
+        self.assertEqual(self._settings().webapp_wide_auth_providers, [])
+        email_available = self._settings(APP_RUNTIME_MODE="test", QA_AUTH_ENABLED=True)
+        self.assertEqual(email_available.webapp_wide_auth_providers, ["email"])
+
+        configured = self._settings(
+            WEBAPP_COMPACT_LOGIN_ENABLED=True,
+            TELEGRAM_LOGIN_WIDE_BUTTON=True,
+            GOOGLE_LOGIN_WIDE_BUTTON=True,
+            PASSKEY_LOGIN_ENABLED=True,
+            PASSKEY_LOGIN_WIDE_BUTTON=True,
+        )
+        self.assertTrue(configured.webapp_settings.compact_login_enabled)
+        self.assertEqual(configured.webapp_wide_auth_providers, ["telegram", "passkey"])
+
+    def test_checkout_addon_ux_defaults_and_overrides(self):
+        defaults = self._settings().webapp_settings
+        self.assertTrue(defaults.checkout_addon_value_animation_enabled)
+        self.assertFalse(defaults.checkout_addon_editor_expanded_by_default)
+
+        configured = self._settings(
+            WEBAPP_CHECKOUT_ADDON_VALUE_ANIMATION_ENABLED=False,
+            WEBAPP_CHECKOUT_ADDON_EDITOR_EXPANDED_BY_DEFAULT=True,
+        ).webapp_settings
+        self.assertFalse(configured.checkout_addon_value_animation_enabled)
+        self.assertTrue(configured.checkout_addon_editor_expanded_by_default)
+
+    def test_server_status_home_card_defaults_off_and_can_be_enabled(self):
+        self.assertFalse(self._settings().SERVER_STATUS_SHOW_ON_HOME)
+        self.assertTrue(self._settings(SERVER_STATUS_SHOW_ON_HOME=True).SERVER_STATUS_SHOW_ON_HOME)
+
+    def test_user_balance_topup_limits_must_be_finite(self):
+        for field in ("USER_BALANCE_TOPUP_MIN_AMOUNT", "USER_BALANCE_TOPUP_MAX_AMOUNT"):
+            with self.subTest(field=field), self.assertRaises(ValidationError):
+                self._settings(**{field: float("inf")})
+
+    def test_telegram_bot_proxy_defaults_to_none_and_normalizes_blank(self):
+        self.assertIsNone(self._settings().TELEGRAM_BOT_PROXY_URL)
+        self.assertIsNone(self._settings(TELEGRAM_BOT_PROXY_URL="  ").TELEGRAM_BOT_PROXY_URL)
+
+    def test_telegram_bot_proxy_accepts_supported_endpoint_forms(self):
+        valid_urls = (
+            "socks5://proxy.example.com:1080",
+            "socks5://192.0.2.10:1080",
+            "socks5://[2001:db8::10]:1080",
+            "socks5://user%40example:p%3A%2F%23@proxy.example.com:1080",
+        )
+
+        for proxy_url in valid_urls:
+            with self.subTest(proxy_url=proxy_url):
+                configured = self._settings(TELEGRAM_BOT_PROXY_URL=proxy_url)
+                assert configured.TELEGRAM_BOT_PROXY_URL is not None
+                self.assertEqual(
+                    configured.TELEGRAM_BOT_PROXY_URL.get_secret_value(),
+                    proxy_url,
+                )
+
+    def test_telegram_bot_api_base_url_defaults_and_normalizes(self):
+        self.assertIsNone(self._settings().TELEGRAM_BOT_API_BASE_URL)
+        self.assertIsNone(self._settings(TELEGRAM_BOT_API_BASE_URL="  ").TELEGRAM_BOT_API_BASE_URL)
+        self.assertEqual(
+            self._settings(
+                TELEGRAM_BOT_API_BASE_URL=" http://telegram-bot-api:8081/ "
+            ).TELEGRAM_BOT_API_BASE_URL,
+            "http://telegram-bot-api:8081",
+        )
+
+    def test_telegram_bot_api_base_url_rejects_unsafe_or_ambiguous_urls(self):
+        for api_url in (
+            "telegram-bot-api:8081",
+            "ftp://telegram-bot-api:8081",
+            "http://user:password@telegram-bot-api:8081",
+            "http://telegram-bot-api:invalid",
+            "http://telegram-bot-api:8081?mode=local",
+            "http://telegram-bot-api:8081#local",
+        ):
+            with self.subTest(api_url=api_url), self.assertRaises(ValidationError):
+                self._settings(TELEGRAM_BOT_API_BASE_URL=api_url)
+
+    def test_telegram_bot_proxy_rejects_unsupported_or_ambiguous_urls(self):
+        invalid_urls = (
+            "http://proxy.example.com:1080",
+            "https://proxy.example.com:1080",
+            "socks4://proxy.example.com:1080",
+            "socks5h://proxy.example.com:1080",
+            "SOCKS5://proxy.example.com:1080",
+            "socks5://proxy.example.com",
+            "socks5://proxy.example.com:0",
+            "socks5://proxy.example.com:65536",
+            "socks5://:1080",
+            "socks5://proxy.example.com:1080/",
+            "socks5://proxy.example.com:1080/path",
+            "socks5://proxy.example.com:1080?mode=test",
+            "socks5://proxy.example.com:1080?",
+            "socks5://proxy.example.com:1080#fragment",
+            "socks5://proxy.example.com:1080#",
+            "socks5://user@proxy.example.com:1080",
+            "socks5://user:@proxy.example.com:1080",
+            "socks5://:password@proxy.example.com:1080",
+            "socks5://user:raw/password@proxy.example.com:1080",
+            "socks5://user:bad%2@proxy.example.com:1080",
+            "socks5://2001:db8::10:1080",
+        )
+
+        for proxy_url in invalid_urls:
+            with self.subTest(proxy_url=proxy_url), self.assertRaises(ValidationError):
+                self._settings(TELEGRAM_BOT_PROXY_URL=proxy_url)
+
+    def test_common_proxy_environment_variables_do_not_enable_telegram_proxy(self):
+        proxy_url = "socks5://user:password@proxy.example.com:1080"
+        with patch.dict(
+            os.environ,
+            {
+                "PROXY_URL": proxy_url,
+                "ALL_PROXY": proxy_url,
+                "HTTPS_PROXY": proxy_url,
+            },
+            clear=True,
+        ):
+            settings = self._settings()
+
+        self.assertIsNone(settings.TELEGRAM_BOT_PROXY_URL)
+
+    def test_telegram_bot_proxy_credentials_are_redacted_from_errors_and_logs(self):
+        password = "never-log-this-password"
+        proxy_url = f"socks5://user:{password}@proxy.example.com:1080/path"
+
+        with self.assertRaises(ValidationError) as error:
+            self._settings(TELEGRAM_BOT_PROXY_URL=proxy_url)
+
+        self.assertNotIn(password, str(error.exception))
+        redacted = redact_telegram_proxy_credentials(
+            f"Cannot connect through {proxy_url}: authentication failed"
+        )
+        self.assertNotIn(password, redacted)
+        self.assertIn("socks5://***:***@proxy.example.com:1080/path", redacted)
+
+    def test_telegram_oauth_reuses_configured_bot_proxy_by_default(self):
+        self.assertIs(self._settings().TELEGRAM_OAUTH_USE_BOT_PROXY, True)
+        configured = self._settings(
+            TELEGRAM_BOT_PROXY_URL="socks5://proxy.example.com:1080",
+        )
+        self.assertIs(configured.TELEGRAM_OAUTH_USE_BOT_PROXY, True)
+
+        opted_out = self._settings(
+            TELEGRAM_BOT_PROXY_URL="socks5://proxy.example.com:1080",
+            TELEGRAM_OAUTH_USE_BOT_PROXY=False,
+        )
+        self.assertIs(opted_out.TELEGRAM_OAUTH_USE_BOT_PROXY, False)
+
+    def test_blank_postgres_password_is_rejected(self):
+        with self.assertRaises(ValidationError):
+            Settings(
+                _env_file=None,
+                BOT_TOKEN="token",
+                POSTGRES_USER="app_user",
+                POSTGRES_PASSWORD="",
+            )
+
+    def test_webapp_secrets_are_generated_when_missing(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+        )
+
+        self.assertTrue(settings.WEBAPP_SESSION_SECRET)
+        self.assertTrue(settings.WEBHOOK_SECRET_TOKEN)
+        self.assertEqual(settings.WEBAPP_SESSION_TTL_SECONDS, 30 * 24 * 60 * 60)
+
+    def test_webapp_title_defaults_to_minishop(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+        )
+
+        self.assertEqual(settings.WEBAPP_TITLE, "/minishop")
+
+    def test_webapp_api_base_url_defaults_to_same_origin_api(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+        )
+
+        self.assertEqual(settings.WEBAPP_API_BASE_URL, "/api")
+
+    def test_internal_webhook_port_is_independent_from_host_port(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            WEB_SERVER_PORT=9090,
+            WEB_SERVER_INTERNAL_PORT=8080,
+        )
+
+        self.assertEqual(settings.WEB_SERVER_PORT, 9090)
+        self.assertEqual(settings.web_server_listen_port, 8080)
+
+    def test_direct_run_falls_back_to_legacy_webhook_port(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            WEB_SERVER_PORT=9090,
+        )
+
+        self.assertEqual(settings.web_server_listen_port, 9090)
+
+    def test_webapp_api_base_url_strips_same_origin_trailing_slashes(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            WEBAPP_API_BASE_URL="/api/",
+        )
+
+        self.assertEqual(settings.WEBAPP_API_BASE_URL, "/api")
+
+    def test_minishop_edge_token_settings_are_optional_and_stripped(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            MINISHOP_EDGE_TOKEN="  edge-secret  ",
+            MINISHOP_EDGE_TOKEN_HEADER="",
+        )
+
+        self.assertEqual(settings.MINISHOP_EDGE_TOKEN, "edge-secret")
+        self.assertEqual(settings.MINISHOP_EDGE_TOKEN_HEADER, "X-Minishop-Edge-Token")
+
+    def test_trusted_proxies_default_names_only_standard_services_and_loopback(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+        )
+
+        self.assertEqual(
+            settings.trusted_proxies,
+            [
+                "127.0.0.1",
+                "::1",
+                "host:frontend",
+                "host:caddy",
+                "host:nginx",
+                "host:angie",
+                "host:newt",
+                "host:newt-2",
+            ],
+        )
+
+    def test_panel_write_mode_defaults_to_live_in_production(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+        )
+
+        self.assertEqual(settings.APP_RUNTIME_MODE, "production")
+        self.assertEqual(settings.PANEL_WRITE_MODE, "auto")
+        self.assertFalse(settings.panel_dry_run_enabled)
+
+    def test_development_runtime_enables_panel_dry_run_in_auto_mode(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            APP_RUNTIME_MODE="development",
+        )
+
+        self.assertTrue(settings.panel_dry_run_enabled)
+
+    def test_panel_write_mode_live_overrides_development_runtime(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            APP_RUNTIME_MODE="development",
+            PANEL_WRITE_MODE="live",
+        )
+
+        self.assertFalse(settings.panel_dry_run_enabled)
+
+    def test_panel_write_mode_rejects_unknown_value(self):
+        with self.assertRaises(ValidationError):
+            Settings(
+                _env_file=None,
+                BOT_TOKEN="token",
+                POSTGRES_USER="app_user",
+                POSTGRES_PASSWORD="app_password",
+                PANEL_WRITE_MODE="danger",
+            )
+
+    def test_legacy_subscription_prices_have_defaults(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            TARIFFS_CONFIG_PATH="missing-tariffs.json",
+        )
+
+        self.assertEqual(
+            settings.subscription_options,
+            {1: 200.0, 3: 600.0, 6: 1200.0, 12: 2400.0},
+        )
+
+    def test_payment_settings_view_reflects_payment_fields(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            DEFAULT_CURRENCY_SYMBOL="EUR",
+            PAYMENT_REQUEST_TIMEOUT_SECONDS=7,
+            PAYMENT_METHODS_ORDER="stars,severpay",
+            TARIFFS_CONFIG_PATH="missing-tariffs.json",
+            TRAFFIC_PACKAGES="10:199,50:799",
+            STARS_TRAFFIC_PACKAGES="10:1000",
+        )
+
+        payment_settings = settings.payment_settings
+
+        self.assertEqual(payment_settings.default_currency_symbol, "EUR")
+        self.assertEqual(payment_settings.payment_request_timeout_seconds, 7)
+        self.assertEqual(payment_settings.payment_methods_order[:2], ["stars", "severpay"])
+        self.assertIn("stripe", payment_settings.payment_methods_order)
+        self.assertEqual(
+            payment_settings.subscription_options,
+            settings.subscription_options,
+        )
+        self.assertEqual(
+            payment_settings.stars_subscription_options,
+            settings.stars_subscription_options,
+        )
+        self.assertEqual(payment_settings.traffic_packages, {10.0: 199.0, 50.0: 799.0})
+        self.assertEqual(payment_settings.stars_traffic_packages, {10.0: 1000})
+        self.assertTrue(payment_settings.traffic_sale_mode)
+
+    def test_payment_method_order_options_keep_legacy_and_multi_button_providers(self):
+        settings = self._settings(
+            PAYMENT_METHODS_ORDER="custom_gateway,platega,stars",
+            STARS_ENABLED=True,
+        )
+
+        options = payment_method_order_options(settings)
+        options_by_id = {option["id"]: option for option in options}
+        option_ids = [option["id"] for option in options]
+
+        self.assertEqual(option_ids[0], "custom_gateway")
+        self.assertFalse(options_by_id["custom_gateway"]["known"])
+        self.assertTrue(options_by_id["stars"]["enabled"])
+        self.assertGreater(
+            len([option for option in options if option["provider_id"] == "platega"]),
+            1,
+        )
+        self.assertEqual(len(option_ids), len(set(option_ids)))
+
+    def test_referral_settings_view_reflects_referral_fields(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            REFERRAL_PROGRAM_ENABLED=False,
+            REFERRAL_BONUS_DAYS_1_MONTH=5,
+            REFEREE_BONUS_DAYS_12_MONTHS=11,
+            REFERRAL_ONE_BONUS_PER_REFEREE=False,
+            REFERRAL_WELCOME_BONUS_DAYS=9,
+            REFERRAL_WELCOME_BONUS_WITHOUT_TELEGRAM_ENABLED=False,
+            REFERRAL_WEBAPP_LINK_ENABLED=False,
+            REFERRAL_TELEGRAM_LINK_ENABLED=True,
+            LEGACY_REFS=False,
+        )
+
+        referral_settings = settings.referral_settings
+
+        self.assertFalse(referral_settings.enabled)
+        self.assertEqual(referral_settings.bonus_days_inviter_1_month, 5)
+        self.assertEqual(referral_settings.bonus_days_inviter_3_months, 7)
+        self.assertEqual(referral_settings.bonus_days_referee_12_months, 11)
+        self.assertEqual(referral_settings.bonus_days_referee_1_month, 1)
+        self.assertFalse(referral_settings.one_bonus_per_referee)
+        self.assertEqual(referral_settings.welcome_bonus_days, 9)
+        self.assertFalse(referral_settings.welcome_bonus_without_telegram_enabled)
+        self.assertFalse(referral_settings.webapp_link_enabled)
+        self.assertTrue(referral_settings.telegram_link_enabled)
+        self.assertFalse(referral_settings.legacy_refs_enabled)
+
+    def test_referral_settings_require_at_least_one_visible_link(self):
+        with self.assertRaisesRegex(
+            ValidationError,
+            "at least one referral link must remain enabled",
+        ):
+            Settings(
+                _env_file=None,
+                BOT_TOKEN="token",
+                POSTGRES_USER="app_user",
+                POSTGRES_PASSWORD="app_password",
+                REFERRAL_WEBAPP_LINK_ENABLED=False,
+                REFERRAL_TELEGRAM_LINK_ENABLED=False,
+            )
+
+    def test_partner_program_optional_modes_are_opt_in(self):
+        defaults = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+        )
+        enabled = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            PARTNER_AUTO_ENROLLMENT_ENABLED=True,
+            PARTNER_REFERRAL_PROGRAM_DISABLED=True,
+        )
+
+        self.assertFalse(defaults.partner_settings.auto_enrollment_enabled)
+        self.assertFalse(defaults.partner_settings.referral_program_disabled)
+        self.assertTrue(enabled.partner_settings.auto_enrollment_enabled)
+        self.assertTrue(enabled.partner_settings.referral_program_disabled)
+
+    def test_webapp_auth_providers_describe_available_login_methods(self):
+        telegram_only = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+        )
+        email_enabled = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            APP_RUNTIME_MODE="test",
+            QA_AUTH_ENABLED=True,
+        )
+        discord_enabled = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            DISCORD_OIDC_ENABLED=True,
+            DISCORD_OIDC_CLIENT_ID="discord-client",
+            DISCORD_OIDC_CLIENT_SECRET="discord-secret",
+        )
+
+        self.assertEqual(telegram_only.webapp_auth_providers, ["telegram"])
+        self.assertEqual(email_enabled.webapp_auth_providers, ["telegram", "email"])
+        self.assertEqual(discord_enabled.webapp_auth_providers, ["telegram", "discord"])
+
+    def test_webapp_recommended_auth_providers_filter_available_methods(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            APP_RUNTIME_MODE="test",
+            QA_AUTH_ENABLED=True,
+            GOOGLE_OIDC_ENABLED=True,
+            GOOGLE_OIDC_CLIENT_ID="google-client",
+            GOOGLE_OIDC_CLIENT_SECRET="google-secret",
+            YANDEX_OIDC_ENABLED=True,
+            YANDEX_OIDC_CLIENT_ID="yandex-client",
+            YANDEX_OIDC_CLIENT_SECRET="yandex-secret",
+            DISCORD_OIDC_ENABLED=True,
+            DISCORD_OIDC_CLIENT_ID="discord-client",
+            DISCORD_OIDC_CLIENT_SECRET="discord-secret",
+            PASSKEY_LOGIN_ENABLED=True,
+            TELEGRAM_LOGIN_RECOMMENDED=False,
+            GOOGLE_LOGIN_RECOMMENDED=False,
+            DISCORD_LOGIN_RECOMMENDED=False,
+        )
+
+        self.assertEqual(
+            settings.webapp_auth_providers,
+            ["telegram", "email", "google", "yandex", "discord", "passkey"],
+        )
+        self.assertEqual(
+            settings.webapp_recommended_auth_providers,
+            ["email", "yandex", "passkey"],
+        )
+
+    def test_registration_settings_view_reflects_invite_only_flag(self):
+        default_settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+        )
+        enabled_settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            REGISTRATION_INVITE_ONLY_ENABLED=True,
+        )
+
+        self.assertFalse(default_settings.registration_settings.invite_only_enabled)
+        self.assertTrue(enabled_settings.registration_settings.invite_only_enabled)
+
+    def test_support_settings_view_reflects_support_fields(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            SUPPORT_LINK="https://t.me/support",
+            SUPPORT_TICKETS_ENABLED=False,
+            SUPPORT_TICKET_MAX_BODY_LENGTH=1000,
+            SUPPORT_TICKET_RATE_LIMIT_PER_HOUR=2,
+            SUPPORT_ADMIN_TELEGRAM_NOTIFICATIONS_ENABLED=False,
+            SUPPORT_ADMIN_EMAIL_NOTIFICATIONS_ENABLED=True,
+        )
+
+        support_settings = settings.support_settings
+
+        self.assertEqual(support_settings.link, "https://t.me/support")
+        self.assertFalse(support_settings.tickets_enabled)
+        self.assertEqual(support_settings.ticket_max_body_length, 1000)
+        self.assertEqual(support_settings.ticket_max_subject_length, 160)
+        self.assertFalse(support_settings.admin_telegram_notifications_enabled)
+        self.assertEqual(support_settings.ticket_rate_limit_per_hour, 2)
+        self.assertEqual(support_settings.message_rate_limit_per_minute, 10)
+        self.assertEqual(support_settings.image_rate_limit_per_day, 20)
+        self.assertTrue(support_settings.admin_email_notifications_enabled)
+        self.assertEqual(support_settings.admin_notification_cooldown_seconds, 300)
+        self.assertEqual(support_settings.admin_email_cooldown_seconds, 1800)
+
+    def test_support_link_normalizes_telegram_shortcuts(self):
+        for raw in ("@help_center_bot", "t.me/help_center_bot"):
+            with self.subTest(raw=raw):
+                settings = Settings(
+                    _env_file=None,
+                    BOT_TOKEN="token",
+                    POSTGRES_USER="app_user",
+                    POSTGRES_PASSWORD="app_password",
+                    SUPPORT_LINK=raw,
+                )
+
+                self.assertEqual(settings.SUPPORT_LINK, "https://t.me/help_center_bot")
+                self.assertEqual(
+                    settings.support_settings.link,
+                    "https://t.me/help_center_bot",
+                )
+
+    def test_support_link_rejects_values_that_cannot_form_a_button_url(self):
+        with self.assertRaises(ValidationError):
+            Settings(
+                _env_file=None,
+                BOT_TOKEN="token",
+                POSTGRES_USER="app_user",
+                POSTGRES_PASSWORD="app_password",
+                SUPPORT_LINK="not a link",
+            )
+
+    def test_support_link_preserves_external_https_url(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            SUPPORT_LINK="https://support.example.test/help",
+        )
+
+        self.assertEqual(
+            settings.support_settings.link,
+            "https://support.example.test/help",
+        )
+
+    def test_panel_settings_view_reflects_panel_fields(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            PANEL_API_URL="https://panel.example.com",
+            PANEL_API_KEY="secret-key",
+            PANEL_WEBHOOK_SECRET="hook",
+            APP_RUNTIME_MODE="development",
+        )
+
+        panel_settings = settings.panel_settings
+
+        self.assertEqual(panel_settings.api_url, "https://panel.example.com")
+        self.assertEqual(panel_settings.api_key, "secret-key")
+        self.assertIsNone(panel_settings.api_cookie)
+        self.assertEqual(panel_settings.webhook_secret, "hook")
+        self.assertEqual(panel_settings.write_mode, "auto")
+        self.assertTrue(panel_settings.dry_run_enabled)
+        self.assertEqual(panel_settings.api_total_timeout_seconds, 25)
+        self.assertEqual(panel_settings.api_connect_timeout_seconds, 8)
+        self.assertEqual(panel_settings.api_sock_read_timeout_seconds, 15)
+
+    def test_public_panel_url_keeps_internal_api_settings(self):
+        settings = self._settings(
+            PANEL_API_URL="http://remnawave:3000/api",
+            PANEL_PUBLIC_URL="https://panel.example.com",
+        )
+
+        self.assertEqual(settings.panel_settings.api_url, "http://remnawave:3000/api")
+        self.assertEqual(settings.PANEL_PUBLIC_URL, "https://panel.example.com")
+        self.assertIsNone(self._settings().PANEL_PUBLIC_URL)
+
+    def test_compatibility_settings_view_reflects_migration_fields(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            MIGRATION_REMNASHOP_REFERRAL_CODE_COMPAT_ENABLED=True,
+            MIGRATION_REMNASHOP_IMPORTED_AT="2026-01-02T03:04:05Z",
+            MIGRATION_REMNASHOP_NOTES="migrated batch 1",
+        )
+
+        compatibility_settings = settings.compatibility_settings
+
+        self.assertTrue(compatibility_settings.remnashop_referral_code_compat_enabled)
+        self.assertFalse(compatibility_settings.remnashop_promo_code_compat_enabled)
+        self.assertEqual(compatibility_settings.remnashop_imported_at, "2026-01-02T03:04:05Z")
+        self.assertEqual(compatibility_settings.remnashop_notes, "migrated batch 1")
+
+    def test_subscription_guides_defaults_are_enabled(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+        )
+
+        self.assertTrue(settings.SUBSCRIPTION_GUIDES_ENABLED)
+        self.assertTrue(settings.SUBSCRIPTION_GATEWAY_ENABLED)
+        self.assertEqual(settings.SUBSCRIPTION_LINK_MODE, "panel")
+        self.assertTrue(settings.SUBSCRIPTION_GUIDES_BOT_MENU_ENABLED)
+        self.assertTrue(settings.SUBSCRIPTION_PAGE_CONFIG_PANEL_ENABLED)
+        self.assertFalse(settings.SUBSCRIPTION_PAGE_CONFIG_JSON_OVERRIDE_ENABLED)
+        self.assertEqual(
+            settings.SUBSCRIPTION_PAGE_CONFIG_PATH,
+            "data/subpage-config/multiapp.json",
+        )
+        self.assertEqual(settings.SUBSCRIPTION_PAGE_CONFIG_JSON, "")
+        self.assertEqual(settings.SUBSCRIPTION_GUIDES_CONFIG_CACHE_TTL_SECONDS, 300)
+        self.assertEqual(settings.SUBSCRIPTION_GUIDES_RESOLVED_CACHE_TTL_SECONDS, 300)
+        self.assertEqual(settings.SUBSCRIPTION_GUIDES_PUBLIC_CACHE_TTL_SECONDS, 300)
+
+    def test_deprecated_webapp_appearance_env_values_are_ignored(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            WEBAPP_PRIMARY_COLOR="#ff0000",
+            WEBAPP_LOGO_URL="https://cdn.example.com/logo.png",
+            WEBAPP_FAVICON_USE_CUSTOM=True,
+            WEBAPP_FAVICON_URL="https://cdn.example.com/favicon.png",
+            WEBAPP_LOGO_FAVICON_URL="/webapp-favicon/abcdef1234567890/icon-180.png",
+        )
+
+        self.assertEqual(settings.WEBAPP_PRIMARY_COLOR, "#00fe7a")
+        self.assertIsNone(settings.WEBAPP_LOGO_URL)
+        self.assertFalse(settings.WEBAPP_FAVICON_USE_CUSTOM)
+        self.assertIsNone(settings.WEBAPP_FAVICON_URL)
+        self.assertIsNone(settings.WEBAPP_LOGO_FAVICON_URL)
+
+    def test_tariffs_config_missing_uses_legacy_fallback(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            TARIFFS_CONFIG_PATH="missing-tariffs.json",
+            TRAFFIC_PACKAGES="10:199",
+        )
+
+        self.assertIsNone(settings.tariffs_config)
+        self.assertTrue(settings.traffic_sale_mode)
+
+    def test_existing_tariffs_config_disables_legacy_traffic_mode(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "tariffs.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "default_tariff": "standard",
+                        "tariffs": [
+                            {
+                                "key": "standard",
+                                "names": {"ru": "Стандарт"},
+                                "descriptions": {},
+                                "squad_uuids": ["uuid"],
+                                "billing_model": "period",
+                                "monthly_gb": 100,
+                                "prices_rub": {"1": 150},
+                                "prices_stars": {"1": 0},
+                                "enabled_periods": [1],
+                                "enabled": True,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = Settings(
+                _env_file=None,
+                BOT_TOKEN="token",
+                POSTGRES_USER="app_user",
+                POSTGRES_PASSWORD="app_password",
+                TARIFFS_CONFIG_PATH=str(path),
+                TRAFFIC_PACKAGES="10:199",
+            )
+
+            self.assertIsNotNone(settings.tariffs_config)
+            self.assertFalse(settings.traffic_sale_mode)
+
+    def test_appearance_backup_roundtrip_preserves_logo_theme_and_favicon_settings(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+        )
+        settings.WEBAPP_LOGO_URL = "/webapp-uploaded-logo/logo-1111111111111111.png"
+        settings.WEBAPP_LOGO_FAVICON_URL = "/webapp-favicon/aaaaaaaaaaaaaaaa/icon-180.png"
+        settings.WEBAPP_FAVICON_USE_CUSTOM = True
+        settings.WEBAPP_FAVICON_URL = "/webapp-favicon/bbbbbbbbbbbbbbbb/icon-180.png"
+        settings.WEBAPP_PRIMARY_COLOR = "#123456"
+        settings.WEBAPP_COMPACT_HOME_ENABLED = True
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            backup_path = Path(tmpdir) / "appearance-settings.json"
+            with patch.object(
+                settings_override_service,
+                "APPEARANCE_OVERRIDES_BACKUP_PATH",
+                backup_path,
+            ):
+                settings_override_service.write_appearance_backup(settings)
+                restored = settings_override_service._read_appearance_backup()
+
+        self.assertEqual(
+            restored["WEBAPP_LOGO_URL"],
+            "/webapp-uploaded-logo/logo-1111111111111111.png",
+        )
+        self.assertEqual(restored["WEBAPP_PRIMARY_COLOR"], "#123456")
+        self.assertTrue(restored["WEBAPP_COMPACT_HOME_ENABLED"])
+        self.assertEqual(
+            restored["WEBAPP_FAVICON_URL"],
+            "/webapp-favicon/bbbbbbbbbbbbbbbb/icon-180.png",
+        )
+
+    def test_trial_traffic_strategy_is_available(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            TRIAL_TRAFFIC_STRATEGY="WEEK",
+        )
+
+        self.assertEqual(settings.TRIAL_TRAFFIC_STRATEGY, "WEEK")
+
+    def test_trial_without_oauth_defaults_on_and_accepts_legacy_alias(self):
+        self.assertTrue(self._settings().TRIAL_WITHOUT_OAUTH_ENABLED)
+        self.assertFalse(
+            self._settings(TRIAL_WITHOUT_OAUTH_ENABLED=False).TRIAL_WITHOUT_OAUTH_ENABLED
+        )
+        self.assertFalse(
+            self._settings(TRIAL_WITHOUT_TELEGRAM_ENABLED=False).TRIAL_WITHOUT_OAUTH_ENABLED
+        )
+
+    def test_trial_days_strategy_is_admin_configured(self):
+        settings = self._settings(TRIAL_DAYS_STRATEGY="start_from_payment")
+
+        self.assertEqual(settings.TRIAL_DAYS_STRATEGY, "start_from_payment")
+        with self.assertRaises(ValidationError):
+            self._settings(TRIAL_DAYS_STRATEGY="unexpected")
+
+    def test_trial_hwid_device_limit_accepts_count_and_blank(self):
+        configured = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            TRIAL_HWID_DEVICE_LIMIT="2",
+        )
+        inherited = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            TRIAL_HWID_DEVICE_LIMIT="",
+        )
+
+        self.assertEqual(configured.TRIAL_HWID_DEVICE_LIMIT, 2)
+        self.assertIsNone(inherited.TRIAL_HWID_DEVICE_LIMIT)
+
+    def test_traffic_strategy_legacy_aliases_are_canonicalized(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            USER_TRAFFIC_STRATEGY="monthly",
+            TRIAL_TRAFFIC_STRATEGY="MONTHLY_ROLLING",
+        )
+
+        self.assertEqual(settings.USER_TRAFFIC_STRATEGY, "MONTH")
+        self.assertEqual(settings.TRIAL_TRAFFIC_STRATEGY, "MONTH_ROLLING")
+
+    def test_support_admin_email_notifications_default_to_disabled(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+        )
+
+        self.assertFalse(settings.SUPPORT_ADMIN_EMAIL_NOTIFICATIONS_ENABLED)
+
+    def test_user_notification_preferences_default_to_enabled(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+        )
+
+        self.assertTrue(settings.USER_NOTIFICATION_PREFERENCES_ENABLED)
+
+    def test_support_admin_telegram_notifications_default_to_enabled(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+        )
+
+        self.assertTrue(settings.SUPPORT_ADMIN_TELEGRAM_NOTIFICATIONS_ENABLED)
+
+    def test_partner_audit_retention_defaults_to_forever(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+        )
+
+        self.assertEqual(settings.PARTNER_AUDIT_RETENTION_DAYS, 0)
+        self.assertEqual(settings.partner_settings.audit_retention_days, 0)
+
+    def test_backup_defaults_are_safe_and_blank_targets_use_log_fallback(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            BACKUP_CHAT_ID="",
+            BACKUP_THREAD_ID="",
+        )
+
+        self.assertFalse(settings.BACKUP_ENABLED)
+        self.assertEqual(settings.BACKUP_INTERVAL_SECONDS, 3600)
+        self.assertEqual(settings.BACKUP_DIR, "data/backups")
+        self.assertEqual(settings.BACKUP_LOCAL_RETENTION, 100)
+        self.assertIsNone(settings.BACKUP_CHAT_ID)
+        self.assertIsNone(settings.BACKUP_THREAD_ID)
+        self.assertEqual(settings.BACKUP_COMPOSE_SOURCE_DIR, "/app/compose-source")
+        self.assertIsNone(settings.BACKUP_COMPOSE_RESTORE_DIR)
+        self.assertEqual(settings.BACKUP_PG_RESTORE_PATH, "pg_restore")
+
+    def test_subscription_purchase_description_is_localized_and_toggleable(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            SUBSCRIPTION_PURCHASE_DESCRIPTION_RU="Русский текст",
+            SUBSCRIPTION_PURCHASE_DESCRIPTION_EN="English text",
+        )
+
+        self.assertEqual(settings.subscription_purchase_description("ru"), "Русский текст")
+        self.assertEqual(settings.subscription_purchase_description("en"), "English text")
+
+        settings.SUBSCRIPTION_PURCHASE_DESCRIPTION_RU = ""
+        self.assertEqual(settings.subscription_purchase_description("ru"), "")
+        self.assertEqual(settings.subscription_purchase_description("en"), "English text")
+
+        settings.SUBSCRIPTION_PURCHASE_DESCRIPTION_ENABLED = False
+        self.assertEqual(settings.subscription_purchase_description("ru"), "")
+
+    def test_payment_button_presentation_env_values_are_available(self):
+        """Presentation overrides now live on each provider's BaseSettings
+        model instead of the central Settings — verify they're loaded from
+        env and exposed via the provider bundle."""
+        import os
+
+        from bot.payment_providers import build_provider_configs, get_spec_presentation
+
+        os.environ["PAYMENT_YOOKASSA_WEBAPP_LABEL_RU"] = "Карта"
+        os.environ["PAYMENT_YOOKASSA_WEBAPP_LABEL_EN"] = "Card"
+        os.environ["PAYMENT_YOOKASSA_WEBAPP_ICON"] = "CreditCard"
+        os.environ["PAYMENT_YOOKASSA_TELEGRAM_LABEL_RU"] = "Банковская карта"
+        os.environ["PAYMENT_YOOKASSA_TELEGRAM_LABEL_EN"] = "Bank card"
+        os.environ["PAYMENT_YOOKASSA_TELEGRAM_EMOJI"] = "💳"
+        try:
+            build_provider_configs(force=True)
+            presentation = get_spec_presentation("yookassa")
+            self.assertIsNotNone(presentation)
+            self.assertEqual(presentation.WEBAPP_LABEL_RU, "Карта")
+            self.assertEqual(presentation.WEBAPP_LABEL_EN, "Card")
+            self.assertEqual(presentation.WEBAPP_ICON, "CreditCard")
+            self.assertEqual(presentation.TELEGRAM_LABEL_RU, "Банковская карта")
+            self.assertEqual(presentation.TELEGRAM_LABEL_EN, "Bank card")
+            self.assertEqual(presentation.TELEGRAM_EMOJI, "💳")
+        finally:
+            for key in (
+                "PAYMENT_YOOKASSA_WEBAPP_LABEL_RU",
+                "PAYMENT_YOOKASSA_WEBAPP_LABEL_EN",
+                "PAYMENT_YOOKASSA_WEBAPP_ICON",
+                "PAYMENT_YOOKASSA_TELEGRAM_LABEL_RU",
+                "PAYMENT_YOOKASSA_TELEGRAM_LABEL_EN",
+                "PAYMENT_YOOKASSA_TELEGRAM_EMOJI",
+            ):
+                os.environ.pop(key, None)
+            build_provider_configs(force=True)
+
+    def test_tariff_warning_levels_are_parsed(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            TARIFF_TRAFFIC_WARNING_LEVELS="90,85,bad,95,90,100,0",
+        )
+
+        self.assertEqual(settings.tariff_traffic_warning_levels, [85, 90, 95])
+
+    def test_subscription_hour_notification_default_is_available(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+        )
+
+        self.assertEqual(settings.SUBSCRIPTION_NOTIFY_HOURS_BEFORE, 3)
+        self.assertEqual(settings.SUBSCRIPTION_NOTIFICATION_WORKER_TICK_SECONDS, 300)
+        self.assertTrue(settings.SUBSCRIPTION_EMAIL_NOTIFICATIONS_ENABLED)
+        self.assertTrue(settings.USER_NOTIFICATION_SINGLE_CHANNEL_FALLBACK_ENABLED)
+        for key in (
+            "USER_NOTIFICATION_PAYMENTS_TELEGRAM_ENABLED",
+            "USER_NOTIFICATION_PAYMENTS_EMAIL_ENABLED",
+            "USER_NOTIFICATION_TRAFFIC_TELEGRAM_ENABLED",
+            "USER_NOTIFICATION_TRAFFIC_EMAIL_ENABLED",
+            "USER_NOTIFICATION_DEVICES_TELEGRAM_ENABLED",
+            "USER_NOTIFICATION_DEVICES_EMAIL_ENABLED",
+            "USER_NOTIFICATION_DEVICE_ACTIVITY_TELEGRAM_ENABLED",
+            "USER_NOTIFICATION_DEVICE_ACTIVITY_EMAIL_ENABLED",
+            "USER_NOTIFICATION_DEVICE_LIMIT_TELEGRAM_ENABLED",
+            "USER_NOTIFICATION_DEVICE_LIMIT_EMAIL_ENABLED",
+            "USER_NOTIFICATION_SUPPORT_TELEGRAM_ENABLED",
+            "USER_NOTIFICATION_SUPPORT_EMAIL_ENABLED",
+            "USER_NOTIFICATION_REFERRALS_TELEGRAM_ENABLED",
+            "USER_NOTIFICATION_REFERRALS_EMAIL_ENABLED",
+        ):
+            self.assertTrue(getattr(settings, key), key)
+
+    def test_torrent_blocker_notifications_are_private_opt_in_by_default(self):
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+        )
+
+        self.assertFalse(settings.TORRENT_BLOCKER_NOTIFICATIONS_ENABLED)
+        self.assertTrue(settings.TORRENT_BLOCKER_TELEGRAM_NOTIFICATIONS_ENABLED)
+        self.assertFalse(settings.TORRENT_BLOCKER_EMAIL_NOTIFICATIONS_ENABLED)
+        self.assertEqual(settings.TORRENT_BLOCKER_NOTIFICATION_COOLDOWN_SECONDS, 3600)
+        self.assertFalse(settings.TORRENT_BLOCKER_NOTIFICATION_INCLUDE_IP)
+
+    def test_torrent_blocker_notification_cooldown_cannot_be_negative(self):
+        with self.assertRaises(ValidationError):
+            Settings(
+                _env_file=None,
+                BOT_TOKEN="token",
+                POSTGRES_USER="app_user",
+                POSTGRES_PASSWORD="app_password",
+                TORRENT_BLOCKER_NOTIFICATION_COOLDOWN_SECONDS=-1,
+            )
+
+    def test_torrent_blocker_notification_cooldown_has_safe_upper_bound(self):
+        with self.assertRaises(ValidationError):
+            Settings(
+                _env_file=None,
+                BOT_TOKEN="token",
+                POSTGRES_USER="app_user",
+                POSTGRES_PASSWORD="app_password",
+                TORRENT_BLOCKER_NOTIFICATION_COOLDOWN_SECONDS=31536001,
+            )

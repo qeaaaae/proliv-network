@@ -1,0 +1,211 @@
+x-logging: &minishop_logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    logging: *minishop_logging
+    image: postgres:17.11
+    container_name: remnawave-minishop-postgres
+    env_file:
+      - ${APP_ENV_FILE:-.env}
+    volumes:
+      - remnawave-minishop-db-data:/var/lib/postgresql/data
+    networks:
+      - remnawave-minishop
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+      start_interval: 1s
+
+  redis:
+    logging: *minishop_logging
+    image: redis:7-alpine
+    container_name: remnawave-minishop-redis
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - remnawave-minishop-redis-data:/data
+    networks:
+      - remnawave-minishop
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+      start_interval: 1s
+
+  plugin-store-init:
+    logging: *minishop_logging
+    image: 3252a8/remnawave-minishop-backend:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile
+      target: backend
+    user: '0:0'
+    entrypoint: ['sh', '-c']
+    command: ['mkdir -p /app/data/plugin-store && chown -R 10001:10001 /app/data/plugin-store']
+    volumes:
+      - ./data:/app/data:rw
+
+  migrate:
+    logging: *minishop_logging
+    container_name: remnawave-minishop-migrate
+    image: 3252a8/remnawave-minishop-backend:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile
+      target: backend
+    command: ['python', 'backend/main_migrate.py']
+    env_file:
+      - ${APP_ENV_FILE:-.env}
+    environment:
+      IMAGE_TAG: ${IMAGE_TAG:-latest}
+      MINISHOP_PLUGIN_SAFE_MODE: '1'
+      POSTGRES_HOST: postgres
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./data:/app/data:rw
+    networks:
+      - remnawave-minishop
+    depends_on:
+      plugin-store-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  backend:
+    logging: *minishop_logging
+    container_name: remnawave-minishop-backend
+    image: 3252a8/remnawave-minishop-backend:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile
+      target: backend
+    env_file:
+      - ${APP_ENV_FILE:-.env}
+    environment:
+      IMAGE_TAG: ${IMAGE_TAG:-latest}
+      POSTGRES_HOST: postgres
+      REDIS_URL: redis://redis:6379/0
+      WEB_SERVER_INTERNAL_PORT: '8080'
+      WEBAPP_ENABLED: 'true'
+    volumes:
+      - ./data:/app/data:rw
+      - ${COMPOSE_BACKUP_SOURCE:-.}:/app/compose-source:${COMPOSE_RESTORE_MODE:-rw}
+    networks:
+      - remnawave-minishop
+    ports:
+      - '127.0.0.1:${WEB_SERVER_PORT:-18080}:8080'
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'python -c "import urllib.request; urllib.request.urlopen(''http://127.0.0.1:8080/healthz'', timeout=3).read()"',
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      start_interval: 3s
+
+  worker:
+    logging: *minishop_logging
+    container_name: remnawave-minishop-worker
+    image: 3252a8/remnawave-minishop-worker:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile
+      target: worker
+    env_file:
+      - ${APP_ENV_FILE:-.env}
+    environment:
+      IMAGE_TAG: ${IMAGE_TAG:-latest}
+      POSTGRES_HOST: postgres
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./data:/app/data:rw
+    networks:
+      - remnawave-minishop
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    logging: *minishop_logging
+    container_name: remnawave-minishop-frontend
+    image: 3252a8/remnawave-minishop-frontend:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile
+      target: frontend
+    networks:
+      - remnawave-minishop
+    environment:
+      IMAGE_TAG: ${IMAGE_TAG:-latest}
+      FRONTEND_PORT: ${FRONTEND_PORT:-18082}
+      FRONTEND_PUBLIC: 127.0.0.1:${FRONTEND_PORT:-18082}->80
+      WEBAPP_API_BASE_URL: ${WEBAPP_API_BASE_URL:-/api}
+      WEBAPP_BACKEND_UPSTREAM: ${WEBAPP_BACKEND_UPSTREAM:-http://backend:8081}
+      WEBAPP_BACKEND_UPSTREAM_HOST: ${WEBAPP_BACKEND_UPSTREAM_HOST:-backend}
+      MINISHOP_EDGE_TOKEN: ${MINISHOP_EDGE_TOKEN:-}
+      MINISHOP_EDGE_TOKEN_HEADER: ${MINISHOP_EDGE_TOKEN_HEADER:-X-Minishop-Edge-Token}
+    ports:
+      - '127.0.0.1:${FRONTEND_PORT:-18082}:80'
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1/health | grep -q ok']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+      start_interval: 2s
+
+  newt:
+    logging: *minishop_logging
+    image: fosrl/newt
+    container_name: remnawave-minishop-newt
+    restart: unless-stopped
+    environment:
+      - PANGOLIN_ENDPOINT=https://app.pangolin.net
+      - NEWT_ID=${NEWT_ID:?Set NEWT_ID in .env}
+      - NEWT_SECRET=${NEWT_SECRET:?Set NEWT_SECRET in .env}
+      - PING_INTERVAL=30s
+      - PING_TIMEOUT=20s
+    networks:
+      - remnawave-minishop
+
+networks:
+  remnawave-minishop:
+    name: remnawave-minishop-network
+
+volumes:
+  remnawave-minishop-db-data:
+    name: remnawave-minishop-db-data
+  remnawave-minishop-redis-data:
+    name: remnawave-minishop-redis-data

@@ -1,0 +1,406 @@
+---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+
+import swaggerUiBundleUrl from 'swagger-ui-dist/swagger-ui-bundle.js?url';
+import swaggerUiStylesUrl from 'swagger-ui-dist/swagger-ui.css?url';
+
+// const editUrl =
+//   'https://github.com/3252a8/remnawave-minishop/edit/main/docs-site/src/pages/api/reference.astro';
+const editUrl =
+  'https://gitlab.com/3252a8/remnawave-minishop/-/edit/main/docs-site/src/pages/api/reference.astro';
+---
+
+<StarlightPage
+  frontmatter={{
+    title: 'Интерактивная спецификация API',
+    description:
+      'Swagger UI для OpenAPI-контракта Remnawave Minishop HTTP API.',
+    editUrl,
+  }}
+>
+  <link rel="stylesheet" href={swaggerUiStylesUrl} />
+
+  <p>
+    Эта страница показывает тот же OpenAPI-контракт, который публикуется как
+    <a href="/openapi.json"><code>/openapi.json</code></a>. Спецификация
+    генерируется из живого <code>aiohttp</code>-роутера и используется для
+    frontend-типов.
+  </p>
+
+  <div class="api-reference-actions">
+    <a class="api-reference-button" href="/openapi.json">Открыть OpenAPI JSON</a>
+    <a class="api-reference-button" href="/architecture/http-api/">
+      Правила HTTP-контрактов
+    </a>
+  </div>
+
+  <section class="api-reference-shell" aria-label="Swagger UI">
+    <div id="swagger-ui" data-openapi-url="/openapi.json"></div>
+  </section>
+
+  <script is:inline src={swaggerUiBundleUrl}></script>
+  <script is:inline>
+    window.addEventListener('DOMContentLoaded', () => {
+      const target = document.getElementById('swagger-ui');
+      if (!target || !window.SwaggerUIBundle) {
+        return;
+      }
+
+      document.documentElement.classList.add('dark-mode');
+
+      window.SwaggerUIBundle({
+        url: target.dataset.openapiUrl || '/openapi.json',
+        dom_id: '#swagger-ui',
+        deepLinking: true,
+        displayRequestDuration: true,
+        supportedSubmitMethods: [],
+        presets: [window.SwaggerUIBundle.presets.apis],
+        layout: 'BaseLayout',
+        syntaxHighlight: {
+          theme: 'monokai',
+        },
+      });
+    });
+  </script>
+</StarlightPage>
+
+<style is:global>
+  .api-reference-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin: 1.25rem 0;
+  }
+
+  .api-reference-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 2.35rem;
+    border: 1px solid color-mix(in srgb, #00fe7a 44%, var(--sl-color-gray-5));
+    border-radius: 7px;
+    padding: 0.48rem 0.75rem;
+    color: var(--sl-color-white);
+    font-size: 0.9rem;
+    font-weight: 700;
+    line-height: 1.2;
+    text-decoration: none;
+  }
+
+  .api-reference-button:hover,
+  .api-reference-button:focus-visible {
+    border-color: #00fe7a;
+    color: #00fe7a;
+  }
+
+  :root[data-theme='light'] .api-reference-button {
+    color: #073b25;
+  }
+
+  .api-reference-shell {
+    --api-reference-bg: #071018;
+    --api-reference-panel: #0d1624;
+    --api-reference-panel-soft: #111c2d;
+    --api-reference-border: rgb(148 163 184 / 22%);
+    --api-reference-text: #dbe7f3;
+    --api-reference-muted: #98a8ba;
+    --api-reference-accent: #00fe7a;
+
+    overflow: hidden;
+    min-height: 42rem;
+    border: 1px solid var(--api-reference-border);
+    border-radius: 8px;
+    margin-top: 1.25rem;
+    background: var(--api-reference-bg);
+    color: var(--api-reference-text);
+    color-scheme: dark;
+  }
+
+  .api-reference-shell .swagger-ui {
+    font-family:
+      Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+      sans-serif;
+    color: var(--api-reference-text);
+  }
+
+  .api-reference-shell .swagger-ui .topbar,
+  .api-reference-shell .swagger-ui .scheme-container {
+    display: none;
+  }
+
+  .api-reference-shell .swagger-ui .information-container.wrapper {
+    padding-top: 1.35rem;
+  }
+
+  .api-reference-shell .swagger-ui .info {
+    margin: 0 0 1.5rem;
+  }
+
+  .api-reference-shell .swagger-ui a,
+  .api-reference-shell .swagger-ui .info a {
+    color: var(--api-reference-accent);
+  }
+
+  .api-reference-shell .swagger-ui .info p,
+  .api-reference-shell .swagger-ui .info li,
+  .api-reference-shell .swagger-ui .info table,
+  .api-reference-shell .swagger-ui .info .base-url,
+  .api-reference-shell .swagger-ui .markdown p,
+  .api-reference-shell .swagger-ui .markdown li,
+  .api-reference-shell .swagger-ui .markdown td,
+  .api-reference-shell .swagger-ui .markdown th,
+  .api-reference-shell .swagger-ui .renderedMarkdown p,
+  .api-reference-shell .swagger-ui .renderedMarkdown li,
+  .api-reference-shell .swagger-ui .renderedMarkdown td,
+  .api-reference-shell .swagger-ui .renderedMarkdown th {
+    color: var(--api-reference-muted);
+  }
+
+  .api-reference-shell .swagger-ui .info .title {
+    color: #f8fafc;
+    font-size: clamp(1.45rem, 3vw, 2rem);
+    line-height: 1.15;
+  }
+
+  .api-reference-shell .swagger-ui .info .base-url,
+  .api-reference-shell .swagger-ui .info .version,
+  .api-reference-shell .swagger-ui .parameter__name,
+  .api-reference-shell .swagger-ui .parameter__type,
+  .api-reference-shell .swagger-ui .parameter__in,
+  .api-reference-shell .swagger-ui .parameter__extension,
+  .api-reference-shell .swagger-ui .prop-name,
+  .api-reference-shell .swagger-ui .prop-type,
+  .api-reference-shell .swagger-ui .prop-format,
+  .api-reference-shell .swagger-ui .model,
+  .api-reference-shell .swagger-ui .model-title,
+  .api-reference-shell .swagger-ui .models h4,
+  .api-reference-shell .swagger-ui table thead tr td,
+  .api-reference-shell .swagger-ui table thead tr th,
+  .api-reference-shell .swagger-ui table thead tr td *,
+  .api-reference-shell .swagger-ui table thead tr th *,
+  .api-reference-shell .swagger-ui .responses-inner h4,
+  .api-reference-shell .swagger-ui .responses-inner h5,
+  .api-reference-shell .swagger-ui .opblock-section-header h4,
+  .api-reference-shell .swagger-ui .opblock-section-header label,
+  .api-reference-shell .swagger-ui .opblock-section-header label span,
+  .api-reference-shell .swagger-ui .body-param-options label,
+  .api-reference-shell .swagger-ui .body-param-options label span {
+    color: var(--api-reference-text);
+  }
+
+  .api-reference-shell .swagger-ui .opblock {
+    border-color: var(--api-reference-border);
+    background: rgb(15 23 42 / 62%);
+    box-shadow: none;
+  }
+
+  .api-reference-shell .swagger-ui .opblock.opblock-get {
+    border-color: rgb(97 175 254 / 44%);
+    background: rgb(14 74 125 / 14%);
+  }
+
+  .api-reference-shell .swagger-ui .opblock.opblock-post {
+    border-color: rgb(73 204 144 / 44%);
+    background: rgb(0 254 122 / 10%);
+  }
+
+  .api-reference-shell .swagger-ui .opblock.opblock-put,
+  .api-reference-shell .swagger-ui .opblock.opblock-patch {
+    border-color: rgb(252 161 48 / 48%);
+    background: rgb(252 161 48 / 10%);
+  }
+
+  .api-reference-shell .swagger-ui .opblock.opblock-delete {
+    border-color: rgb(249 62 62 / 48%);
+    background: rgb(249 62 62 / 10%);
+  }
+
+  .api-reference-shell .swagger-ui .opblock .opblock-summary,
+  .api-reference-shell .swagger-ui .opblock-section-header {
+    border-color: var(--api-reference-border);
+    background: rgb(7 16 24 / 76%);
+    box-shadow: none;
+  }
+
+  .api-reference-shell .swagger-ui .opblock-body,
+  .api-reference-shell .swagger-ui .responses-wrapper,
+  .api-reference-shell .swagger-ui .responses-inner,
+  .api-reference-shell .swagger-ui .request-body-wrapper,
+  .api-reference-shell .swagger-ui .opblock-description-wrapper,
+  .api-reference-shell .swagger-ui .opblock-external-docs-wrapper,
+  .api-reference-shell .swagger-ui .opblock-title_normal,
+  .api-reference-shell .swagger-ui .parameters-container,
+  .api-reference-shell .swagger-ui .execute-wrapper {
+    background: transparent;
+    color: var(--api-reference-text);
+  }
+
+  .api-reference-shell .swagger-ui .opblock-tag,
+  .api-reference-shell .swagger-ui .opblock .opblock-summary-path,
+  .api-reference-shell .swagger-ui .opblock .opblock-summary-path__deprecated,
+  .api-reference-shell .swagger-ui .opblock .opblock-summary-operation-id,
+  .api-reference-shell .swagger-ui .opblock .opblock-summary-description,
+  .api-reference-shell .swagger-ui .opblock-description-wrapper p,
+  .api-reference-shell .swagger-ui .opblock-description-wrapper i,
+  .api-reference-shell .swagger-ui .opblock-external-docs-wrapper p,
+  .api-reference-shell .swagger-ui .opblock-title_normal p,
+  .api-reference-shell .swagger-ui .response-col_status,
+  .api-reference-shell .swagger-ui .response-col_links,
+  .api-reference-shell .swagger-ui .response-col_description,
+  .api-reference-shell .swagger-ui .response-col_description__inner div.markdown,
+  .api-reference-shell .swagger-ui .tab li button.tablinks {
+    color: var(--api-reference-text);
+  }
+
+  .api-reference-shell .swagger-ui .opblock-tag {
+    border-bottom-color: var(--api-reference-border);
+  }
+
+  .api-reference-shell .swagger-ui .model-box,
+  .api-reference-shell .swagger-ui .model-container,
+  .api-reference-shell .swagger-ui .model-example,
+  .api-reference-shell .swagger-ui .example,
+  .api-reference-shell .swagger-ui .highlight-code,
+  .api-reference-shell .swagger-ui .microlight,
+  .api-reference-shell .swagger-ui .curl-command,
+  .api-reference-shell .swagger-ui section.models,
+  .api-reference-shell .swagger-ui section.models.is-open h4,
+  .api-reference-shell .swagger-ui .responses-table,
+  .api-reference-shell .swagger-ui .parameters,
+  .api-reference-shell .swagger-ui .table-container {
+    border-color: var(--api-reference-border);
+    background: rgb(7 16 24 / 62%);
+  }
+
+  .api-reference-shell .swagger-ui section.models {
+    border: 1px solid var(--api-reference-border);
+    border-radius: 8px;
+  }
+
+  .api-reference-shell .swagger-ui section.models h4 {
+    border-color: var(--api-reference-border);
+  }
+
+  .api-reference-shell .swagger-ui .model-box,
+  .api-reference-shell .swagger-ui .model-container {
+    border-radius: 7px;
+  }
+
+  .api-reference-shell .swagger-ui table tbody tr td {
+    border-color: var(--api-reference-border);
+    color: var(--api-reference-muted);
+  }
+
+  .api-reference-shell .swagger-ui .markdown code,
+  .api-reference-shell .swagger-ui .renderedMarkdown code,
+  .api-reference-shell .swagger-ui code,
+  .api-reference-shell .swagger-ui pre,
+  .api-reference-shell .swagger-ui textarea.curl {
+    border-color: rgb(148 163 184 / 18%);
+    background: #050b13;
+    color: #c7f9d8;
+  }
+
+  .api-reference-shell .swagger-ui .copy-to-clipboard,
+  .api-reference-shell .swagger-ui .download-contents {
+    border: 1px solid var(--api-reference-border);
+    background: var(--api-reference-panel);
+    color: var(--api-reference-text);
+  }
+
+  .api-reference-shell .swagger-ui input,
+  .api-reference-shell .swagger-ui textarea,
+  .api-reference-shell .swagger-ui select,
+  .api-reference-shell .swagger-ui select.content-type {
+    border-color: var(--api-reference-border);
+    background: var(--api-reference-panel);
+    color: var(--api-reference-text);
+  }
+
+  .api-reference-shell .swagger-ui .btn {
+    border-color: rgb(0 254 122 / 38%);
+    background: transparent;
+    color: var(--api-reference-text);
+    box-shadow: none;
+  }
+
+  .api-reference-shell .swagger-ui .btn:hover,
+  .api-reference-shell .swagger-ui .btn:focus-visible {
+    border-color: var(--api-reference-accent);
+    color: var(--api-reference-accent);
+  }
+
+  .api-reference-shell .swagger-ui .opblock-summary-control,
+  .api-reference-shell .swagger-ui .models-control,
+  .api-reference-shell .swagger-ui .model-box-control {
+    color: var(--api-reference-text);
+  }
+
+  .api-reference-shell .swagger-ui .model-toggle::after,
+  .api-reference-shell .swagger-ui .models-control svg,
+  .api-reference-shell .swagger-ui .opblock-summary-control svg,
+  .api-reference-shell .swagger-ui .expand-operation svg {
+    filter: brightness(0) invert(1);
+  }
+
+  .api-reference-shell .swagger-ui .json-schema-2020-12,
+  .api-reference-shell .swagger-ui .json-schema-2020-12 button,
+  .api-reference-shell .swagger-ui .json-schema-2020-12-body,
+  .api-reference-shell .swagger-ui .json-schema-2020-12-head,
+  .api-reference-shell .swagger-ui .json-schema-2020-12-property,
+  .api-reference-shell .swagger-ui .json-schema-2020-12-accordion,
+  .api-reference-shell .swagger-ui .json-schema-2020-12-keyword {
+    border-color: var(--api-reference-border);
+    background: #050b13;
+    color: var(--api-reference-text);
+  }
+
+  .api-reference-shell .swagger-ui .json-schema-2020-12__title,
+  .api-reference-shell .swagger-ui .json-schema-2020-12-keyword__name,
+  .api-reference-shell .swagger-ui .json-schema-2020-12-keyword__name--primary,
+  .api-reference-shell .swagger-ui .json-schema-2020-12-keyword__value,
+  .api-reference-shell .swagger-ui .json-schema-2020-12__attribute--primary,
+  .api-reference-shell .swagger-ui .json-schema-2020-12-json-viewer__name {
+    color: var(--api-reference-text);
+  }
+
+  .api-reference-shell .swagger-ui .json-schema-2020-12-keyword__name--secondary,
+  .api-reference-shell .swagger-ui .json-schema-2020-12-keyword__value--secondary,
+  .api-reference-shell .swagger-ui .json-schema-2020-12__attribute--muted,
+  .api-reference-shell .swagger-ui .json-schema-2020-12-json-viewer__value {
+    color: var(--api-reference-muted);
+  }
+
+  .api-reference-shell .swagger-ui .json-schema-2020-12__constraint {
+    background: rgb(0 254 122 / 18%);
+    color: #d8ffe6;
+  }
+
+  .api-reference-shell .swagger-ui .dialog-ux .modal-ux {
+    border-color: var(--api-reference-border);
+    background: var(--api-reference-panel-soft);
+    color: var(--api-reference-text);
+  }
+
+  .api-reference-shell .swagger-ui .dialog-ux .modal-ux-header {
+    border-color: var(--api-reference-border);
+  }
+
+  .api-reference-shell .swagger-ui .wrapper {
+    max-width: none;
+    padding-inline: clamp(0.75rem, 2vw, 1.4rem);
+  }
+
+  @media (max-width: 46rem) {
+    .api-reference-shell {
+      margin-inline: calc(var(--sl-content-pad-x) * -1);
+      border-right: 0;
+      border-left: 0;
+      border-radius: 0;
+    }
+
+    .api-reference-shell .swagger-ui .wrapper {
+      padding-inline: 0.65rem;
+    }
+  }
+</style>

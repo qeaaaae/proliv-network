@@ -1,0 +1,883 @@
+import json
+import tempfile
+import threading
+import unittest
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from unittest.mock import patch
+
+from config.webapp_themes_config import (
+    WebappThemesConfig,
+    apply_webapp_theme_env_overrides,
+    builtin_webapp_themes_config,
+    default_webapp_theme_descriptors,
+    effective_webapp_theme_accent,
+    effective_webapp_theme_tokens,
+    ensure_webapp_core_themes,
+    load_webapp_theme_dir,
+    public_themes_catalog_payload,
+    resolved_webapp_themes_catalog,
+    write_webapp_theme_dir,
+)
+from config.webapp_themes_store import _write_webapp_theme_file
+
+
+class WebappThemesConfigTests(unittest.TestCase):
+    def test_theme_descriptor_writes_use_unique_atomic_temp_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "dark" / "theme.json"
+            theme = builtin_webapp_themes_config("#abcdef").theme_by_key("dark")
+            self.assertIsNotNone(theme)
+            barrier = threading.Barrier(2)
+            original_write_text = Path.write_text
+
+            def synchronized_write(target, *args, **kwargs):
+                result = original_write_text(target, *args, **kwargs)
+                if target.name.endswith(".tmp"):
+                    barrier.wait(timeout=5)
+                return result
+
+            with (
+                patch.object(Path, "write_text", synchronized_write),
+                ThreadPoolExecutor(max_workers=2) as executor,
+            ):
+                futures = [executor.submit(_write_webapp_theme_file, path, theme) for _ in range(2)]
+                for future in futures:
+                    future.result(timeout=5)
+
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["key"], "dark")
+            self.assertEqual(list(path.parent.glob("*.tmp")), [])
+
+    def test_builtin_has_core_themes(self):
+        cfg = builtin_webapp_themes_config("#abcdef")
+        self.assertEqual(cfg.default_theme, "dark")
+        keys = {theme.key for theme in cfg.themes}
+        self.assertEqual(keys, {"dark", "light", "windows95", "ascii"})
+        dark = cfg.theme_by_key("dark")
+        self.assertIsNotNone(dark)
+        self.assertTrue(dark.default)
+        self.assertEqual(dark.tokens.accent, "#abcdef")
+        self.assertEqual(dark.active_variant, "dark")
+        self.assertIn("dark", dark.variants)
+        self.assertIn("light", dark.variants)
+        self.assertEqual(dark.variants["light"].color_scheme, "light")
+        self.assertEqual(dark.assets_version, 3)
+        self.assertEqual(dark.variants["light"].success_text, "#065f46")
+        self.assertEqual(dark.variants["light"].warning_text, "#854d0e")
+        win95 = cfg.theme_by_key("windows95")
+        self.assertIsNotNone(win95)
+        light = cfg.theme_by_key("light")
+        self.assertIsNone(light.css_file)
+        self.assertTrue(light.hidden)
+        self.assertEqual(light.variant_alias_for, "dark")
+        self.assertEqual(light.active_variant, "light")
+        self.assertEqual(win95.css_file, "style.css")
+        self.assertEqual(win95.tokens.style_preset, "win95")
+        self.assertFalse(win95.use_primary_accent)
+        self.assertTrue(win95.use_in_admin)
+        self.assertEqual(win95.assets_version, 16)
+        self.assertEqual(set(win95.variants), {"light", "dark"})
+        self.assertEqual(win95.variants["dark"].color_scheme, "dark")
+        self.assertEqual(cfg.theme_by_key("light").assets_version, 7)
+        ascii_theme = cfg.theme_by_key("ascii")
+        self.assertIsNotNone(ascii_theme)
+        self.assertEqual(ascii_theme.css_file, "style.css")
+        self.assertFalse(ascii_theme.use_primary_accent)
+        self.assertTrue(ascii_theme.use_in_admin)
+        self.assertEqual(ascii_theme.assets_version, 9)
+        self.assertEqual(set(ascii_theme.variants), {"light", "dark"})
+        self.assertEqual(ascii_theme.variants["light"].color_scheme, "light")
+
+    def test_env_override_default_theme(self):
+        cfg = builtin_webapp_themes_config("#00fe7a")
+        out = apply_webapp_theme_env_overrides(cfg, "light")
+        self.assertEqual(out.default_theme, "dark")
+        self.assertTrue(out.theme_by_key("dark").default)
+        self.assertEqual(out.theme_by_key("dark").active_variant, "light")
+        self.assertFalse(out.theme_by_key("light").default)
+
+    def test_core_themes_are_merged_when_missing(self):
+        cfg = WebappThemesConfig(
+            default_theme="custom",
+            themes=[
+                {
+                    "key": "custom",
+                    "enabled": True,
+                    "default": True,
+                    "use_primary_accent": False,
+                    "tokens": {"color_scheme": "dark"},
+                }
+            ],
+        )
+
+        merged, changed = ensure_webapp_core_themes(cfg, "#00fe7a")
+
+        self.assertTrue(changed)
+        self.assertEqual(
+            {theme.key for theme in merged.themes},
+            {"custom", "dark", "light", "windows95", "ascii"},
+        )
+        self.assertEqual(merged.default_theme, "custom")
+        self.assertTrue(merged.theme_by_key("custom").default)
+        self.assertTrue(merged.theme_by_key("light").hidden)
+        self.assertEqual(merged.theme_by_key("light").variant_alias_for, "dark")
+        self.assertIn("light", merged.theme_by_key("dark").variants)
+        self.assertTrue(merged.theme_by_key("custom").use_in_admin)
+        self.assertFalse(merged.theme_by_key("custom").use_primary_accent)
+
+    def test_default_theme_descriptors_are_read_from_source_files(self):
+        descriptors = default_webapp_theme_descriptors()
+
+        self.assertEqual(set(descriptors), {"dark", "light", "windows95", "ascii"})
+        self.assertTrue(descriptors["dark"]["default"])
+        self.assertIn("variants", descriptors["dark"])
+        self.assertTrue(descriptors["light"]["hidden"])
+        self.assertEqual(descriptors["windows95"]["css_file"], "style.css")
+        self.assertEqual(descriptors["ascii"]["css_file"], "style.css")
+        self.assertEqual(set(descriptors["windows95"]["variants"]), {"light", "dark"})
+        self.assertEqual(set(descriptors["ascii"]["variants"]), {"light", "dark"})
+
+    def test_css_color_variables_are_exposed_without_persisting_their_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            theme_dir = root / "ocean"
+            theme_dir.mkdir()
+            (theme_dir / "theme.json").write_text(
+                json.dumps(
+                    {
+                        "key": "ocean",
+                        "css_file": "style.css",
+                        "tokens": {"color_scheme": "dark"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (theme_dir / "style.css").write_text(
+                ".theme-key-ocean { --ocean-water: #0478aa; --icon: url(icon.svg); }",
+                encoding="utf-8",
+            )
+
+            theme = load_webapp_theme_dir(root)[0]
+
+            self.assertEqual(theme.css_variables, {"--ocean-water": "#0478aa"})
+            self.assertEqual(theme.css_variables_by_variant, {"dark": {"--ocean-water": "#0478aa"}})
+            write_webapp_theme_dir(root, WebappThemesConfig(default_theme="ocean", themes=[theme]))
+            saved = json.loads((theme_dir / "theme.json").read_text(encoding="utf-8"))
+            self.assertNotIn("css_variables", saved)
+            self.assertNotIn("css_variables_by_variant", saved)
+
+    def test_css_variables_include_each_ascii_variant(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = resolved_webapp_themes_catalog(
+                theme_dir=Path(tmp) / "themes",
+                primary_accent="#00fe7a",
+                env_default_theme=None,
+            )
+            theme = cfg.theme_by_key("ascii")
+
+            self.assertIsNotNone(theme)
+            self.assertEqual(theme.css_variables_by_variant["dark"]["--ascii-bg"], "#000000")
+            self.assertEqual(theme.css_variables_by_variant["light"]["--ascii-bg"], "#ffffff")
+            self.assertEqual(theme.css_variables_by_variant["light"]["--nav-bg"], "var(--ascii-bg)")
+
+    def test_resolved_creates_default_files_when_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            themes_dir = Path(tmp) / "themes"
+            cfg = resolved_webapp_themes_catalog(
+                theme_dir=themes_dir,
+                primary_accent="#abc123",
+                env_default_theme=None,
+            )
+
+            self.assertTrue((themes_dir / "dark" / "theme.json").exists())
+            self.assertTrue((themes_dir / "light" / "theme.json").exists())
+            self.assertTrue((themes_dir / "windows95" / "theme.json").exists())
+            self.assertTrue((themes_dir / "windows95" / "style.css").exists())
+            self.assertTrue((themes_dir / "windows95" / "icons" / "save.png").exists())
+            self.assertTrue((themes_dir / "ascii" / "theme.json").exists())
+            self.assertTrue((themes_dir / "ascii" / "style.css").exists())
+            self.assertEqual(cfg.default_theme, "dark")
+            self.assertIsNone(cfg.theme_by_key("dark").tokens.accent)
+
+    def test_load_theme_dir_uses_filename_as_key_when_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            themes_dir = Path(tmp) / "themes"
+            themes_dir.mkdir()
+            (themes_dir / "custom").mkdir()
+            (themes_dir / "custom" / "theme.json").write_text(
+                json.dumps(
+                    {
+                        "names": {"en": "Custom"},
+                        "enabled": True,
+                        "css_file": "style.css",
+                        "tokens": {"color_scheme": "light"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            themes = load_webapp_theme_dir(themes_dir)
+
+            self.assertEqual(len(themes), 1)
+            self.assertEqual(themes[0].key, "custom")
+            self.assertEqual(themes[0].names["en"], "Custom")
+
+    def test_resolved_catalog_includes_custom_mounted_theme_descriptor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            themes_dir = Path(tmp) / "themes"
+            themes_dir.mkdir()
+            (themes_dir / "neon").mkdir()
+            (themes_dir / "neon" / "theme.json").write_text(
+                json.dumps(
+                    {
+                        "names": {"en": "Neon"},
+                        "enabled": True,
+                        "default": True,
+                        "css_file": "style.css",
+                        "tokens": {"color_scheme": "dark"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            cfg = resolved_webapp_themes_catalog(
+                theme_dir=themes_dir,
+                primary_accent="#00fe7a",
+                env_default_theme=None,
+            )
+
+            self.assertEqual(cfg.default_theme, "neon")
+            self.assertIsNotNone(cfg.theme_by_key("neon"))
+            self.assertEqual(
+                {theme.key for theme in cfg.themes},
+                {"dark", "light", "windows95", "ascii", "neon"},
+            )
+
+    def test_env_default_overrides_descriptor_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            themes_dir = Path(tmp) / "themes"
+            themes_dir.mkdir()
+            (themes_dir / "neon").mkdir()
+            (themes_dir / "neon" / "theme.json").write_text(
+                json.dumps(
+                    {
+                        "names": {"en": "Neon"},
+                        "enabled": True,
+                        "default": True,
+                        "tokens": {"color_scheme": "dark"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            cfg = resolved_webapp_themes_catalog(
+                theme_dir=themes_dir,
+                primary_accent="#00fe7a",
+                env_default_theme="windows95",
+            )
+
+            self.assertEqual(cfg.default_theme, "windows95")
+            self.assertTrue(cfg.theme_by_key("windows95").default)
+            self.assertFalse(cfg.theme_by_key("neon").default)
+
+    def test_custom_descriptor_default_wins_over_seeded_core_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            themes_dir = Path(tmp) / "themes"
+            themes_dir.mkdir()
+            (themes_dir / "dark").mkdir()
+            (themes_dir / "dark" / "theme.json").write_text(
+                json.dumps(
+                    {
+                        "key": "dark",
+                        "names": {"en": "Dark"},
+                        "enabled": True,
+                        "default": True,
+                        "tokens": {"color_scheme": "dark"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (themes_dir / "neon").mkdir()
+            (themes_dir / "neon" / "theme.json").write_text(
+                json.dumps(
+                    {
+                        "names": {"en": "Neon"},
+                        "enabled": True,
+                        "default": True,
+                        "tokens": {"color_scheme": "dark"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            cfg = resolved_webapp_themes_catalog(
+                theme_dir=themes_dir,
+                primary_accent="#00fe7a",
+                env_default_theme=None,
+            )
+
+            self.assertEqual(cfg.default_theme, "neon")
+            self.assertTrue(cfg.theme_by_key("neon").default)
+            self.assertFalse(cfg.theme_by_key("dark").default)
+
+    def test_theme_dir_writer_writes_descriptors_with_single_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = builtin_webapp_themes_config("#00fe7a")
+            cfg = WebappThemesConfig(default_theme="windows95", themes=cfg.themes)
+            themes_dir = Path(tmp) / "themes"
+
+            write_webapp_theme_dir(themes_dir, cfg)
+
+            dark = json.loads((themes_dir / "dark" / "theme.json").read_text(encoding="utf-8"))
+            win95 = json.loads(
+                (themes_dir / "windows95" / "theme.json").read_text(encoding="utf-8")
+            )
+            self.assertFalse(dark["default"])
+            self.assertTrue(win95["default"])
+
+            resolved = resolved_webapp_themes_catalog(
+                theme_dir=themes_dir,
+                primary_accent="#00fe7a",
+                env_default_theme=None,
+            )
+            self.assertEqual(resolved.default_theme, "windows95")
+
+    def test_resolved_falls_back_to_dark_when_saved_theme_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            themes_dir = Path(tmp) / "themes"
+            cfg = builtin_webapp_themes_config("#00fe7a")
+            cfg = WebappThemesConfig(default_theme="windows95", themes=cfg.themes)
+            write_webapp_theme_dir(themes_dir, cfg)
+            windows_theme = themes_dir / "windows95" / "theme.json"
+            windows_theme.unlink()
+
+            resolved = resolved_webapp_themes_catalog(
+                theme_dir=themes_dir,
+                primary_accent="#00fe7a",
+                env_default_theme=None,
+            )
+
+            self.assertEqual(resolved.default_theme, "dark")
+            self.assertTrue(resolved.theme_by_key("dark").default)
+
+    def test_public_payload_injects_primary_accent_when_enabled(self):
+        cfg = builtin_webapp_themes_config("#abc123")
+
+        payload = public_themes_catalog_payload(cfg, "#abc123")
+        dark = next(theme for theme in payload["themes"] if theme["key"] == "dark")
+        win95 = next(theme for theme in payload["themes"] if theme["key"] == "windows95")
+
+        self.assertEqual(dark["tokens"]["accent"], "#abc123")
+        self.assertEqual(dark["active_variant"], "dark")
+        self.assertEqual(dark["tokens"]["color_scheme"], "dark")
+        self.assertFalse(win95["use_primary_accent"])
+        self.assertTrue(win95["use_in_admin"])
+        self.assertNotIn("accent", win95["tokens"])
+        self.assertEqual(set(win95["variants"]), {"light", "dark"})
+        self.assertEqual(win95["variants"]["dark"]["color_scheme"], "dark")
+
+    def test_public_enabled_payload_hides_legacy_light_alias(self):
+        cfg = builtin_webapp_themes_config("#abc123")
+
+        payload = public_themes_catalog_payload(cfg, "#abc123", enabled_only=True)
+
+        self.assertNotIn("light", {theme["key"] for theme in payload["themes"]})
+
+    def test_effective_tokens_use_default_light_variant(self):
+        cfg = apply_webapp_theme_env_overrides(builtin_webapp_themes_config("#abc123"), "light")
+        dark = cfg.theme_by_key("dark")
+
+        tokens = effective_webapp_theme_tokens(dark, "#abc123")
+
+        self.assertEqual(tokens.color_scheme, "light")
+        self.assertEqual(tokens.bg, "#f7f8fb")
+        self.assertEqual(tokens.accent, "#abc123")
+
+    def test_core_merge_strips_default_theme_admin_tokens(self):
+        cfg = WebappThemesConfig(
+            default_theme="dark",
+            themes=[
+                {
+                    "key": "dark",
+                    "names": {"ru": "Темная", "en": "Dark"},
+                    "enabled": True,
+                    "default": True,
+                    "active_variant": "light",
+                    "tokens": {
+                        "color_scheme": "dark",
+                        "admin_bg": "#000000",
+                    },
+                    "variants": {
+                        "light": {
+                            "color_scheme": "light",
+                            "bg": "#ffffff",
+                            "admin_surface": "#ffffff",
+                            "admin_chart_fill": "rgba(0, 0, 0, 0.1)",
+                        }
+                    },
+                }
+            ],
+        )
+
+        merged, changed = ensure_webapp_core_themes(cfg, "#abc123")
+        dark = merged.theme_by_key("dark")
+
+        self.assertTrue(changed)
+        self.assertEqual(dark.names, {"ru": "По умолчанию", "en": "Default"})
+        self.assertIsNone(dark.tokens.admin_bg)
+        self.assertIsNone(dark.variants["light"].admin_surface)
+        self.assertIsNone(dark.variants["light"].admin_chart_fill)
+
+    def test_core_merge_refreshes_untouched_default_light_tokens(self):
+        cfg = WebappThemesConfig(
+            default_theme="dark",
+            themes=[
+                {
+                    "key": "dark",
+                    "enabled": True,
+                    "default": True,
+                    "assets_version": 2,
+                    "active_variant": "light",
+                    "tokens": {"color_scheme": "dark"},
+                    "variants": {
+                        "dark": {"color_scheme": "dark"},
+                        "light": {
+                            "color_scheme": "light",
+                            "text": "#0f172a",
+                            "warning": "#d97706",
+                            "radius": "11px",
+                        },
+                    },
+                }
+            ],
+        )
+
+        merged, changed = ensure_webapp_core_themes(cfg, "#00fe7a")
+        light = merged.theme_by_key("dark").variants["light"]
+
+        self.assertTrue(changed)
+        self.assertEqual(light.text, "#0b1220")
+        self.assertEqual(light.warning, "#a16207")
+        self.assertEqual(light.success_text, "#065f46")
+        self.assertEqual(light.radius, "11px")
+
+    def test_effective_accent_uses_default_theme_token(self):
+        cfg = WebappThemesConfig(
+            default_theme="custom",
+            themes=[
+                {
+                    "key": "custom",
+                    "enabled": True,
+                    "default": True,
+                    "tokens": {"color_scheme": "dark", "accent": "#123abc"},
+                }
+            ],
+        )
+
+        self.assertEqual(effective_webapp_theme_accent(cfg, "#00fe7a"), "#123abc")
+
+    def test_effective_accent_can_use_preview_theme_token(self):
+        cfg = WebappThemesConfig(
+            default_theme="dark",
+            themes=[
+                {
+                    "key": "dark",
+                    "enabled": True,
+                    "default": True,
+                    "tokens": {"color_scheme": "dark", "accent": "#123abc"},
+                },
+                {
+                    "key": "neon",
+                    "enabled": True,
+                    "tokens": {"color_scheme": "dark", "accent": "#ff33aa"},
+                },
+            ],
+        )
+
+        self.assertEqual(
+            effective_webapp_theme_accent(cfg, "#00fe7a", theme_key="neon"),
+            "#ff33aa",
+        )
+
+    def test_theme_accent_is_normalized_to_hex(self):
+        cfg = WebappThemesConfig(
+            default_theme="custom",
+            themes=[
+                {
+                    "key": "custom",
+                    "enabled": True,
+                    "default": True,
+                    "tokens": {"color_scheme": "dark", "accent": "0F8"},
+                }
+            ],
+        )
+
+        self.assertEqual(cfg.theme_by_key("custom").tokens.accent, "#00ff88")
+
+    def test_theme_accent_keeps_alpha_hex(self):
+        cfg = WebappThemesConfig(
+            default_theme="custom",
+            themes=[
+                {
+                    "key": "custom",
+                    "enabled": True,
+                    "default": True,
+                    "tokens": {"color_scheme": "dark", "accent": "0F8C"},
+                }
+            ],
+        )
+
+        self.assertEqual(cfg.theme_by_key("custom").tokens.accent, "#00ff88cc")
+
+    def test_theme_home_logo_scales_are_public_tokens(self):
+        cfg = WebappThemesConfig(
+            default_theme="custom",
+            themes=[
+                {
+                    "key": "custom",
+                    "enabled": True,
+                    "default": True,
+                    "tokens": {
+                        "color_scheme": "dark",
+                        "home_logo_scale": 135,
+                        "home_logo_scale_desktop": 150,
+                        "home_logo_scale_mobile": 85,
+                    },
+                }
+            ],
+        )
+
+        payload = public_themes_catalog_payload(cfg, "#abc123")
+        custom = payload["themes"][0]
+
+        self.assertEqual(cfg.theme_by_key("custom").tokens.home_logo_scale, 135)
+        self.assertEqual(cfg.theme_by_key("custom").tokens.home_logo_scale_desktop, 150)
+        self.assertEqual(cfg.theme_by_key("custom").tokens.home_logo_scale_mobile, 85)
+        self.assertEqual(custom["tokens"]["home_logo_scale"], 135)
+        self.assertEqual(custom["tokens"]["home_logo_scale_desktop"], 150)
+        self.assertEqual(custom["tokens"]["home_logo_scale_mobile"], 85)
+
+    def test_theme_home_logo_scales_normalize_to_slider_steps(self):
+        cfg = WebappThemesConfig(
+            default_theme="custom",
+            themes=[
+                {
+                    "key": "custom",
+                    "default": True,
+                    "tokens": {
+                        "home_logo_scale": 49,
+                        "home_logo_scale_desktop": 123,
+                        "home_logo_scale_mobile": 123.9,
+                    },
+                }
+            ],
+        )
+
+        tokens = cfg.theme_by_key("custom").tokens
+        self.assertEqual(tokens.home_logo_scale, 50)
+        self.assertEqual(tokens.home_logo_scale_desktop, 125)
+        self.assertEqual(tokens.home_logo_scale_mobile, 125)
+
+    def test_theme_accent_rejects_non_hex_values(self):
+        with self.assertRaises(ValueError):
+            WebappThemesConfig(
+                default_theme="custom",
+                themes=[
+                    {
+                        "key": "custom",
+                        "enabled": True,
+                        "default": True,
+                        "tokens": {"color_scheme": "dark", "accent": "lime"},
+                    }
+                ],
+            )
+
+    def test_theme_transparency_is_bounded_percentage(self):
+        cfg = WebappThemesConfig(
+            default_theme="custom",
+            themes=[
+                {
+                    "key": "custom",
+                    "default": True,
+                    "tokens": {"color_scheme": "dark", "transparency": 42},
+                }
+            ],
+        )
+
+        self.assertEqual(cfg.theme_by_key("custom").tokens.transparency, 42)
+        with self.assertRaises(ValueError):
+            WebappThemesConfig(
+                default_theme="custom",
+                themes=[
+                    {
+                        "key": "custom",
+                        "default": True,
+                        "tokens": {"transparency": 101},
+                    }
+                ],
+            )
+
+    def test_theme_separator_token_accepts_short_text_and_empty_value(self):
+        cfg = WebappThemesConfig(
+            default_theme="custom",
+            themes=[
+                {
+                    "key": "custom",
+                    "default": True,
+                    "tokens": {"color_scheme": "dark", "separator": "|"},
+                },
+                {
+                    "key": "plain",
+                    "default": False,
+                    "tokens": {"color_scheme": "dark", "separator": ""},
+                },
+            ],
+        )
+
+        payload = public_themes_catalog_payload(cfg, "#abc123")
+        payload_by_key = {theme["key"]: theme for theme in payload["themes"]}
+
+        self.assertEqual(cfg.theme_by_key("custom").tokens.separator, "|")
+        self.assertEqual(payload_by_key["custom"]["tokens"]["separator"], "|")
+        # An empty separator is meaningful: the theme removes the separator.
+        self.assertEqual(payload_by_key["plain"]["tokens"]["separator"], "")
+
+        with self.assertRaises(ValueError):
+            WebappThemesConfig(
+                default_theme="custom",
+                themes=[
+                    {
+                        "key": "custom",
+                        "default": True,
+                        "tokens": {"separator": "too-long-separator"},
+                    }
+                ],
+            )
+
+        with self.assertRaises(ValueError):
+            WebappThemesConfig(
+                default_theme="custom",
+                themes=[
+                    {
+                        "key": "custom",
+                        "default": True,
+                        "tokens": {"separator": "·\n·"},
+                    }
+                ],
+            )
+
+    def test_theme_referral_bonus_list_mode_is_public_and_lenient(self):
+        cfg = WebappThemesConfig(
+            default_theme="collapsed_theme",
+            themes=[
+                {
+                    "key": "collapsed_theme",
+                    "default": True,
+                    "tokens": {"color_scheme": "dark", "referral_bonus_list": "COLLAPSED"},
+                },
+                {
+                    "key": "expanded_theme",
+                    "default": False,
+                    "tokens": {"color_scheme": "dark", "referral_bonus_list": "expanded"},
+                },
+                {
+                    "key": "typo_theme",
+                    "default": False,
+                    "tokens": {"color_scheme": "dark", "referral_bonus_list": "collapsable"},
+                },
+            ],
+        )
+
+        payload = public_themes_catalog_payload(cfg, "#abc123")
+        payload_by_key = {theme["key"]: theme for theme in payload["themes"]}
+
+        self.assertEqual(
+            cfg.theme_by_key("collapsed_theme").tokens.referral_bonus_list, "collapsed"
+        )
+        self.assertEqual(
+            payload_by_key["collapsed_theme"]["tokens"]["referral_bonus_list"], "collapsed"
+        )
+        self.assertEqual(
+            payload_by_key["expanded_theme"]["tokens"]["referral_bonus_list"], "expanded"
+        )
+        # An unknown mode must not invalidate the descriptor or reach the client.
+        self.assertIsNone(cfg.theme_by_key("typo_theme").tokens.referral_bonus_list)
+        self.assertNotIn("referral_bonus_list", payload_by_key["typo_theme"]["tokens"])
+
+    def test_home_element_visibility_tokens_are_public_and_lenient(self):
+        cfg = WebappThemesConfig(
+            default_theme="custom",
+            themes=[
+                {
+                    "key": "custom",
+                    "default": True,
+                    "tokens": {
+                        "home_subscription_period_visibility": "HIDDEN",
+                        "home_tariff_name_visibility": "visible",
+                        "home_balance_visibility": "auto",
+                        "home_auto_renew_visibility": "collapsable",
+                    },
+                }
+            ],
+        )
+
+        theme = cfg.theme_by_key("custom")
+        payload = public_themes_catalog_payload(cfg, "#abc123")["themes"][0]["tokens"]
+
+        self.assertEqual(theme.tokens.home_subscription_period_visibility, "hidden")
+        self.assertEqual(theme.tokens.home_tariff_name_visibility, "visible")
+        self.assertEqual(theme.tokens.home_balance_visibility, "auto")
+        self.assertIsNone(theme.tokens.home_auto_renew_visibility)
+        self.assertEqual(payload["home_subscription_period_visibility"], "hidden")
+        self.assertNotIn("home_auto_renew_visibility", payload)
+
+    def test_public_payload_keeps_admin_usage_flag(self):
+        cfg = WebappThemesConfig(
+            default_theme="custom",
+            themes=[
+                {
+                    "key": "custom",
+                    "names": {"en": "Custom"},
+                    "enabled": True,
+                    "default": True,
+                    "use_in_admin": False,
+                    "tokens": {"color_scheme": "dark"},
+                }
+            ],
+        )
+
+        payload = public_themes_catalog_payload(cfg, "#abc123")
+
+        self.assertFalse(payload["themes"][0]["use_in_admin"])
+
+    def test_resolved_refreshes_stale_builtin_windows95_assets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            themes_dir = Path(tmp) / "themes"
+            stale_theme_dir = themes_dir / "windows95"
+            stale_theme_dir.mkdir(parents=True)
+            (stale_theme_dir / "theme.json").write_text(
+                json.dumps(
+                    {
+                        "key": "windows95",
+                        "names": {"en": "Windows 95"},
+                        "enabled": True,
+                        "default": False,
+                        "use_primary_accent": True,
+                        "css_file": "style.css",
+                        "assets_version": 1,
+                        "tokens": {"color_scheme": "light", "style_preset": "win95"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (stale_theme_dir / "style.css").write_text("/* stale */", encoding="utf-8")
+
+            cfg = resolved_webapp_themes_catalog(
+                theme_dir=themes_dir,
+                primary_accent="#00fe7a",
+                env_default_theme=None,
+            )
+
+            descriptor = json.loads((stale_theme_dir / "theme.json").read_text(encoding="utf-8"))
+            css = (stale_theme_dir / "style.css").read_text(encoding="utf-8")
+            self.assertEqual(
+                descriptor["assets_version"],
+                cfg.theme_by_key("windows95").assets_version,
+            )
+            self.assertEqual(descriptor["assets_version"], 16)
+            self.assertIn("lucide-house", css)
+            self.assertIn("lucide-earth", css)
+            self.assertIn("lucide-circle-check", css)
+            self.assertIn("lucide-circle-check-big", css)
+            self.assertIn("filter: none !important", css)
+            self.assertIn("Press Start 2P", css)
+            self.assertIn("::-webkit-slider-thumb", css)
+            self.assertIn("?v=9", css)
+            self.assertIn("lucide-life-buoy", css)
+            self.assertIn("lucide-qr-code", css)
+            self.assertIn("New webapp surfaces: support, purchase info, password login", css)
+            self.assertIn("Install guide theme surfaces", css)
+            self.assertIn("Admin controls: range sliders and sortable rows", css)
+            self.assertIn("Admin health config alerts", css)
+            self.assertIn(
+                (
+                    ".theme-key-windows95 .support-list-card {\n"
+                    "    grid-template-rows: auto auto minmax(0, 1fr);"
+                ),
+                css,
+            )
+            self.assertIn(".theme-key-windows95 .traffic-top strong", css)
+            self.assertTrue((stale_theme_dir / "icons" / "dashboard.png").exists())
+
+    def test_resolved_converts_stale_builtin_light_to_hidden_alias(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            themes_dir = Path(tmp) / "themes"
+            stale_theme_dir = themes_dir / "light"
+            stale_theme_dir.mkdir(parents=True)
+            (stale_theme_dir / "theme.json").write_text(
+                json.dumps(
+                    {
+                        "key": "light",
+                        "names": {"en": "Light"},
+                        "enabled": True,
+                        "default": False,
+                        "use_primary_accent": True,
+                        "css_file": "style.css",
+                        "assets_version": 1,
+                        "tokens": {"color_scheme": "light"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (stale_theme_dir / "style.css").write_text("/* stale */", encoding="utf-8")
+
+            cfg = resolved_webapp_themes_catalog(
+                theme_dir=themes_dir,
+                primary_accent="#00fe7a",
+                env_default_theme=None,
+            )
+
+            descriptor = json.loads((stale_theme_dir / "theme.json").read_text(encoding="utf-8"))
+            light = cfg.theme_by_key("light")
+            self.assertTrue(light.hidden)
+            self.assertEqual(light.variant_alias_for, "dark")
+            self.assertIsNone(light.css_file)
+            self.assertNotIn("css_file", descriptor)
+            self.assertEqual(descriptor["active_variant"], "light")
+
+    def test_resolved_refreshes_stale_builtin_ascii_assets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            themes_dir = Path(tmp) / "themes"
+            stale_theme_dir = themes_dir / "ascii"
+            stale_theme_dir.mkdir(parents=True)
+            (stale_theme_dir / "theme.json").write_text(
+                json.dumps(
+                    {
+                        "key": "ascii",
+                        "names": {"en": "ASCII"},
+                        "enabled": True,
+                        "default": False,
+                        "use_primary_accent": False,
+                        "css_file": "style.css",
+                        "assets_version": 1,
+                        "tokens": {"color_scheme": "dark", "style_preset": "ascii"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (stale_theme_dir / "style.css").write_text("/* stale */", encoding="utf-8")
+
+            cfg = resolved_webapp_themes_catalog(
+                theme_dir=themes_dir,
+                primary_accent="#00fe7a",
+                env_default_theme=None,
+            )
+
+            descriptor = json.loads((stale_theme_dir / "theme.json").read_text(encoding="utf-8"))
+            css = (stale_theme_dir / "style.css").read_text(encoding="utf-8")
+            self.assertEqual(descriptor["assets_version"], cfg.theme_by_key("ascii").assets_version)
+            self.assertEqual(descriptor["assets_version"], 9)
+            self.assertIn("Console-style tables", css)
+            self.assertIn("Install guide theme surfaces", css)
+            self.assertIn("Admin controls: range sliders and sortable rows", css)
+            self.assertIn("Admin health config alerts", css)

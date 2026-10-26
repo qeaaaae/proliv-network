@@ -1,0 +1,29 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.1
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: npm-lockfiles-sync
+        name: npm lockfiles are synchronized
+        entry: node scripts/check_npm_lockfiles.mjs
+        language: system
+        files: ^(frontend|docs-site)/package(-lock)?\.json$|^scripts/check_npm_lockfiles\.mjs$
+
+      - id: docs-integrity
+        name: docs artifacts and sidebar
+        entry: npm run check:docs
+        language: system
+        files: ^(CHANGELOG\.md$|docs/|docs-site/(astro\.config\.mjs|package\.json|src/|public/|scripts/))
+        pass_filenames: false
+
+      - id: frontend-prettier
+        name: frontend prettier
+        entry: npm --prefix frontend run format
+        language: system
+        files: ^frontend/(src/.*\.(js|ts|svelte)|scripts/.*\.mjs)$
+        pass_filenames: false

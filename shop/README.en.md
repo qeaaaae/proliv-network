@@ -1,0 +1,129 @@
+# Remnawave Minishop
+
+![Remnawave Minishop](docs/remnawave-minishop.webp)
+
+English contributor entry point. The Russian [README.md](README.md) and
+[CONTRIBUTING.md](CONTRIBUTING.md) are canonical; this page is a compact map for setup,
+verification, and the most important repository rules.
+
+Remnawave Minishop is a Telegram bot and Web App (Mini App) for selling and managing
+subscriptions in a [Remnawave](https://docs.rw/) panel. It covers registration, payments,
+renewals, trials, promo codes, referrals, support tickets, install guides, device management,
+traffic add-ons, and an admin panel backed by typed HTTP contracts.
+
+## Features
+
+For users:
+
+- Telegram bot onboarding with Russian and English locales.
+- Subscription status, connection link, expiry date, traffic usage, and device limits.
+- Web App login through Telegram Mini Apps `initData`, Telegram OAuth / OpenID Connect, or a
+  one-time email code.
+- Trial periods, promo codes, referrals, flexible checkout limits, standalone traffic/device add-ons,
+  and install guides.
+- Payment integrations including YooKassa, FreeKassa, Platega, RollyPay, SeverPay, Wata, CryptoPay,
+  Heleket, PayKilla, LAVA, Pally, CloudPayments, Stripe, Tribute, and Telegram Stars.
+- Support tickets inside the Web App plus optional external support links.
+
+For admins:
+
+- Web App admin area with account-owned `owner` and `admin` roles, including accounts without Telegram.
+- User, subscription, payment, sync, broadcast, promo, support, and action-log workflows.
+- Tariff catalog editor with time-based and traffic-based plans, flexible regular/premium traffic
+  limits, Internal Squads, and HWID/device options.
+- Manual Remnawave sync, panel webhook processing, backups, themes, translations, and runtime
+  settings layered over `.env`.
+
+## Quickstart
+
+Requirements:
+
+- Docker and Docker Compose.
+- A Remnawave panel newer than `2.7.0`.
+- A Telegram bot token.
+- Public HTTPS domains for webhooks and the Mini App.
+
+<!-- GitHub clone URL (disabled): https://github.com/3252a8/remnawave-minishop -->
+
+```bash
+git clone https://gitlab.com/3252a8/remnawave-minishop.git
+cd remnawave-minishop
+cp .env.example .env
+# edit .env
+docker compose up -d --build
+docker compose logs -f backend worker frontend
+```
+
+Initial `.env` settings:
+
+- `TELEGRAM_ENABLED` and `BOT_TOKEN`; the token is required only when Telegram is enabled.
+- Optional `BOOTSTRAP_OWNER_TELEGRAM_ID` and `BOOTSTRAP_OWNER_EMAIL`; both may be left empty.
+- Optional `ADMIN_IDS` only for importing existing administrators with a saved Telegram identity once.
+- `WEBHOOK_BASE_URL`, `WEBHOOK_SECRET_TOKEN`, and `SUBSCRIPTION_MINI_APP_URL`.
+- `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB`.
+- `WEBAPP_ENABLED=True` and a stable `WEBAPP_SESSION_SECRET`.
+- `PANEL_API_URL`, `PANEL_API_KEY`, and `PANEL_WEBHOOK_SECRET`.
+
+The installer asks for optional owner Telegram and email identities. The first authenticated
+account with a matching verified identity receives `owner` once. If both fields are skipped,
+register using an available login method, copy the Minishop ID from your profile, and run
+`docker compose exec backend python backend/scripts/bootstrap_owner.py --minishop-id ms_<id>`
+from the installation directory. The command does not require linked Telegram/email and refuses
+to replace an existing owner. SMTP setup can also be skipped; configure an available login
+method before registration. See the [first-owner guide](docs/features/telegram-optional.md#первый-владелец).
+
+After the first admin login, finish tariffs, payment providers, appearance, support, and
+installation-guide settings in the UI. See [docs/index.md](docs/index.md) for the full docs map.
+
+## Contributor Map
+
+The local and CI toolchain is Python 3.12 plus Node.js 22.
+
+Run the aggregate gate before pushing:
+
+```bash
+make check
+```
+
+Start the local development stand with one command:
+
+```bash
+make dev
+```
+
+Without GNU Make, use the equivalent root command:
+
+```bash
+npm run check
+```
+
+The canonical gates from [CONTRIBUTING.md](CONTRIBUTING.md) section 1 are:
+
+```bash
+python -m pytest -q
+python -m ruff check .
+python -m ruff format --check .
+python -m mypy --explicit-package-bases backend/config backend/db backend/bot/infra \
+  backend/bot/middlewares backend/bot/utils \
+  backend/bot/plugins backend/bot/keyboards backend/bot/payment_providers backend/bot/services \
+  backend/bot/handlers backend/bot/app/factories backend/bot/app/controllers backend/bot/app/web \
+  backend/main_backend.py backend/main_worker.py backend/scripts scripts tests
+npm --prefix frontend run check
+npm --prefix frontend run test
+npm --prefix frontend run build
+npm --prefix frontend run test:e2e
+python scripts/check_architecture.py
+```
+
+Golden rules from section 2, in short:
+
+- Regenerate generated artifacts instead of hand-editing them.
+- Treat database migrations as append-only.
+- Keep mypy green without silencing first-party code.
+- Preserve wire contracts: the `{"ok": ...}` envelope, flat event payloads, and plugin subscriber
+  signature `(event_name, dict)`.
+- Keep first-party Svelte code in `frontend/src` on runes-only syntax.
+- Decompose large modules before broadening type scope.
+- Preserve compatibility with imports from older bots; it is a supported feature, not dead code.
+
+Commits use English Conventional Commit subjects and no `Co-Authored-By` trailer.
