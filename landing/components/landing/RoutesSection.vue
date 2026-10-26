@@ -1,8 +1,6 @@
 <template>
   <section class="landing-block" aria-labelledby="routes-title">
     <div class="content-frame">
-      <DotField class="dot-field--left" />
-
       <header class="block-head" data-reveal>
         <p class="block-kicker">02 — Маршруты</p>
         <h2 id="routes-title">Как Network <AccentMark>направляет трафик</AccentMark></h2>

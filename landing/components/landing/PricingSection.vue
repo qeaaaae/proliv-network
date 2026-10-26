@@ -43,8 +43,6 @@ watch(selected, (i) => {
 <template>
   <section id="pricing" class="landing-block" aria-labelledby="pricing-title">
     <div class="content-frame">
-      <DotField class="dot-field--right" />
-
       <header class="block-head">
         <p class="block-kicker">03 — Тариф</p>
         <h2 id="pricing-title">

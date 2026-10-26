@@ -6,7 +6,6 @@ import SiteFooter from './SiteFooter.vue'
 <template>
   <div class="site-closing">
     <div class="content-frame">
-      <DotField class="dot-field--left closing-field" />
       <div class="closing-sheet sheet">
         <FinalCta />
         <SiteFooter />

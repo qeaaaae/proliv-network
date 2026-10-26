@@ -5,7 +5,6 @@ import LocationScene from './LocationScene.vue'
 <template>
   <section class="landing-block" aria-labelledby="locations-title">
     <div class="content-frame">
-      <DotField class="dot-field--right" />
       <header class="block-head" data-reveal>
         <p class="block-kicker">01 — Локации</p>
         <h2 id="locations-title">

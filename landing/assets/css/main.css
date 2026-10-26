@@ -179,23 +179,6 @@ section[id] {
   font-size: 17px;
 }
 
-/* dot-field ripple fields anchored to viewport edges, arcs slide under the sheet */
-.dot-field {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: min(34vw, 420px);
-  pointer-events: none;
-  opacity: 0.9;
-}
-
-.dot-field--left {
-  left: calc(50% - 50vw);
-}
-
-.dot-field--right {
-  right: calc(50% - 50vw);
-}
 
 /* staggered reveal */
 [data-reveal] {

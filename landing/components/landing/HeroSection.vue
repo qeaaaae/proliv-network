@@ -5,7 +5,6 @@ import { CABINET_URL, TELEGRAM_BOT_URL } from '../../utils/links'
 <template>
   <section class="hero">
     <div class="content-frame">
-      <DotField class="dot-field--left" />
       <div class="hero-stage sheet">
         <LightFlare />
         <header class="hero-header">
