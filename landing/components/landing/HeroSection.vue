@@ -1,5 +1,32 @@
 <script setup lang="ts">
+import { onBeforeUnmount, onMounted, useTemplateRef } from 'vue'
 import { CABINET_URL, TELEGRAM_BOT_URL } from '../../utils/links'
+
+const copy = useTemplateRef<HTMLElement>('copy')
+let raf = 0
+
+const onScroll = () => {
+  if (raf) return
+  raf = requestAnimationFrame(() => {
+    raf = 0
+    const el = copy.value
+    if (!el) return
+    const y = Math.min(window.scrollY, 600)
+    el.style.transform = `translateY(${(-y * 0.14).toFixed(1)}px)`
+    el.style.opacity = String(Math.max(0, 1 - y / 620))
+  })
+}
+
+onMounted(() => {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return
+  window.addEventListener('scroll', onScroll, { passive: true })
+  onScroll()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('scroll', onScroll)
+  cancelAnimationFrame(raf)
+})
 </script>
 
 <template>
@@ -11,7 +38,7 @@ import { CABINET_URL, TELEGRAM_BOT_URL } from '../../utils/links'
           <ProlivLogo />
           <BaseButton variant="primary" size="small" :href="CABINET_URL" target="_blank" rel="noopener">Кабинет</BaseButton>
         </header>
-        <div class="hero-copy">
+        <div ref="copy" class="hero-copy">
           <h1 class="hero-title" data-reveal>
             Proliv Network<br />быстро и <AccentMark>без сложностей</AccentMark>
           </h1>

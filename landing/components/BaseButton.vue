@@ -23,6 +23,7 @@ withDefaults(
 
 <style scoped>
 .base-button {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -33,11 +34,31 @@ withDefaults(
   font-weight: 600;
   font-size: 16px;
   white-space: nowrap;
+  overflow: hidden;
   transition:
     transform 0.18s ease,
     background-color 0.18s ease,
     border-color 0.18s ease,
     box-shadow 0.18s ease;
+}
+
+.base-button::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 40%,
+    rgba(125, 211, 252, 0.4) 50%,
+    transparent 60%
+  );
+  transform: translateX(-130%);
+  transition: transform 0.65s var(--ease-out);
+  pointer-events: none;
+}
+
+.base-button:hover::after {
+  transform: translateX(130%);
 }
 
 .base-button:active {
@@ -51,7 +72,8 @@ withDefaults(
 
 .base-button--primary:hover {
   background: #ffffff;
-  box-shadow: 0 8px 32px -8px rgba(255, 255, 255, 0.35);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 36px -8px rgba(125, 211, 252, 0.45);
 }
 
 .base-button--secondary {
@@ -62,7 +84,9 @@ withDefaults(
 
 .base-button--secondary:hover {
   background: #2c3036;
-  border-color: var(--border-strong);
+  transform: translateY(-1px);
+  border-color: rgba(125, 211, 252, 0.4);
+  box-shadow: 0 10px 30px -12px rgba(125, 211, 252, 0.25);
 }
 
 .base-button--small {

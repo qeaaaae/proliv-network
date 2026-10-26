@@ -54,6 +54,18 @@
   border-top: 1px solid var(--line);
 }
 
+.route-path {
+  transition: text-shadow 0.3s ease;
+}
+
+.route:hover .route-leader {
+  filter: brightness(1.6);
+}
+
+.route:hover .route-path {
+  text-shadow: 0 0 30px rgba(125, 211, 252, 0.5);
+}
+
 .route-name,
 .route-path {
   font-family: var(--font-display);
@@ -88,7 +100,9 @@
   transform-origin: 0;
   background: radial-gradient(circle, rgba(255, 255, 255, 0.22) 1.6px, transparent 2.1px) 0 0 / 14px
     10px repeat-x;
-  transition: transform 1.4s var(--ease-out) 0.25s;
+  transition:
+    transform 1.4s var(--ease-out) 0.25s,
+    filter 0.3s ease;
 }
 
 /* a "packet": bright head dot + fading dot trail, riding the leader */

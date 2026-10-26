@@ -63,6 +63,14 @@ import LocationScene from './LocationScene.vue'
   position: absolute;
   inset: 0 0 auto;
   height: 74%;
+  transition:
+    filter 0.5s ease,
+    transform 0.7s var(--ease-out);
+}
+
+.location:hover :deep(.location-scene) {
+  filter: brightness(1.3);
+  transform: scale(1.02);
 }
 
 .location-meta {
@@ -121,11 +129,41 @@ import LocationScene from './LocationScene.vue'
 }
 
 .strip-dot {
+  position: relative;
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: #3ddc84;
   box-shadow: 0 0 8px rgba(61, 220, 132, 0.7);
+}
+
+.strip-dot::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1px solid rgba(61, 220, 132, 0.6);
+  animation: status-ping 2.4s var(--ease-out) infinite;
+}
+
+@keyframes status-ping {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.9;
+  }
+
+  70%,
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .strip-dot::after {
+    animation: none;
+    opacity: 0;
+  }
 }
 
 .strip-text {
@@ -140,6 +178,11 @@ import LocationScene from './LocationScene.vue'
 .strip-more {
   margin-left: 6px;
   color: var(--accent);
+  transition: transform 0.3s var(--ease-out);
+}
+
+.status-strip:hover .strip-more {
+  transform: translateX(4px);
 }
 
 @media (max-width: 620px) {
