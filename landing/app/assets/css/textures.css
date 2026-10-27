@@ -1,0 +1,61 @@
+body::before {
+  position: fixed;
+  z-index: -1;
+  inset: 0;
+  content: '';
+  pointer-events: none;
+  background: var(--texture-noise-tile) repeat;
+  background-size: 96px 96px;
+  filter: invert(1);
+  opacity: .055;
+}
+
+.plate {
+  position: relative;
+  isolation: isolate;
+  color: var(--plate-ink);
+  background-color: var(--plate);
+  border-radius: var(--radius-plate);
+}
+
+.plate::after {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  content: '';
+  pointer-events: none;
+  background: var(--texture-noise-tile) repeat;
+  background-size: 72px 72px;
+  border-radius: inherit;
+  opacity: .16;
+  mix-blend-mode: multiply;
+}
+
+.grain-panel {
+  position: relative;
+  isolation: isolate;
+}
+
+.grain-panel::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  content: '';
+  pointer-events: none;
+  background: var(--texture-noise-tile) repeat;
+  background-size: 96px 96px;
+  border-radius: inherit;
+  filter: invert(1);
+  opacity: .04;
+}
+
+::selection {
+  color: var(--plate-ink);
+  background-color: var(--plate);
+}
+
+.plate::selection,
+.plate ::selection {
+  color: var(--plate);
+  background-color: var(--plate-ink);
+}

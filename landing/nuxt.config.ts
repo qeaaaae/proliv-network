@@ -1,3 +1,5 @@
+import { BUILD_ASSETS_DIR, viteAssetBuild, viteServerAssetBuild } from './config/vite-assets'
+
 export default defineNuxtConfig({
   compatibilityDate: '2025-10-25',
   devtools: { enabled: false },
@@ -8,41 +10,51 @@ export default defineNuxtConfig({
       cabinetUrl: process.env.NUXT_PUBLIC_CABINET_URL || 'http://localhost:3300',
     },
   },
-  app: {
-    head: {
-      htmlAttrs: { lang: 'ru' },
-      title: 'Proliv Network',
-      meta: [
-        { charset: 'utf-8' },
-        { name: 'viewport', content: 'width=device-width, initial-scale=1' },
-        { name: 'theme-color', content: '#050607' },
-        { name: 'format-detection', content: 'telephone=no' },
-        {
-          name: 'description',
-          content:
-            'Три локации с портом 10 Гбит/с, 1000 ГБ трафика в месяц и 5 устройств. Подключение от 179 ₽.',
-        },
-        { property: 'og:type', content: 'website' },
-        { property: 'og:site_name', content: 'Proliv Network' },
-        { property: 'og:title', content: 'Proliv Network' },
-        {
-          property: 'og:description',
-          content:
-            'Три локации с портом 10 Гбит/с, 1000 ГБ трафика в месяц и 5 устройств. Подключение от 179 ₽.',
-        },
-      ],
-      link: [{ rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
-      script: [
-        {
-          innerHTML:
-            "if(matchMedia('(prefers-reduced-motion: no-preference)').matches&&'IntersectionObserver'in window){const r=document.documentElement;r.classList.add('motion');setTimeout(()=>{if(!('reveal'in r.dataset))r.classList.remove('motion')},4000)}",
-        },
-      ],
-    },
+  css: ['@fontsource-variable/unbounded', '@fontsource-variable/manrope', '~/assets/css/main.css'],
+  features: { inlineStyles: false },
+  hooks: {
+    'build:manifest'(manifest) {
+      for (const resource of Object.values(manifest)) {
+        resource.prefetch = false
+      }
+    }
   },
-  css: [
-    '@fontsource-variable/onest',
-    '@fontsource-variable/unbounded',
-    '~/assets/css/main.css',
-  ],
+  app: {
+    buildAssetsDir: BUILD_ASSETS_DIR,
+    head: {
+      title: 'Proliv Network',
+      htmlAttrs: { lang: 'ru' },
+      link: [
+        { rel: 'canonical', href: 'https://proliv-network.xyz/' },
+        { rel: 'icon', type: 'image/svg+xml', sizes: 'any', href: '/favicon.svg' }
+      ],
+      meta: [
+        { name: 'viewport', content: 'width=device-width, initial-scale=1' },
+        { name: 'theme-color', content: '#0a0c0e', tagPriority: 'critical' },
+        { name: 'format-detection', content: 'telephone=no', tagPriority: 'critical' },
+        { name: 'robots', content: 'index, follow, max-image-preview:large', tagPriority: 'critical' }
+      ],
+      script: [
+        { key: 'motion', innerHTML: "if(matchMedia('(prefers-reduced-motion: no-preference)').matches&&'IntersectionObserver'in window){const root=document.documentElement;root.classList.add('motion');setTimeout(()=>{if(!('reveal'in root.dataset))root.classList.remove('motion')},4000)}", tagPriority: 'critical' }
+      ]
+    }
+  },
+  vite: {
+    $client: {
+      build: viteAssetBuild
+    },
+    $server: {
+      build: viteServerAssetBuild
+    }
+  },
+  nitro: {
+    prerender: {
+      ignore: ['/200.html', '/404.html'],
+      routes: ['/', '/terms', '/privacy', '/offer', '/personal-data', '/invite', '/status']
+    }
+  },
+  typescript: {
+    strict: true,
+    typeCheck: false
+  }
 })
