@@ -12,3 +12,5 @@ dist/
 .refcss/
 *.bak.*
 infra/tools/
+
+shop/graphify-out/

@@ -23,8 +23,8 @@ VALUES
   ('MY_DEVICES_SECTION_ENABLED',  'true',                                now()),
   -- Страница статуса серверов выкл, пока нечего показывать
   ('SERVER_STATUS_ENABLED',       'false',                               now()),
-  -- Поддержка: канал Proliv
-  ('SUPPORT_LINK',                '"https://t.me/prolivnet"',            now())
+  -- Поддержка: директ в канал Proliv
+  ('SUPPORT_LINK',                '"https://t.me/prolivnet?direct"',     now())
 ON CONFLICT (key) DO UPDATE
   SET value = EXCLUDED.value,
       updated_at = now();

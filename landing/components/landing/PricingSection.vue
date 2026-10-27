@@ -15,7 +15,7 @@ const periods: Period[] = [
   { label: '1 месяц', months: 1, price: 179, note: 'за 1 месяц' },
   { label: '3 месяца', months: 3, price: 499, note: 'за 3 месяца' },
   { label: '6 месяцев', months: 6, price: 949, note: 'за 6 месяцев' },
-  { label: '12 месяцев', months: 12, price: 1749, note: 'за 12 месяцев' },
+  { label: '12 месяцев', months: 12, price: 1799, note: 'за 12 месяцев' },
 ]
 
 const selected = ref(0)
@@ -129,9 +129,9 @@ watch(selected, (i) => {
               </svg>
               <span class="addon-copy">
                 <span>Дополнительный трафик</span>
-                <small>Покупка от 10 ГБ</small>
+                <small>Пакеты 100 / 500 ГБ</small>
               </span>
-              <strong class="numeric addon-price">0,50 ₽ за 1 ГБ</strong>
+              <strong class="numeric addon-price">от 49 ₽</strong>
             </li>
             <li>
               <svg class="plan-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

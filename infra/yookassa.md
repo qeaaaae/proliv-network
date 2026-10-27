@@ -157,7 +157,7 @@ reconciliation-worker за ~1-2 минуты, но webhook будет 500-кат
       "traffic_limit_strategy": "MONTH",
       "hwid_device_limit": 5,
       "enabled_periods": [1, 3, 6, 12],
-      "prices_rub": { "1": 179, "3": 537, "6": 1074, "12": 2148 },
+      "prices_rub": { "1": 179, "3": 499, "6": 949, "12": 1799 },
       "topup_packages": {
         "rub": [
           { "gb": 100, "price": 49 },
