@@ -28,10 +28,13 @@ app.${DOMAIN} {
 
 # --- Админка Mini App - admin.${DOMAIN} --------------------------------------
 # Веб-приложение (SPA + /api + /admin/*) отдаёт сам minishop-backend на :8081.
-# Бот строит сюда админские ссылки (/admin/support/<id>, /admin/users/<id>)
-# через WEBAPP_ADMIN_URL в shop/.env.
+# Админская работа идёт внутри Telegram Mini App, поэтому из браузера открыты
+# только то, что реально нужно WebView: админские страницы, API и статика.
+# Всё остальное (юзерские страницы, webauth/oauth-флоу, health) - 404.
 admin.${DOMAIN} {
 	encode
+	@blocked not path /admin* /api/* /subscription_webapp* /webapp-* /provider-logos/* /fonts/* /favicon.ico /apple-touch-icon* /icon-* /robots.txt
+	respond @blocked 404
 	reverse_proxy remnawave-minishop-backend:8081 {
 		header_up X-Forwarded-Proto https
 	}

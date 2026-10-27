@@ -73,6 +73,50 @@ def _request_remote_is_trusted_proxy(settings: Settings, request: web.Request) -
     return any(remote_ip in network for network in parse_ip_entries(settings.trusted_proxies))
 
 
+def _host_header_hostname(host_header: str) -> str:
+    value = str(host_header or "").strip().lower()
+    if value.startswith("["):
+        end = value.find("]")
+        return value[1:end] if end > 0 else value
+    if ":" in value:
+        host, _, port = value.rpartition(":")
+        return host if port.isdigit() else value
+    return value
+
+
+def _request_hostname(settings: Settings, request: web.Request) -> str:
+    headers = request.headers
+    if _request_remote_is_trusted_proxy(settings, request):
+        host_header = (
+            _first_header_value(headers.get("X-Forwarded-Host"))
+            or headers.get("Host")
+            or request.host
+        )
+    else:
+        host_header = headers.get("Host") or request.host
+    return _host_header_hostname(host_header)
+
+
+def _admin_panel_only_request(settings: Settings, request: web.Request) -> bool:
+    """True when the request targets the dedicated admin webapp origin.
+
+    Split deployments serve the admin panel from ``WEBAPP_ADMIN_URL``. When it
+    coincides with the public Mini App origin there is no dedicated surface and
+    the regular login flow must stay available.
+    """
+    admin_url = str(getattr(settings, "WEBAPP_ADMIN_URL", "") or "").strip()
+    if not admin_url:
+        return False
+    try:
+        admin_host = (urlsplit(admin_url).hostname or "").lower()
+    except ValueError:
+        return False
+    public_host = (urlsplit(_public_webapp_base_url(settings, request)).hostname or "").lower()
+    if not admin_host or admin_host == public_host:
+        return False
+    return _request_hostname(settings, request) == admin_host
+
+
 def _telegram_oauth_callback_url(settings: Settings, request: web.Request) -> str:
     return f"{_public_webapp_base_url(settings, request)}/auth/telegram/callback"
 

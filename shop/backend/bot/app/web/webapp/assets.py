@@ -119,6 +119,7 @@ from .assets_theme import (
     theme_asset_route,
     theme_css_asset_route,
 )
+from .auth_common import _admin_panel_only_request
 from .billing_tariff_access import request_tariff_access_code
 from .common import (
     _json_error,
@@ -557,6 +558,7 @@ def _build_webapp_bootstrap_payload(request: web.Request) -> dict[str, Any]:
             "faviconUrl": cached["favicon_url"],
             "faviconUseCustom": bool(webapp_settings.favicon_use_custom),
             "apiBase": "/api",
+            "adminPanelOnly": _admin_panel_only_request(settings, request),
             "adminJsAsset": f"/{_resolve_webapp_admin_js_asset_name()}",
             "adminCssAsset": f"/{_resolve_webapp_admin_css_asset_name()}",
             "telegramLoginBotUsername": get_bot_username(request),

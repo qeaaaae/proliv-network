@@ -21,6 +21,7 @@ from bot.app.web.webapp import account as account_routes
 from bot.app.web.webapp import auth_email as auth_email_routes
 from bot.app.web.webapp.assets import _webapp_edge_token_middleware
 from bot.app.web.webapp.auth import session_route
+from bot.app.web.webapp.auth_common import _admin_panel_only_request
 from bot.app.web.webapp_auth import (
     create_telegram_oauth_nonce,
     create_webapp_session_token,
@@ -889,6 +890,109 @@ class WebAppSecurityTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.text, "ok")
         handler.assert_awaited_once()
+
+    async def test_csrf_middleware_allows_admin_panel_origin_when_configured(self):
+        settings = SimpleNamespace(
+            WEBAPP_SESSION_SECRET="session-secret",
+            WEBAPP_SESSION_TTL_SECONDS=3600,
+            SUBSCRIPTION_MINI_APP_URL="https://app.example.com",
+            WEBAPP_ADMIN_URL="https://admin.example.com",
+            trusted_proxies=[],
+        )
+        request = SimpleNamespace(
+            method="POST",
+            path="/api/auth/token",
+            headers={"Origin": "https://admin.example.com"},
+            cookies={},
+            app={"settings": settings},
+        )
+        handler = AsyncMock(return_value=web.Response(text="ok"))
+
+        response = await subscription_webapp._csrf_protection_middleware(request, handler)
+
+        self.assertEqual(response.text, "ok")
+        handler.assert_awaited_once()
+
+    async def test_csrf_middleware_rejects_unknown_origin_when_admin_panel_configured(self):
+        settings = SimpleNamespace(
+            WEBAPP_SESSION_SECRET="session-secret",
+            WEBAPP_SESSION_TTL_SECONDS=3600,
+            SUBSCRIPTION_MINI_APP_URL="https://app.example.com",
+            WEBAPP_ADMIN_URL="https://admin.example.com",
+            trusted_proxies=[],
+        )
+        request = SimpleNamespace(
+            method="POST",
+            path="/api/auth/token",
+            headers={"Origin": "https://evil.example.com"},
+            cookies={},
+            app={"settings": settings},
+        )
+        handler = AsyncMock(return_value=web.Response(text="ok"))
+
+        response = await subscription_webapp._csrf_protection_middleware(request, handler)
+
+        self.assertEqual(response.status, 403)
+        handler.assert_not_awaited()
+
+    def test_admin_panel_only_request_matches_admin_host(self):
+        settings = SimpleNamespace(
+            SUBSCRIPTION_MINI_APP_URL="https://app.example.com",
+            WEBAPP_ADMIN_URL="https://admin.example.com",
+            trusted_proxies=[],
+        )
+        request = SimpleNamespace(
+            headers={"Host": "admin.example.com"},
+            remote="203.0.113.10",
+            host="admin.example.com",
+        )
+
+        self.assertTrue(_admin_panel_only_request(settings, request))
+
+    def test_admin_panel_only_request_rejects_public_app_host(self):
+        settings = SimpleNamespace(
+            SUBSCRIPTION_MINI_APP_URL="https://app.example.com",
+            WEBAPP_ADMIN_URL="https://admin.example.com",
+            trusted_proxies=[],
+        )
+        request = SimpleNamespace(
+            headers={"Host": "app.example.com"},
+            remote="203.0.113.10",
+            host="app.example.com",
+        )
+
+        self.assertFalse(_admin_panel_only_request(settings, request))
+
+    def test_admin_panel_only_request_disabled_when_origins_coincide(self):
+        settings = SimpleNamespace(
+            SUBSCRIPTION_MINI_APP_URL="https://app.example.com",
+            WEBAPP_ADMIN_URL="https://app.example.com",
+            trusted_proxies=[],
+        )
+        request = SimpleNamespace(
+            headers={"Host": "app.example.com"},
+            remote="203.0.113.10",
+            host="app.example.com",
+        )
+
+        self.assertFalse(_admin_panel_only_request(settings, request))
+
+    def test_admin_panel_only_request_uses_forwarded_host_from_trusted_proxy(self):
+        settings = SimpleNamespace(
+            SUBSCRIPTION_MINI_APP_URL="https://app.example.com",
+            WEBAPP_ADMIN_URL="https://admin.example.com",
+            trusted_proxies=["10.0.0.0/8"],
+        )
+        request = SimpleNamespace(
+            headers={
+                "Host": "internal-backend",
+                "X-Forwarded-Host": "admin.example.com",
+            },
+            remote="10.0.0.8",
+            host="internal-backend",
+        )
+
+        self.assertTrue(_admin_panel_only_request(settings, request))
 
     async def test_edge_token_middleware_rejects_protected_webapp_api_without_token(self):
         settings = SimpleNamespace(

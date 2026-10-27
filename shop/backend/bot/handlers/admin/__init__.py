@@ -8,6 +8,7 @@ from . import (
     nodes_status,
     payments,
     statistics,
+    support_admin,
     sync_admin,
     user_management,
 )
@@ -25,5 +26,6 @@ admin_router_aggregate.include_router(logs_admin.router)
 admin_router_aggregate.include_router(payments.router)
 admin_router_aggregate.include_router(ads.router)
 admin_router_aggregate.include_router(nodes_status.router)
+admin_router_aggregate.include_router(support_admin.router)
 
 __all__ = ("admin_router_aggregate",)

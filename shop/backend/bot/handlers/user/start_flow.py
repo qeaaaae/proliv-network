@@ -21,6 +21,7 @@ from bot.services.registration_invite_gate import (
     referral_program_enabled,
 )
 from bot.services.subscription_service_impl.core import SubscriptionService
+from bot.services.support_service import SupportService
 from bot.services.telegram_notifications import TELEGRAM_NOTIFICATIONS_ENABLED
 from bot.utils.callback_answer import (
     message_bot,
@@ -94,13 +95,16 @@ def _bot_started_source(
 @router.message(
     CommandStart(magic=F.args.regexp(r"^admin_user_(ms_[0-9a-f]{32}|\d+)$").as_("admin_user_match"))
 )
+@router.message(
+    CommandStart(magic=F.args.regexp(r"^admin_ticket_(\d+)$").as_("admin_ticket_match"))
+)
 @router.message(CommandStart(magic=F.args.regexp(r"^ticket_(\d+)$").as_("ticket_match")))
 @router.message(CommandStart(magic=F.args.regexp(r"^notifications$").as_("notifications_match")))
 @router.message(CommandStart(magic=F.args.regexp(r"^page_ref$").as_("page_ref_match")))
 @router.message(
     CommandStart(
         magic=F.args.regexp(
-            r"^(?!ref_|p_|promo_|admin_user_|ticket_|notifications$|page_ref$|webapp_auth_)([A-Za-z0-9_\-]{2,64})$"
+            r"^(?!ref_|p_|promo_|admin_user_|admin_ticket_|ticket_|notifications$|page_ref$|webapp_auth_)([A-Za-z0-9_\-]{2,64})$"
         ).as_("ad_param_match")
     )
 )
@@ -110,6 +114,7 @@ async def start_command_handler(
     settings: Settings,
     i18n_data: dict,
     subscription_service: SubscriptionService,
+    support_service: SupportService,
     referral_service: ReferralService,
     session: AsyncSession,
     ref_match: re.Match | None = None,
@@ -118,6 +123,7 @@ async def start_command_handler(
     page_ref_match: re.Match | None = None,
     ad_param_match: re.Match | None = None,
     admin_user_match: re.Match | None = None,
+    admin_ticket_match: re.Match | None = None,
     ticket_match: re.Match | None = None,
     notifications_match: re.Match | None = None,
 ) -> None:
@@ -209,6 +215,31 @@ async def start_command_handler(
                 e_admin_card,
             )
             await message.answer(_("admin_user_card_error"))
+            return
+
+    if admin_ticket_match and started_user and await is_admin(session, int(started_user.user_id)):
+        user_id = int(started_user.user_id)
+        await emit_bot_started(
+            user_id=user_id,
+            returning=started_user is not None,
+            source=start_source,
+            start_param=start_param,
+        )
+        ticket_id = int(admin_ticket_match.group(1))
+        try:
+            from bot.handlers.admin.support_admin import build_admin_ticket_view
+
+            rendered = await build_admin_ticket_view(session, ticket_id, _)
+            if rendered is None:
+                await message.answer(_("admin_ticket_not_found"))
+                return
+            text, markup = rendered
+            await message.answer(text, reply_markup=markup, parse_mode="HTML")
+            await support_service.mark_read_as_admin(ticket_id)
+            return
+        except Exception:
+            logger.exception("Failed to open admin ticket %s via deep-link.", ticket_id)
+            await message.answer(_("admin_ticket_open_error"))
             return
 
     referred_by_user_id: int | None = None
@@ -614,9 +645,7 @@ async def start_command_handler(
 
                 promo_success_text = _(
                     "promo_code_applied_success_full",
-                    end_date=(
-                        new_end_date.strftime("%d.%m.%Y %H:%M") if new_end_date else "N/A"
-                    ),
+                    end_date=(new_end_date.strftime("%d.%m.%Y %H:%M") if new_end_date else "N/A"),
                     config_link=config_link_text,
                 )
                 install_links = await ensure_user_install_guide_links(session, settings, user_id)

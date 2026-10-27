@@ -23,15 +23,30 @@ def _origin(value: str) -> tuple[str, str, int] | None:
         return None
 
 
+def _allowed_browser_origins(settings: Settings, request: web.Request) -> set[tuple[str, str, int]]:
+    """Origins that may issue browser state-changing requests to the webapp API.
+
+    The public Mini App origin always applies; ``WEBAPP_ADMIN_URL`` allows the
+    admin panel to live on a dedicated origin in split deployments.
+    """
+    origins: set[tuple[str, str, int]] = set()
+    candidates = (
+        _public_webapp_base_url(settings, request),
+        str(getattr(settings, "WEBAPP_ADMIN_URL", "") or "").strip(),
+    )
+    for candidate in candidates:
+        parsed = _origin(candidate) if candidate else None
+        if parsed is not None:
+            origins.add(parsed)
+    return origins
+
+
 def browser_origin_allowed(request: web.Request, settings: Settings) -> bool:
     origin = request.headers.get("Origin")
     referer = request.headers.get("Referer")
     if origin is not None or referer is not None:
-        expected = _origin(_public_webapp_base_url(settings, request))
-        return (
-            expected is not None
-            and _origin(origin if origin is not None else referer or "") == expected
-        )
+        received = _origin(origin if origin is not None else referer or "")
+        return received is not None and received in _allowed_browser_origins(settings, request)
     return request.headers.get("Sec-Fetch-Site", "") not in {"cross-site", "same-site"}
 
 
