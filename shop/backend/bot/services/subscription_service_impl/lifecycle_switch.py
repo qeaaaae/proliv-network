@@ -1,0 +1,669 @@
+import logging
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from bot.services.panel_activity import record_subscription_panel_activity
+from bot.services.subscription_order_terms import gift_tariff
+from bot.utils.config_link import prepare_config_links
+from bot.utils.locale_defaults import tariff_premium_title, trial_premium_title
+from bot.utils.mini_app_url import subscription_public_install_url
+from bot.utils.traffic_reset import next_traffic_reset_after, traffic_accounting_period_start
+from config.tariffs_config import default_currency_key_for_settings
+from db.dal import payment_dal, subscription_dal, tariff_dal, user_dal
+from db.models import Subscription, User
+
+from ._typing import SubscriptionServiceMixinContract
+from .entitlement_helpers import (
+    record_tariff_change_best_effort,
+    record_traffic_topup_best_effort,
+    subscription_is_trial,
+)
+from .hwid_limits import resolve_hwid_base_limit
+from .sale_mode import parse_sale_mode_context
+from .tariff_change_quote import (
+    TariffChangeQuoteSnapshot,
+    preflight_paid_tariff_change,
+)
+
+logger = logging.getLogger(__name__)
+
+_FREE_TARIFF_SWITCH_MODES = {
+    "period_to_period": "recalc_days",
+    "period_to_traffic": "convert_days_to_gb",
+}
+
+
+def _tariff_switch_mode_matches_options(mode: str, options: dict[str, Any]) -> bool:
+    transition = str(options.get("mode") or "")
+    if mode == "admin_assign":
+        return True
+    if mode == "paid_diff":
+        return transition == "period_to_period"
+    return _FREE_TARIFF_SWITCH_MODES.get(transition) == mode
+
+
+class SubscriptionLifecycleSwitchMixin(SubscriptionServiceMixinContract):
+    async def _local_active_subscription_details_fallback(
+        self,
+        db_user: User,
+        local_active_sub: Subscription,
+        *,
+        refresh_metadata: bool = True,
+        panel_lookup_failed: bool = False,
+    ) -> dict[str, Any]:
+        panel_sub_id = str(local_active_sub.panel_subscription_uuid or "").strip()
+        config_link_raw = None
+        if (
+            self.settings.SUBSCRIPTION_GATEWAY_ENABLED
+            and self.settings.SUBSCRIPTION_LINK_MODE == "minishop"
+            and str(local_active_sub.install_share_panel_short_uuid or "") == panel_sub_id
+        ):
+            config_link_raw = subscription_public_install_url(
+                self.settings, str(local_active_sub.install_share_token or "")
+            )
+        if not config_link_raw and not panel_lookup_failed:
+            # The panel API address can be private; only the panel knows its public link.
+            try:
+                panel_user = await self.panel_service.get_user_by_uuid(db_user.panel_user_uuid)
+            except Exception:
+                logger.exception(
+                    "Failed to fetch public subscription link for user %s", db_user.user_id
+                )
+                panel_user = None
+            if isinstance(panel_user, dict):
+                config_link_raw = str(panel_user.get("subscriptionUrl") or "").strip() or None
+        display_link, connect_button_url = await prepare_config_links(
+            self.settings,
+            config_link_raw,
+        )
+        tariff = None
+        if local_active_sub.tariff_key and self._tariffs_config():
+            try:
+                tariff = gift_tariff(local_active_sub) or self._resolve_tariff(
+                    local_active_sub.tariff_key
+                )
+            except Exception:
+                tariff = None
+        language = db_user.language_code or self.settings.DEFAULT_LANGUAGE
+        premium_access: dict[str, Any] = {"squad_uuids": [], "squad_labels": [], "node_labels": []}
+        if tariff:
+            if refresh_metadata:
+                premium_access = await self.premium_access_for_tariff(tariff)
+            else:
+                cache_key = tuple(sorted(str(uuid) for uuid in tariff.premium_squad_uuids))
+                cached_access = self._premium_access_cache.get(cache_key)
+                if cached_access:
+                    premium_access = cached_access
+        premium_baseline = int(local_active_sub.premium_baseline_bytes or 0)
+        premium_topup_balance = int(local_active_sub.premium_topup_balance_bytes or 0)
+        premium_topup_used = int(getattr(local_active_sub, "premium_topup_used_bytes", 0) or 0)
+        premium_bonus_bytes = int(getattr(local_active_sub, "premium_bonus_bytes", 0) or 0)
+        premium_unlimited_override = bool(
+            getattr(local_active_sub, "premium_unlimited_override", False)
+        )
+        premium_limit_bytes = self._premium_effective_limit_bytes(
+            premium_baseline,
+            premium_topup_balance,
+            premium_topup_used,
+            premium_bonus_bytes,
+        )
+        premium_traffic_limited = bool(
+            (tariff and tariff.has_premium_squad_limit())
+            or (
+                premium_limit_bytes > 0
+                and (
+                    str(getattr(local_active_sub, "provider", "") or "").strip().lower() == "trial"
+                    or str(local_active_sub.status_from_panel or "").strip().upper() == "TRIAL"
+                )
+            )
+        )
+        billing_model_display = (
+            tariff.billing_model
+            if tariff
+            else ("traffic" if getattr(self.settings, "traffic_sale_mode", False) else "period")
+        )
+        now = datetime.now(UTC)
+        traffic_limit_strategy = (
+            self._period_tariff_traffic_strategy(tariff)
+            if billing_model_display == "period"
+            else "NO_RESET"
+        )
+        traffic_period_start_at = getattr(local_active_sub, "period_start_at", None)
+        traffic_next_reset_at = None
+        if billing_model_display == "period":
+            traffic_period_start_at = traffic_accounting_period_start(
+                traffic_limit_strategy,
+                now,
+                subscription_start_at=getattr(local_active_sub, "start_date", None),
+                previous_period_start_at=getattr(local_active_sub, "period_start_at", None),
+            )
+            traffic_next_reset_at = next_traffic_reset_after(
+                traffic_period_start_at,
+                traffic_limit_strategy,
+                now=now,
+            )
+        premium_period_start_at = self._premium_accounting_period_start(local_active_sub, now)
+        premium_traffic_limit_strategy = self._premium_traffic_strategy_for_subscription(
+            local_active_sub
+        )
+        premium_next_reset_at = None
+        if premium_limit_bytes > 0 and not premium_unlimited_override:
+            premium_next_reset_at = next_traffic_reset_after(
+                premium_period_start_at,
+                premium_traffic_limit_strategy,
+                now=now,
+            )
+        base_hwid_limit = resolve_hwid_base_limit(
+            local_active_sub.hwid_device_limit,
+            self._base_hwid_limit_for_tariff(tariff),
+            is_override=bool(getattr(local_active_sub, "hwid_device_limit_is_override", False)),
+        )
+        return {
+            "user_id": db_user.panel_user_uuid,
+            "panel_subscription_uuid": local_active_sub.panel_subscription_uuid,
+            "panel_short_uuid": local_active_sub.panel_subscription_uuid,
+            "end_date": local_active_sub.end_date,
+            "status_from_panel": local_active_sub.status_from_panel or "LOCAL_CACHE",
+            "config_link": display_link,
+            "connect_button_url": connect_button_url,
+            "http_url": config_link_raw,
+            "traffic_limit_bytes": local_active_sub.traffic_limit_bytes,
+            "traffic_used_bytes": local_active_sub.traffic_used_bytes,
+            "traffic_limit_strategy": traffic_limit_strategy,
+            "tariff_key": local_active_sub.tariff_key,
+            "tariff_name": tariff.name(language) if tariff else None,
+            "tariff_description": tariff.description(language) if tariff else None,
+            "premium_title": tariff_premium_title(tariff, language)
+            if tariff
+            else (
+                trial_premium_title(self.settings, language)
+                if subscription_is_trial(local_active_sub)
+                else None
+            ),
+            "billing_model": billing_model_display,
+            "tier_baseline_bytes": local_active_sub.tier_baseline_bytes,
+            "topup_balance_bytes": local_active_sub.topup_balance_bytes,
+            "regular_bonus_bytes": int(getattr(local_active_sub, "regular_bonus_bytes", 0) or 0),
+            "regular_unlimited_override": bool(
+                getattr(local_active_sub, "regular_unlimited_override", False)
+            ),
+            "premium_baseline_bytes": premium_baseline,
+            "premium_topup_balance_bytes": premium_topup_balance,
+            "premium_topup_used_bytes": premium_topup_used,
+            "premium_used_bytes": local_active_sub.premium_used_bytes,
+            "premium_bonus_bytes": premium_bonus_bytes,
+            "premium_unlimited_override": premium_unlimited_override,
+            "premium_traffic_limited": premium_traffic_limited,
+            "premium_limit_bytes": premium_limit_bytes,
+            "premium_is_limited": bool(local_active_sub.premium_is_limited),
+            "premium_traffic_limit_strategy": premium_traffic_limit_strategy,
+            "premium_period_start_at": premium_period_start_at,
+            "premium_next_reset_at": premium_next_reset_at,
+            "premium_squad_labels": premium_access.get("squad_labels") or [],
+            "premium_node_labels": premium_access.get("node_labels") or [],
+            "period_start_at": traffic_period_start_at,
+            "traffic_next_reset_at": traffic_next_reset_at,
+            "is_throttled": bool(local_active_sub.is_throttled),
+            "base_hwid_device_limit": base_hwid_limit,
+            "extra_hwid_devices": int(local_active_sub.extra_hwid_devices or 0),
+            "extra_hwid_devices_valid_until": None,
+            "extra_hwid_devices_valid_until_text": None,
+            "extra_hwid_devices_next_valid_from": None,
+            "device_topup_renewal_available": False,
+            "user_bot_username": db_user.username,
+            "is_panel_data": False,
+            "max_devices": self._effective_hwid_limit(
+                base_hwid_limit,
+                int(local_active_sub.extra_hwid_devices or 0),
+            ),
+        }
+
+    async def switch_tariff_without_payment(
+        self,
+        session: AsyncSession,
+        user_id: int,
+        target_tariff_key: str,
+        mode: str,
+        payment_id: int | None = None,
+        apply_tariff_hwid_limit: bool = False,
+    ) -> dict[str, Any] | None:
+        config = self._tariffs_config()
+        if not config:
+            return None
+        target = (
+            config.require_configured(target_tariff_key)
+            if mode == "admin_assign"
+            else config.require(target_tariff_key)
+        )
+        db_user = await user_dal.get_user_by_id(session, user_id)
+        if not db_user or not db_user.panel_user_uuid:
+            return None
+        sub = await subscription_dal.get_active_subscription_by_user_id(
+            session, user_id, db_user.panel_user_uuid
+        )
+        if not sub:
+            return None
+        if str(getattr(sub, "provider", "") or "").strip().lower() == "tribute" and bool(
+            getattr(sub, "auto_renew_enabled", False)
+        ):
+            if mode != "admin_assign":
+                logger.warning(
+                    "Rejecting tariff switch for user %s while Tribute recurrence is active",
+                    user_id,
+                )
+                return None
+            from bot.infra.auto_renew import managed_recurring_service_for
+            from db.dal import tribute_dal
+
+            tribute_service = managed_recurring_service_for(self, "tribute")
+            shop_order = await tribute_dal.get_other_active_shop_order_uuid(
+                session, user_id=user_id
+            )
+            if shop_order is not None and (
+                tribute_service is None
+                or not await tribute_service.cancel_shop_recurrence_for_user(
+                    session, user_id=user_id
+                )
+            ):
+                logger.warning(
+                    "Rejecting admin tariff switch for user %s: "
+                    "Tribute Shop recurrence could not stop",
+                    user_id,
+                )
+                return None
+            await subscription_dal.set_auto_renew(
+                session,
+                int(sub.subscription_id),
+                False,
+                stop_reason="admin_tariff_change",
+            )
+        if str(getattr(sub, "provider", "") or "").strip().lower() == "wata" and bool(
+            getattr(sub, "auto_renew_enabled", False)
+        ):
+            from bot.infra.auto_renew import stop_provider_managed_recurrence
+
+            stopped = await stop_provider_managed_recurrence(
+                self,
+                session,
+                user_id=user_id,
+                provider="wata",
+            )
+            if not stopped:
+                logger.warning(
+                    "Rejecting tariff switch for user %s because Wata recurrence could not stop",
+                    user_id,
+                )
+                return None
+            logger.info(
+                "Stopped Wata recurrence for user %s before tariff switch %s -> %s",
+                user_id,
+                sub.tariff_key,
+                target.key,
+            )
+        before_tariff_key = sub.tariff_key
+        now = datetime.now(UTC)
+        trial_provider = str(getattr(sub, "provider", "") or "").strip().lower() == "trial"
+        trial_status = str(getattr(sub, "status_from_panel", "") or "").strip().upper() == "TRIAL"
+        convert_trial_admin_assignment = mode == "admin_assign" and (trial_provider or trial_status)
+        payment = None
+        quote_snapshot: TariffChangeQuoteSnapshot | None = None
+        if mode == "paid_diff":
+            if payment_id is None:
+                logger.warning(
+                    "Rejecting paid tariff switch for user %s -> %s without payment id",
+                    user_id,
+                    target.key,
+                )
+                return None
+            payment = await payment_dal.get_payment_by_db_id(session, payment_id)
+            if payment is not None:
+                preflight = preflight_paid_tariff_change(
+                    payment=payment,
+                    active_subscription=sub,
+                    tariffs_config=config,
+                    expected_user_id=user_id,
+                    expected_target_tariff_key=target.key,
+                )
+                quote_snapshot = preflight.snapshot
+                if not preflight.allowed:
+                    logger.warning(
+                        "Rejecting paid tariff switch for user %s -> %s: "
+                        "payment=%s preflight=%s reason=%s",
+                        user_id,
+                        target.key,
+                        payment_id,
+                        preflight.status,
+                        preflight.reason,
+                    )
+                    return None
+        if mode == "admin_assign":
+            options = dict(self.calculate_tariff_switch_options(sub, target))
+        elif quote_snapshot is not None:
+            options = {
+                "mode": quote_snapshot.transition_mode,
+                "paid_diff_rub": float(quote_snapshot.required_amount),
+                "convertible_hwid_purchase_ids": list(quote_snapshot.convertible_hwid_purchase_ids),
+            }
+        else:
+            options = await self.calculate_tariff_switch_options_with_hwid(session, sub, target)
+        if not _tariff_switch_mode_matches_options(mode, options):
+            logger.warning(
+                "Rejecting tariff switch mode mismatch for user %s -> %s: "
+                "requested=%s transition=%s",
+                user_id,
+                target.key,
+                mode,
+                options.get("mode"),
+            )
+            return None
+        if mode == "paid_diff":
+            sale_context = parse_sale_mode_context(
+                getattr(payment, "sale_mode", "") if payment else ""
+            )
+            payment_tariff_key = (
+                sale_context.tariff_key or str(getattr(payment, "tariff_key", "") or "").strip()
+            )
+            paid_amount = float(getattr(payment, "amount", 0) or 0)
+            required_amount = float(options.get("paid_diff_rub") or 0)
+            payment_is_invalid = (
+                not payment
+                or int(getattr(payment, "user_id", 0) or 0) != int(user_id)
+                or sale_context.base != "tariff_upgrade"
+                or payment_tariff_key != target.key
+            )
+            if quote_snapshot is None:
+                payment_is_invalid = payment_is_invalid or paid_amount + 0.01 < required_amount
+            if payment_is_invalid:
+                logger.warning(
+                    "Rejecting paid tariff switch for user %s -> %s: payment=%s "
+                    "paid_amount=%s required_amount=%s sale_mode=%s tariff_key=%s snapshot=%s",
+                    user_id,
+                    target.key,
+                    payment_id,
+                    paid_amount,
+                    required_amount,
+                    getattr(payment, "sale_mode", None) if payment else None,
+                    getattr(payment, "tariff_key", None) if payment else None,
+                    quote_snapshot is not None,
+                )
+                return None
+        converted_hwid_purchase_ids = list(options.get("convertible_hwid_purchase_ids") or [])
+        if converted_hwid_purchase_ids:
+            await tariff_dal.expire_hwid_device_purchases(
+                session,
+                purchase_ids=converted_hwid_purchase_ids,
+                at=now,
+            )
+        premium_topup_balance = int(sub.premium_topup_balance_bytes or 0)
+        premium_topup_used = int(getattr(sub, "premium_topup_used_bytes", 0) or 0)
+        premium_baseline = target.premium_monthly_bytes
+        premium_limit = self._premium_effective_limit_bytes(
+            premium_baseline,
+            premium_topup_balance,
+            premium_topup_used,
+        )
+        premium_used = int(sub.premium_used_bytes or 0)
+        premium_is_limited = self._premium_access_should_be_limited(
+            target,
+            premium_limit_bytes=premium_limit,
+            premium_used_bytes=premium_used,
+            premium_unlimited_override=bool(getattr(sub, "premium_unlimited_override", False)),
+        )
+        tariff_binding_source = (
+            "admin" if mode == "admin_assign" else "payment" if mode == "paid_diff" else "user"
+        )
+        update_data: dict[str, Any] = {
+            "tariff_key": target.key,
+            "tariff_binding_source": tariff_binding_source,
+            "tariff_bound_at": now,
+            "tariff_binding_note": f"tariff_switch:{mode}",
+            "is_throttled": False,
+            "premium_baseline_bytes": premium_baseline,
+            "premium_topup_balance_bytes": premium_topup_balance,
+            "premium_topup_used_bytes": premium_topup_used,
+            "premium_is_limited": premium_is_limited,
+        }
+        if convert_trial_admin_assignment:
+            update_data.update(
+                {
+                    "provider": "admin",
+                    "status_from_panel": "ACTIVE",
+                    "skip_notifications": False,
+                    "suppress_early_expiry_notifications": False,
+                }
+            )
+        converted_bytes = None
+        # Customer tariff changes replace plan entitlements. Admin assignments may preserve
+        # an explicit per-user limit unless the operator chooses the tariff default.
+        apply_target_hwid_limit = mode != "admin_assign" or apply_tariff_hwid_limit
+        local_hwid_base_limit, panel_hwid_base_limit = self._transition_hwid_base_limits(
+            getattr(sub, "hwid_device_limit", None),
+            target,
+            apply_tariff_hwid_limit=apply_target_hwid_limit,
+        )
+        try:
+            extra_hwid_devices = await tariff_dal.sum_active_hwid_devices(
+                session,
+                subscription_id=sub.subscription_id,
+                at=now,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to recalculate HWID devices during tariff switch for user %s",
+                user_id,
+            )
+            extra_hwid_devices = int(sub.extra_hwid_devices or 0)
+        update_data["hwid_device_limit"] = local_hwid_base_limit
+        update_data["extra_hwid_devices"] = extra_hwid_devices
+
+        if target.billing_model == "period":
+            update_data["tier_baseline_bytes"] = target.monthly_bytes
+            rb = int(getattr(sub, "regular_bonus_bytes", 0) or 0)
+            runl = bool(getattr(sub, "regular_unlimited_override", False))
+            used_sub = int(sub.traffic_used_bytes or 0)
+            update_data["traffic_limit_bytes"] = self._compute_main_traffic_limit_bytes(
+                tier_baseline_bytes=target.monthly_bytes,
+                topup_balance_bytes=int(sub.topup_balance_bytes or 0),
+                regular_bonus_bytes=rb,
+                regular_unlimited_override=runl,
+                traffic_used_bytes=used_sub,
+                hwid_device_bonus_bytes=await self._hwid_device_traffic_bonus_bytes_for_sub(
+                    session, sub
+                ),
+            )
+            update_data["period_start_at"] = None
+            update_data["effective_monthly_price_rub"] = self._tariff_effective_monthly_price(
+                target,
+                default_currency_key_for_settings(self.settings),
+            )
+            if (
+                convert_trial_admin_assignment
+                and not getattr(sub, "duration_months", None)
+                and not getattr(sub, "duration_days", None)
+            ):
+                update_data["duration_months"] = 1
+                update_data["duration_days"] = 30
+                update_data["period_semantics"] = "fixed_days"
+            if mode == "recalc_days" and options.get("recalc_days") is not None:
+                update_data["end_date"] = now + timedelta(days=int(options["recalc_days"]))
+        else:
+            converted_gb = float(options.get("converted_gb", 0))
+            converted_bytes = self.gb_to_bytes(converted_gb)
+            rb = int(getattr(sub, "regular_bonus_bytes", 0) or 0)
+            runl = bool(getattr(sub, "regular_unlimited_override", False))
+            panel_user = (
+                await self.panel_service.get_user_by_uuid(
+                    db_user.panel_user_uuid, log_response=False
+                )
+                or {}
+            )
+            if panel_user:
+                await record_subscription_panel_activity(session, sub, panel_user)
+            current_used, current_limit, _ = self._extract_panel_traffic_details(panel_user)
+            if current_used is None:
+                current_used = getattr(sub, "traffic_used_bytes", None)
+            if current_limit is None:
+                current_limit = getattr(sub, "traffic_limit_bytes", None)
+            cur_used_int = int(current_used or 0)
+            carryover_balance = self._traffic_package_carryover_bytes(
+                sub,
+                limit_bytes=current_limit,
+                used_bytes=current_used,
+            )
+            new_balance = carryover_balance + max(0, rb) + converted_bytes
+            update_data.update(
+                {
+                    "end_date": self._far_future(),
+                    "period_start_at": None,
+                    "tier_baseline_bytes": 0,
+                    "topup_balance_bytes": new_balance,
+                    "regular_bonus_bytes": 0,
+                    "traffic_limit_bytes": self._traffic_limit_for_balance(
+                        used_bytes=cur_used_int,
+                        balance_bytes=new_balance,
+                        unlimited_override=runl,
+                    ),
+                    "traffic_used_bytes": current_used,
+                    "effective_monthly_price_rub": None,
+                    "auto_renew_enabled": False,
+                    "skip_notifications": True,
+                }
+            )
+            if convert_trial_admin_assignment:
+                update_data["duration_months"] = None
+                update_data["duration_days"] = None
+                update_data["period_semantics"] = None
+
+        updated = await subscription_dal.update_subscription(
+            session, sub.subscription_id, update_data
+        )
+        if not updated:
+            return None
+        panel_user_for_tag = await self._get_panel_user_for_entitlement_verification(
+            db_user.panel_user_uuid
+        )
+        if panel_user_for_tag is None:
+            logger.warning(
+                "Cannot verify the current Remnawave tag before tariff switch for user %s.",
+                user_id,
+            )
+        tariff_tag_plan = (
+            self._plan_panel_tariff_tag(
+                db_user,
+                panel_user_for_tag,
+                target.key,
+                source="tariff_switch",
+            )
+            if panel_user_for_tag is not None
+            else None
+        )
+        panel_payload = self._build_panel_update_payload(
+            panel_user_uuid=db_user.panel_user_uuid,
+            expire_at=updated.end_date,
+            status="ACTIVE",
+            traffic_limit_bytes=updated.traffic_limit_bytes,
+            traffic_limit_strategy=(
+                "NO_RESET"
+                if target.billing_model == "traffic"
+                else self._period_tariff_traffic_strategy(target)
+            ),
+            hwid_device_limit=self._effective_hwid_limit(
+                panel_hwid_base_limit,
+                extra_hwid_devices,
+            ),
+            include_default_squads=False,
+        )
+        managed_squads = self._panel_squads_for_tariff(
+            target,
+            include_premium=not bool(updated.premium_is_limited),
+        )
+        if trial_provider or trial_status:
+            previous_managed_squads = self._trial_all_panel_squad_uuids()
+        else:
+            try:
+                previous_tariff = self._resolve_tariff(before_tariff_key)
+            except (KeyError, ValueError):
+                previous_tariff = None
+            previous_managed_squads = self._panel_squads_for_tariff(previous_tariff) or []
+        override_detection_managed_squads = list(
+            dict.fromkeys([*previous_managed_squads, *(managed_squads or [])])
+        )
+        panel_payload.update(
+            await self.build_effective_panel_squad_fields(
+                session,
+                user_id=user_id,
+                panel_user_uuid=db_user.panel_user_uuid,
+                managed_internal_squads=managed_squads,
+                override_detection_managed_internal_squads=(override_detection_managed_squads),
+                include_internal_squads=True,
+                source="tariff_switch",
+            )
+        )
+        panel_payload.update(self._panel_identity_payload_for_user(db_user))
+        if tariff_tag_plan is not None:
+            panel_payload.update(tariff_tag_plan.verification_payload)
+        panel_subscription_uuid = str(getattr(updated, "panel_subscription_uuid", "") or "").strip()
+        if panel_subscription_uuid:
+            await subscription_dal.deactivate_other_active_subscriptions(
+                session,
+                db_user.panel_user_uuid,
+                panel_subscription_uuid,
+            )
+        panel_update_result = await self.panel_service.update_user_details_on_panel(
+            db_user.panel_user_uuid, panel_payload
+        )
+        confirmed_panel_user = await self._confirmed_panel_entitlement(
+            db_user.panel_user_uuid,
+            panel_update_result,
+            panel_payload,
+            source="tariff_switch",
+        )
+        if confirmed_panel_user is None:
+            # The tariff row is already swapped locally; if the panel rejects
+            # the squad/limit update the user sees the new tariff in the app
+            # but stays on the old squads on Remnawave. Surface the failure
+            # so the caller can roll back.
+            logger.warning(
+                "Panel user details update FAILED for tariff switch user %s -> %s. Response: %s",
+                user_id,
+                target.key,
+                panel_update_result,
+            )
+            return None
+        if tariff_tag_plan is not None:
+            self._remember_confirmed_panel_tariff_tag(
+                db_user,
+                tariff_tag_plan,
+                confirmed_panel_user,
+            )
+        if converted_bytes:
+            await record_traffic_topup_best_effort(
+                session,
+                subscription_id=updated.subscription_id,
+                payment_id=None,
+                purchased_bytes=converted_bytes,
+                kind="conversion",
+            )
+        await record_tariff_change_best_effort(
+            session,
+            {
+                "subscription_id": updated.subscription_id,
+                "from_tariff_key": before_tariff_key,
+                "to_tariff_key": target.key,
+                "mode": mode,
+                "payment_id": payment_id,
+                "days_before": options.get("remaining_days"),
+                "days_after": (updated.end_date - now).days
+                if updated.end_date and target.billing_model == "period"
+                else None,
+                "converted_bytes": converted_bytes,
+                "converted_hwid_value_rub": options.get("converted_hwid_value_rub"),
+                "converted_hwid_days": options.get("converted_hwid_days"),
+                "eff_price_before": sub.effective_monthly_price_rub,
+                "eff_price_after": updated.effective_monthly_price_rub,
+            },
+            user_id=user_id,
+        )
+        return {"subscription_id": updated.subscription_id, "tariff_key": target.key}

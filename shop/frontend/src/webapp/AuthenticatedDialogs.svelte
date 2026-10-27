@@ -1,0 +1,381 @@
+<script lang="ts">
+  import type { AccountStore } from "../lib/webapp/stores/accountStore.js";
+  import type { ActionsStore } from "../lib/webapp/stores/actionsStore.js";
+  import type { BillingStore } from "../lib/webapp/stores/billingStore.js";
+  import type { ApiClient } from "../lib/webapp/publicApi.js";
+
+  import { CheckCircle2, Gift, Info, TriangleAlert } from "$components/ui/icons.js";
+  import Button from "$components/ui/button.svelte";
+  import Dialog from "$components/ui/dialog.svelte";
+  import type { DevicesStore } from "../lib/webapp/stores/devicesStore.js";
+  import PaymentDialogs from "./PaymentDialogs.svelte";
+  import SubscriptionReissueDialog from "./payment-dialogs/SubscriptionReissueDialog.svelte";
+  import DeviceRenameDialog from "./payment-dialogs/DeviceRenameDialog.svelte";
+  import AccountMergeDialog from "./security/AccountMergeDialog.svelte";
+  import TributeCreatorCancelDialog from "./payment-dialogs/TributeCreatorCancelDialog.svelte";
+  import QaPaymentDialog from "./payment-dialogs/QaPaymentDialog.svelte";
+  import TariffDialogs from "./TariffDialogs.svelte";
+  import type {
+    PaymentMethod,
+    PendingPaymentView,
+    PlanView,
+    SubscriptionView,
+    TariffView,
+    TermUnitLabel,
+    Translate,
+    UserProfile,
+    VoidAction,
+  } from "$lib/webapp/types.js";
+
+  type Props = {
+    api: ApiClient["api"];
+    accountStore: AccountStore;
+    actionsStore: ActionsStore;
+    activationSuccessDialogOpen?: boolean;
+    activationSuccessUseInstallGuides?: boolean;
+    backToTariffList: VoidAction;
+    billingStore: BillingStore;
+    closeActivationSuccessDialog: VoidAction;
+    closeDeviceTopupModal: VoidAction;
+    continueWithSelectedTariff: VoidAction;
+    devicesStore: DevicesStore;
+    disconnectDevice: VoidAction;
+    emailAuthEnabled?: boolean;
+    checkoutAddonValueAnimationEnabled?: boolean;
+    checkoutAddonEditorExpandedByDefault?: boolean;
+    subscriptionReissueDialogOpen?: boolean;
+    creatorCancelStep?: 0 | 1 | 2;
+    autoRenewBusy?: boolean;
+    closeCreatorCancelDialog?: VoidAction;
+    openCreatorCancellationLink?: VoidAction;
+    openCreatorCancelConfirmation?: VoidAction;
+    confirmCreatorCancellation?: VoidAction;
+    backToCreatorCancelOptions?: VoidAction;
+    subscriptionReissueBusy?: boolean;
+    confirmSubscriptionReissue?: VoidAction;
+    closeSubscriptionReissueDialog?: VoidAction;
+    hasMultipleTariffs?: boolean;
+    methods?: PaymentMethod[];
+    loadData: () => Promise<unknown>;
+    paymentMethodsDisplayMode?: "dropdown" | "buttons" | string;
+    pendingPayment?: PendingPaymentView | null;
+    plans?: PlanView[];
+    selectTariff: (tariff: TariffView) => void;
+    selectedTariff?: TariffView | null;
+    selectedTariffPlans?: PlanView[];
+    singleTariffMode?: boolean;
+    subscription?: SubscriptionView;
+    subscriptionPurchaseDescription?: string;
+    t: Translate;
+    tariffCatalog?: TariffView[];
+    tariffMode?: boolean;
+    termUnitLabel: TermUnitLabel;
+    trafficMode?: boolean;
+    user?: UserProfile;
+  };
+
+  let {
+    api,
+    accountStore,
+    actionsStore,
+    activationSuccessDialogOpen = false,
+    activationSuccessUseInstallGuides = false,
+    backToTariffList,
+    billingStore,
+    closeActivationSuccessDialog,
+    closeDeviceTopupModal,
+    continueWithSelectedTariff,
+    devicesStore,
+    disconnectDevice,
+    emailAuthEnabled = true,
+    checkoutAddonValueAnimationEnabled = true,
+    checkoutAddonEditorExpandedByDefault = false,
+    subscriptionReissueDialogOpen = false,
+    creatorCancelStep = 0,
+    autoRenewBusy = false,
+    closeCreatorCancelDialog = () => {},
+    openCreatorCancellationLink = () => {},
+    openCreatorCancelConfirmation = () => {},
+    confirmCreatorCancellation = () => {},
+    backToCreatorCancelOptions = () => {},
+    subscriptionReissueBusy = false,
+    confirmSubscriptionReissue = () => {},
+    closeSubscriptionReissueDialog = () => {},
+    hasMultipleTariffs = false,
+    methods = [],
+    loadData,
+    paymentMethodsDisplayMode = "dropdown",
+    pendingPayment = null,
+    plans = [],
+    selectTariff,
+    selectedTariff = null,
+    selectedTariffPlans = [],
+    singleTariffMode = false,
+    subscription = {},
+    subscriptionPurchaseDescription = "",
+    t,
+    tariffCatalog = [],
+    tariffMode = false,
+    termUnitLabel,
+    trafficMode = false,
+    user = {},
+  }: Props = $props();
+
+  const promoDeeplinkOpen = $derived(actionsStore.promoDeeplinkOpen);
+  const promoDeeplinkStatus = $derived(actionsStore.promoDeeplinkStatus);
+  const promoDeeplinkCode = $derived(actionsStore.promoDeeplinkCode);
+  const promoDeeplinkMessage = $derived(actionsStore.promoDeeplinkMessage);
+  const promoDeeplinkEffectSummary = $derived(actionsStore.promoDeeplinkEffectSummary);
+  const promoDeeplinkTitle = $derived.by(() => {
+    if (promoDeeplinkStatus === "activated") {
+      return t("wa_promo_deeplink_title_activated", {}, "Promo code activated");
+    }
+    if (promoDeeplinkStatus === "already_used") {
+      return t("wa_promo_deeplink_title_already_used", {}, "Promo code already activated");
+    }
+    if (promoDeeplinkStatus === "invalid") {
+      return t("wa_promo_deeplink_title_invalid", {}, "Promo code unavailable");
+    }
+    return t("wa_promo_deeplink_title_error", {}, "Could not check the promo code");
+  });
+</script>
+
+<QaPaymentDialog {api} {loadData} {t} />
+<AccountMergeDialog
+  {api}
+  currentLang={user.language_code || "ru"}
+  open={accountStore.telegramMergeOpen}
+  onclose={accountStore.closeTelegramMergeDialog}
+  onmerged={accountStore.completeTelegramMerge}
+  {t}
+/>
+
+<PaymentDialogs
+  {api}
+  bind:linkEmailCode={accountStore.linkEmailCode}
+  bind:linkEmailFieldError={accountStore.linkEmailFieldError}
+  bind:linkEmailValue={accountStore.linkEmailValue}
+  bind:paymentModalOpen={billingStore.paymentModalOpen}
+  bind:paymentStep={billingStore.paymentStep}
+  bind:selectedMethod={billingStore.selectedMethod}
+  bind:selectedPlan={billingStore.selectedPlan}
+  bind:renewHwidDevices={billingStore.renewHwidDevices}
+  bind:selectedTariffKey={billingStore.selectedTariffKey}
+  bind:setPasswordCode={accountStore.setPasswordCode}
+  bind:setPasswordConfirm={accountStore.setPasswordConfirm}
+  bind:setPasswordValue={accountStore.setPasswordValue}
+  setPasswordEmail={user?.email || ""}
+  createPayment={billingStore.createPayment}
+  resumePendingPayment={billingStore.resumePendingPayment}
+  cancelPendingPayment={billingStore.cancelPendingPayment}
+  deviceConfirmOpen={devicesStore.deviceConfirmOpen}
+  deviceDisconnectBusy={devicesStore.deviceDisconnectBusy}
+  deviceToDisconnect={devicesStore.deviceToDisconnect}
+  {disconnectDevice}
+  linkEmailBusy={accountStore.linkEmailBusy}
+  linkEmailIsError={accountStore.linkEmailIsError}
+  linkEmailOpen={emailAuthEnabled && accountStore.linkEmailOpen}
+  linkEmailPending={accountStore.linkEmailPending}
+  linkEmailResendCooldown={accountStore.linkEmailResendCooldown}
+  linkEmailStatus={accountStore.linkEmailStatus}
+  setPasswordBusy={accountStore.setPasswordBusy}
+  setPasswordIsError={accountStore.setPasswordIsError}
+  setPasswordOpen={emailAuthEnabled && accountStore.setPasswordOpen}
+  setPasswordPending={accountStore.setPasswordPending}
+  setPasswordResendCooldown={accountStore.setPasswordResendCooldown}
+  setPasswordStatus={accountStore.setPasswordStatus}
+  checkoutPromoInput={billingStore.checkoutPromoInput}
+  checkoutPromoAppliedCode={billingStore.checkoutPromoAppliedCode}
+  checkoutPromoIsError={billingStore.checkoutPromoIsError}
+  checkoutPromoPriceText={billingStore.checkoutPromoPriceText}
+  checkoutPromoEffectiveAmount={billingStore.checkoutPromoEffectiveAmount}
+  checkoutPromoStatus={billingStore.checkoutPromoStatus}
+  checkoutPromoDiscountPercent={billingStore.checkoutPromoDiscountPercent}
+  checkoutPromoAppliesTo={billingStore.checkoutPromoAppliesTo}
+  checkoutPromoMinSubscriptionDays={billingStore.checkoutPromoMinSubscriptionDays}
+  checkoutPromoMinTrafficGb={billingStore.checkoutPromoMinTrafficGb}
+  checkoutAddonPreset={billingStore.checkoutAddonPreset}
+  applyCheckoutPromo={billingStore.applyCheckoutPromo}
+  clearCheckoutPromo={billingStore.clearCheckoutPromo}
+  setCheckoutPromoInput={billingStore.setCheckoutPromoInput}
+  {hasMultipleTariffs}
+  {methods}
+  {paymentMethodsDisplayMode}
+  {checkoutAddonValueAnimationEnabled}
+  {checkoutAddonEditorExpandedByDefault}
+  {pendingPayment}
+  payBusy={billingStore.payBusy}
+  {plans}
+  {selectedTariff}
+  {selectedTariffPlans}
+  {singleTariffMode}
+  {subscription}
+  {subscriptionPurchaseDescription}
+  {tariffCatalog}
+  {tariffMode}
+  closeDeviceDisconnectDialog={devicesStore.closeDeviceDisconnectDialog}
+  closeLinkEmailDialog={accountStore.closeLinkEmailDialog}
+  closePaymentModal={billingStore.closePaymentModal}
+  closeSetPasswordDialog={accountStore.closeSetPasswordDialog}
+  {backToTariffList}
+  {continueWithSelectedTariff}
+  requestLinkEmailCode={accountStore.requestLinkEmailCode}
+  requestSetPasswordCode={accountStore.requestSetPasswordCode}
+  {selectTariff}
+  {t}
+  {termUnitLabel}
+  verifyLinkEmailCode={accountStore.verifyLinkEmailCode}
+  confirmSetPassword={accountStore.confirmSetPassword}
+/>
+
+<SubscriptionReissueDialog
+  {subscriptionReissueDialogOpen}
+  {subscriptionReissueBusy}
+  {confirmSubscriptionReissue}
+  {closeSubscriptionReissueDialog}
+  {t}
+/>
+
+<DeviceRenameDialog
+  open={devicesStore.deviceRenameOpen}
+  busy={devicesStore.deviceRenameBusy}
+  device={devicesStore.deviceToRename}
+  bind:value={devicesStore.deviceRenameValue}
+  error={devicesStore.deviceRenameError}
+  onsave={() => devicesStore.renameDevice()}
+  onreset={() => devicesStore.renameDevice("")}
+  onclose={devicesStore.closeDeviceRenameDialog}
+  {t}
+/>
+
+<TributeCreatorCancelDialog
+  step={creatorCancelStep}
+  busy={autoRenewBusy}
+  onClose={closeCreatorCancelDialog}
+  onOpenTribute={openCreatorCancellationLink}
+  onAlreadyCancelled={openCreatorCancelConfirmation}
+  onConfirm={confirmCreatorCancellation}
+  onBack={backToCreatorCancelOptions}
+  {t}
+/>
+
+<TariffDialogs
+  {api}
+  bind:changeConfirmOpen={billingStore.changeConfirmOpen}
+  bind:changeModalOpen={billingStore.changeModalOpen}
+  bind:deviceTopupModalOpen={billingStore.deviceTopupModalOpen}
+  bind:selectedChangeAction={billingStore.selectedChangeAction}
+  bind:selectedChangeTarget={billingStore.selectedChangeTarget}
+  bind:selectedDeviceTopupPlan={billingStore.selectedDeviceTopupPlan}
+  bind:selectedMethod={billingStore.selectedMethod}
+  bind:selectedTopupPlan={billingStore.selectedTopupPlan}
+  bind:topupModalOpen={billingStore.topupModalOpen}
+  applyTariffChange={billingStore.applyTariffChange}
+  changeOptions={billingStore.changeOptions}
+  {closeDeviceTopupModal}
+  closeTariffChangeConfirm={billingStore.closeTariffChangeConfirm}
+  closeTariffChangeModal={billingStore.closeTariffChangeModal}
+  closeTopupModal={billingStore.closeTopupModal}
+  checkoutPromoInput={billingStore.checkoutPromoInput}
+  checkoutPromoAppliedCode={billingStore.checkoutPromoAppliedCode}
+  checkoutPromoIsError={billingStore.checkoutPromoIsError}
+  checkoutPromoPriceText={billingStore.checkoutPromoPriceText}
+  checkoutPromoEffectiveAmount={billingStore.checkoutPromoEffectiveAmount}
+  checkoutPromoStatus={billingStore.checkoutPromoStatus}
+  checkoutPromoDiscountPercent={billingStore.checkoutPromoDiscountPercent}
+  checkoutPromoAppliesTo={billingStore.checkoutPromoAppliesTo}
+  checkoutPromoMinSubscriptionDays={billingStore.checkoutPromoMinSubscriptionDays}
+  checkoutPromoMinTrafficGb={billingStore.checkoutPromoMinTrafficGb}
+  applyCheckoutPromo={billingStore.applyCheckoutPromo}
+  clearCheckoutPromo={billingStore.clearCheckoutPromo}
+  setCheckoutPromoInput={billingStore.setCheckoutPromoInput}
+  createDeviceTopupPayment={billingStore.createDeviceTopupPayment}
+  createTopupPayment={billingStore.createTopupPayment}
+  deviceTopupOptions={billingStore.deviceTopupOptions}
+  {methods}
+  {paymentMethodsDisplayMode}
+  openTariffChangeConfirm={billingStore.openTariffChangeConfirm}
+  payBusy={billingStore.payBusy}
+  {singleTariffMode}
+  {subscription}
+  tariffActionBusy={billingStore.tariffActionBusy}
+  topupKind={billingStore.topupKind}
+  topupOptions={billingStore.topupOptions}
+  {trafficMode}
+  {t}
+/>
+
+<Dialog
+  open={activationSuccessDialogOpen}
+  title={t("wa_activation_success_title", {}, "Everything is successfully activated")}
+  description={activationSuccessUseInstallGuides
+    ? t(
+        "wa_activation_success_install_hint",
+        {},
+        "Press OK and follow the setup instructions for your device."
+      )
+    : t(
+        "wa_activation_success_connect_hint",
+        {},
+        "Press OK and we will open the Remnawave subscription page for setup."
+      )}
+  closeLabel={t("wa_close")}
+  onclose={closeActivationSuccessDialog}
+  class="activation-success-dialog webapp-activation-success-dialog"
+>
+  {#snippet titleIcon()}
+    <CheckCircle2 size={23} />
+  {/snippet}
+  <div class="activation-success-dialog-body">
+    <Button class="wide" onclick={closeActivationSuccessDialog}>
+      {t("wa_ok", {}, "OK")}
+    </Button>
+  </div>
+</Dialog>
+
+<Dialog
+  open={promoDeeplinkOpen}
+  title={promoDeeplinkTitle}
+  description={promoDeeplinkMessage}
+  closeLabel={t("wa_close")}
+  onclose={actionsStore.closePromoDeeplink}
+  class="promo-deeplink-dialog"
+>
+  {#snippet titleIcon()}
+    {#if promoDeeplinkStatus === "activated"}
+      <Gift size={23} />
+    {:else if promoDeeplinkStatus === "already_used"}
+      <Info size={23} />
+    {:else}
+      <TriangleAlert size={23} />
+    {/if}
+  {/snippet}
+  <div class="promo-deeplink-dialog-body">
+    {#if promoDeeplinkStatus === "activated" && promoDeeplinkEffectSummary}
+      <p class="promo-deeplink-effect">
+        <strong>{promoDeeplinkCode}</strong>
+        <span class="meta-separator" aria-hidden="true"></span>
+        {promoDeeplinkEffectSummary}
+      </p>
+    {/if}
+    <Button class="wide" onclick={actionsStore.closePromoDeeplink}>
+      {t("wa_ok", {}, "OK")}
+    </Button>
+  </div>
+</Dialog>
+
+<style>
+  .promo-deeplink-dialog-body {
+    display: grid;
+    gap: 12px;
+  }
+
+  .promo-deeplink-effect {
+    margin: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+    border-radius: var(--radius-inner);
+    background: color-mix(in srgb, var(--accent, #00fe7a) 8%, transparent);
+    font-size: 14px;
+  }
+</style>

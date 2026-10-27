@@ -1,0 +1,25 @@
+# Локальный dev-прокси: remnawave требует X-Forwarded-For + X-Forwarded-Proto: https.
+# Caddy сам проставляет X-Forwarded-For; proto форсируем в https.
+
+:3443 {
+	encode
+	reverse_proxy http://remnawave:3000 {
+		header_up X-Forwarded-Proto https
+	}
+}
+
+:3444 {
+	encode
+	reverse_proxy http://remnawave-subscription-page:3010 {
+		header_up X-Forwarded-Proto https
+	}
+}
+
+# Edge для webhook-туннеля (cloudflared -> 127.0.0.1:8090):
+# /tg/webhook -> bot, остальные /webhook/* -> backend.
+:8090 {
+	encode
+	@tg path /tg/webhook*
+	reverse_proxy @tg http://remnawave-minishop-bot:8080
+	reverse_proxy http://remnawave-minishop-backend:8080
+}

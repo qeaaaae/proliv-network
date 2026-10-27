@@ -1,0 +1,210 @@
+import hashlib
+from typing import Any, Protocol, cast
+
+from aiogram import Router, types
+from aiogram.types import InlineKeyboardMarkup
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from bot.keyboards.inline.user_keyboards import (
+    get_tariff_packages_keyboard,
+    get_tariff_periods_keyboard,
+)
+from bot.middlewares.i18n import JsonI18n
+from bot.payment_providers import provider_manages_recurring, provider_supports_recurring
+from bot.payment_providers.shared import service_supports_recurring
+from bot.services.subscription_service_impl.core import SubscriptionService
+from bot.services.telegram_account import require_telegram_account_id
+from bot.utils.callback_answer import (
+    message_from_user,
+)
+from bot.utils.locale_defaults import subscription_purchase_description_text
+from config.settings import Settings
+from config.tariffs_config import (
+    default_currency_key_for_settings,
+    default_payment_currency_code_for_settings,
+)
+from db.dal import subscription_dal
+from db.models import Subscription
+
+router = Router(name="user_subscription_core_router")
+
+
+class _TrafficPackages(Protocol):
+    def for_currency(self, currency: str) -> Any: ...
+
+
+class _GetText(Protocol):
+    def __call__(self, key: str, **kwargs: object) -> str: ...
+
+
+class _PurchaseTariff(Protocol):
+    billing_model: str
+    traffic_packages: _TrafficPackages
+
+    def name(self, lang: str) -> str: ...
+    def description(self, lang: str) -> str: ...
+
+
+def _shorten_hwid_for_display(hwid: str | None, max_length: int = 24) -> str:
+    """Trim HWID for button text to keep within Telegram limits."""
+    if not hwid:
+        return "-"
+    hwid_str = str(hwid)
+    if len(hwid_str) <= max_length:
+        return hwid_str
+    return f"{hwid_str[:8]}...{hwid_str[-6:]}"
+
+
+def _hwid_callback_token(hwid: str | None) -> str:
+    """Stable short token for callback_data; avoids 64b limit with raw HWID."""
+    hwid_str = str(hwid or "")
+    return hashlib.sha256(hwid_str.encode()).hexdigest()[:32]
+
+
+def _enabled_tariffs(settings: Settings) -> list:
+    config = settings.tariffs_config
+    return list(config.enabled_tariffs) if config else []
+
+
+def _has_multiple_enabled_tariffs(settings: Settings) -> bool:
+    return len(_enabled_tariffs(settings)) > 1
+
+
+async def _assigned_tariff_key(session: AsyncSession, user_id: int) -> str | None:
+    subscription = await subscription_dal.get_active_subscription_by_user_id(session, user_id)
+    if subscription is None:
+        subscription = await subscription_dal.get_latest_subscription_by_user_id(session, user_id)
+    tariff_key = str(getattr(subscription, "tariff_key", "") or "").strip()
+    return tariff_key or None
+
+
+def _recurring_service_for_subscription(
+    subscription_service: SubscriptionService,
+    sub: Subscription | None,
+) -> object:
+    provider = str(getattr(sub, "provider", "") or "").strip().lower()
+    if not provider:
+        return None
+    resolver = getattr(subscription_service, "recurring_service_for", None)
+    if callable(resolver):
+        return resolver(provider)
+    services = getattr(subscription_service, "recurring_provider_services", {}) or {}
+    return services.get(provider)
+
+
+def _auto_renew_control_visible(
+    subscription_service: SubscriptionService,
+    sub: Subscription | None,
+) -> bool:
+    if not sub:
+        return False
+    provider = getattr(sub, "provider", None)
+    if provider_manages_recurring(provider):
+        # The provider drives the schedule, so the control exists purely to
+        # stop it — showing it for an already-stopped mandate would offer a
+        # switch that cannot be flipped back on from here.
+        return bool(getattr(sub, "auto_renew_enabled", False))
+    if not provider_supports_recurring(provider):
+        return False
+    service = _recurring_service_for_subscription(subscription_service, sub)
+    return bool(getattr(sub, "auto_renew_enabled", False) or service_supports_recurring(service))
+
+
+def _tariff_purchase_markup(
+    tariff: _PurchaseTariff,
+    current_lang: str,
+    i18n: JsonI18n,
+    settings: Settings,
+    back_callback: str = "main_action:subscribe",
+    callback_context: str | None = None,
+    promo_quotes: dict[int, Any] | None = None,
+    promo_available: bool = False,
+    promo_enabled: bool = True,
+    promo_toggle_callback: str | None = None,
+) -> InlineKeyboardMarkup:
+    if tariff.billing_model == "period":
+        return cast(
+            InlineKeyboardMarkup,
+            get_tariff_periods_keyboard(
+                tariff,
+                current_lang,
+                i18n,
+                settings,
+                back_callback=back_callback,
+                callback_context=callback_context,
+                promo_quotes=promo_quotes,
+                promo_available=promo_available,
+                promo_enabled=promo_enabled,
+                promo_toggle_callback=promo_toggle_callback,
+            ),
+        )
+    default_currency = default_currency_key_for_settings(settings)
+    return cast(
+        InlineKeyboardMarkup,
+        get_tariff_packages_keyboard(
+            tariff,
+            tariff.traffic_packages.for_currency(default_currency),
+            current_lang,
+            i18n,
+            currency_symbol=default_payment_currency_code_for_settings(settings),
+            back_callback=back_callback,
+            callback_context=callback_context,
+        ),
+    )
+
+
+def _tariff_purchase_text(
+    tariff: _PurchaseTariff,
+    current_lang: str,
+    i18n: JsonI18n,
+    settings: Settings,
+    *,
+    has_multiple_tariffs: bool | None = None,
+) -> str:
+    multiple_tariffs = (
+        _has_multiple_enabled_tariffs(settings)
+        if has_multiple_tariffs is None
+        else has_multiple_tariffs
+    )
+    if not multiple_tariffs:
+        if tariff.billing_model == "period":
+            return str(i18n.gettext(current_lang, "select_subscription_period"))
+        return str(i18n.gettext(current_lang, "select_traffic_package"))
+    return f"{tariff.name(current_lang)}\n{tariff.description(current_lang)}".strip()
+
+
+def _with_subscription_purchase_description(
+    text: str,
+    settings: Settings,
+    current_lang: str,
+    *,
+    include: bool,
+) -> str:
+    if not include:
+        return text
+    description = subscription_purchase_description_text(settings, current_lang)
+    if not description:
+        return text
+    return f"{description}\n\n{text}"
+
+
+def _format_premium_bytes(value: object) -> str:
+    try:
+        bytes_value = max(0, int(str(value or 0)))
+    except (TypeError, ValueError):
+        bytes_value = 0
+    return f"{bytes_value / 2**30:.2f} GB"
+
+
+async def _event_user_id(session: AsyncSession, event: types.Message | types.CallbackQuery) -> int:
+    if isinstance(event, types.CallbackQuery):
+        return await require_telegram_account_id(session, event.from_user.id)
+    return await require_telegram_account_id(session, message_from_user(event).id)
+
+
+def _format_premium_usage_limit(active: dict[str, object], get_text: _GetText | None = None) -> str:
+    used = _format_premium_bytes(active.get("premium_used_bytes"))
+    limit = _format_premium_bytes(active.get("premium_limit_bytes"))
+    if get_text is None:
+        return f"{used} of {limit}"
+    return get_text("premium_usage_of", used=used, limit=limit)

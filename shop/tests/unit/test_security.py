@@ -1,0 +1,1599 @@
+import asyncio
+import hashlib
+import hmac
+import json
+import time
+import unittest
+from decimal import Decimal
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+from urllib.parse import parse_qs, urlsplit
+
+from aiohttp import web
+
+from bot.app.web import admin_api, subscription_webapp
+from bot.app.web.admin_api_impl import settings as admin_settings_routes
+from bot.app.web.web_server import (
+    TrustedProxyAccessLogger,
+    _register_provider_webhook_routes,
+)
+from bot.app.web.webapp import account as account_routes
+from bot.app.web.webapp import auth_email as auth_email_routes
+from bot.app.web.webapp.assets import _webapp_edge_token_middleware
+from bot.app.web.webapp.auth import session_route
+from bot.app.web.webapp_auth import (
+    create_telegram_oauth_nonce,
+    create_webapp_session_token,
+    verify_telegram_oauth_nonce,
+)
+from bot.payment_providers.base import ProviderWebhookPayload
+from bot.payment_providers.cryptopay import CryptoPayService
+from bot.payment_providers.freekassa import SPEC as FREEKASSA_SPEC
+from bot.payment_providers.freekassa import FreeKassaService
+from bot.payment_providers.heleket import HeleketConfig, HeleketService, _compute_signature
+from bot.payment_providers.paykilla import PaykillaConfig, PaykillaService
+from bot.payment_providers.paykilla.config import (
+    _clean_paykilla_text,
+    _sign_query,
+    _webhook_signature,
+)
+from bot.payment_providers.yookassa import yookassa_webhook_route
+from bot.services.email_templates import render_login_code
+from bot.utils.request_security import request_client_ip
+from config.settings import Settings
+from db.dal import security_dal
+from db.database_setup import redacted_database_url
+from tests.support.settings_stub import settings_stub
+
+
+class RequestSecurityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_http_code_routes_share_quota_before_handler_work(self):
+        from aiohttp.test_utils import TestClient, TestServer
+
+        from bot.app.web.webapp import rate_limits, resource_middleware
+
+        calls = []
+
+        async def handler(request):
+            calls.append(request.path)
+            return web.json_response({"ok": True})
+
+        settings = settings_stub(
+            REDIS_URL="",
+            WEBAPP_RATE_LIMIT_MAX_REQUESTS=1,
+            WEBAPP_RATE_LIMIT_TTL_SECONDS=60,
+            trusted_proxies=[],
+        )
+        app = web.Application(middlewares=[resource_middleware.checkout_resource_middleware])
+        app.router.add_post("/api/subscription/quote", handler)
+        app.router.add_post("/api/promo/apply", handler)
+        with (
+            patch.object(resource_middleware, "extract_authenticated_user_id", return_value=42),
+            patch.object(rate_limits, "get_settings", return_value=settings),
+            patch.object(rate_limits, "get_redis", AsyncMock(return_value=None)),
+            patch.object(rate_limits, "get_webapp_rate_limit_buckets", return_value={}),
+            patch.object(rate_limits, "get_webapp_rate_limit_lock", return_value=asyncio.Lock()),
+        ):
+            async with TestClient(TestServer(app)) as client:
+                first = await client.post("/api/subscription/quote", json={})
+                second = await client.post("/api/promo/apply", json={"code": "KNOWN"})
+                self.assertEqual(first.status, 200)
+                self.assertEqual(second.status, 429)
+                self.assertEqual(second.headers["Retry-After"], "60")
+        self.assertEqual(calls, ["/api/subscription/quote"])
+
+    async def test_activation_input_contract_preserves_bounded_imported_codes(self):
+        from pydantic import ValidationError
+
+        from bot.app.web.admin_api_impl.schemas import PromoCreateBody
+        from bot.app.web.webapp.payloads import WebAppPromoApplyPayload, WebAppPromoQuotePayload
+
+        for model, field in (
+            (WebAppPromoApplyPayload, "code"),
+            (WebAppPromoQuotePayload, "promo_code"),
+        ):
+            for invalid in (True, 123, {}, [], "x" * 101, "abc\u0000", "abc\n"):
+                with (
+                    self.subTest(model=model.__name__, invalid=invalid),
+                    self.assertRaises(ValidationError),
+                ):
+                    model.model_validate({field: invalid})
+            self.assertEqual(
+                model.model_validate({field: "CaseSensitive.Импорт"}).model_dump()[field],
+                "CaseSensitive.Импорт",
+            )
+            model.model_validate({field: "x" * 100})
+        with self.assertRaises(ValidationError):
+            PromoCreateBody.model_validate({"code": "invalid.code"})
+
+    async def test_local_action_quota_respects_settings_across_ips(self):
+        from bot.app.web.webapp import rate_limits
+
+        buckets = {}
+        lock = asyncio.Lock()
+        settings = settings_stub(
+            REDIS_URL="",
+            WEBAPP_RATE_LIMIT_MAX_REQUESTS=1,
+            WEBAPP_RATE_LIMIT_TTL_SECONDS=7,
+            trusted_proxies=[],
+        )
+        request = SimpleNamespace(remote="192.0.2.1", headers={})
+        with (
+            patch.object(rate_limits, "get_settings", return_value=settings),
+            patch.object(rate_limits, "get_redis", AsyncMock(return_value=None)),
+            patch.object(rate_limits, "get_webapp_rate_limit_buckets", return_value=buckets),
+            patch.object(rate_limits, "get_webapp_rate_limit_lock", return_value=lock),
+        ):
+            self.assertIsNone(
+                await rate_limits.enforce_action_limit(request, user_id=42, action="code")
+            )
+            request.remote = "192.0.2.2"
+            blocked = await rate_limits.enforce_action_limit(request, user_id=42, action="code")
+        self.assertEqual(blocked.status, 429)
+        self.assertEqual(blocked.headers["Retry-After"], "7")
+
+    async def test_configured_redis_outage_fails_closed(self):
+        from bot.app.web.webapp import rate_limits
+
+        with (
+            patch.object(
+                rate_limits, "get_settings", return_value=settings_stub(REDIS_URL="redis://test")
+            ),
+            patch.object(rate_limits, "get_redis", AsyncMock(side_effect=ConnectionError)),
+        ):
+            blocked = await rate_limits.check_request_limits(
+                object(), [("user:42", 1)], window_seconds=60
+            )
+        self.assertEqual(blocked.status, 503)
+
+    async def test_request_client_ip_uses_rightmost_untrusted_forwarded_ip(self):
+        request = SimpleNamespace(
+            remote="127.0.0.1",
+            headers={"X-Forwarded-For": "203.0.113.10, 198.51.100.7"},
+        )
+
+        self.assertEqual(
+            request_client_ip(
+                request,
+                trusted_proxies=["127.0.0.1", "198.51.100.0/24"],
+            ),
+            "203.0.113.10",
+        )
+
+    async def test_request_client_ip_ignores_spoofed_forwarded_prefix(self):
+        request = SimpleNamespace(
+            remote="127.0.0.1",
+            headers={"X-Forwarded-For": "198.51.100.200, 203.0.113.10"},
+        )
+
+        self.assertEqual(
+            request_client_ip(request, trusted_proxies=["127.0.0.1"]),
+            "203.0.113.10",
+        )
+
+    async def test_request_client_ip_ignores_forwarded_for_from_untrusted_remote(self):
+        request = SimpleNamespace(
+            remote="203.0.113.50",
+            headers={"X-Forwarded-For": "198.51.100.200, 192.0.2.10"},
+        )
+
+        self.assertEqual(
+            request_client_ip(request, trusted_proxies=["127.0.0.1"]),
+            "203.0.113.50",
+        )
+
+    async def test_request_client_ip_uses_leftmost_forwarded_ip_when_all_hops_are_trusted(self):
+        request = SimpleNamespace(
+            remote="127.0.0.1",
+            headers={"X-Forwarded-For": "172.18.0.4, 172.18.0.5"},
+        )
+
+        self.assertEqual(
+            request_client_ip(request, trusted_proxies=["127.0.0.1", "172.16.0.0/12"]),
+            "172.18.0.4",
+        )
+
+    async def test_request_client_ip_keeps_last_forwarded_ip_without_remote(self):
+        request = SimpleNamespace(
+            remote=None,
+            headers={"X-Forwarded-For": "203.0.113.10, 198.51.100.7"},
+        )
+
+        self.assertEqual(
+            request_client_ip(request, trusted_proxies=["127.0.0.1"]),
+            "198.51.100.7",
+        )
+
+    async def test_request_client_ip_skips_trusted_forwarded_proxy_chain(self):
+        request = SimpleNamespace(
+            remote="172.19.0.6",
+            headers={"X-Forwarded-For": "203.0.113.10, 172.19.0.7"},
+        )
+
+        self.assertEqual(
+            request_client_ip(request, trusted_proxies=["172.19.0.0/16"]),
+            "203.0.113.10",
+        )
+
+    async def test_request_client_ip_uses_verified_cloudflare_connecting_ip(self):
+        request = SimpleNamespace(
+            remote="127.0.0.1",
+            headers={
+                "X-Forwarded-For": "172.64.1.10",
+                "CF-Connecting-IP": "203.0.113.10",
+            },
+        )
+
+        self.assertEqual(
+            request_client_ip(
+                request,
+                trusted_proxies=["127.0.0.1", "172.64.0.0/13"],
+            ),
+            "203.0.113.10",
+        )
+
+    async def test_request_client_ip_ignores_spoofed_cloudflare_connecting_ip(self):
+        request = SimpleNamespace(
+            remote="127.0.0.1",
+            headers={
+                "X-Forwarded-For": "172.64.1.10, 198.51.100.7",
+                "CF-Connecting-IP": "203.0.113.10",
+            },
+        )
+
+        self.assertEqual(
+            request_client_ip(request, trusted_proxies=["127.0.0.1"]),
+            "198.51.100.7",
+        )
+
+    async def test_access_logger_uses_forwarded_ip_only_for_trusted_proxy(self):
+        trusted_request = SimpleNamespace(
+            remote="172.19.0.6",
+            headers={"X-Forwarded-For": "203.0.113.10, 172.19.0.7"},
+            app={"settings": SimpleNamespace(trusted_proxies=["172.19.0.0/16"])},
+        )
+        untrusted_request = SimpleNamespace(
+            remote="172.19.0.6",
+            headers={"X-Forwarded-For": "203.0.113.10, 172.19.0.7"},
+            app={"settings": SimpleNamespace(trusted_proxies=["127.0.0.1"])},
+        )
+
+        self.assertEqual(
+            TrustedProxyAccessLogger._format_a(trusted_request, object(), 0),
+            "203.0.113.10",
+        )
+        self.assertEqual(
+            TrustedProxyAccessLogger._format_a(untrusted_request, object(), 0),
+            "172.19.0.6",
+        )
+
+    async def test_access_logger_handles_request_before_route_resolution(self):
+        class UnresolvedRequest:
+            def __init__(self):
+                self.remote = "203.0.113.10"
+                self.headers: dict[str, str] = {}
+
+            @property
+            def app(self):
+                raise AssertionError("match_info is unavailable")
+
+        self.assertEqual(
+            TrustedProxyAccessLogger._format_a(UnresolvedRequest(), object(), 0),
+            "203.0.113.10",
+        )
+
+    async def test_yookassa_webhook_rejects_untrusted_ip_before_reading_body(self):
+        request = SimpleNamespace(
+            app={
+                "bot": object(),
+                "i18n": object(),
+                "settings": SimpleNamespace(trusted_proxies=["127.0.0.1"]),
+                "panel_service": object(),
+                "subscription_service": object(),
+                "referral_service": object(),
+                "lknpd_service": None,
+                "async_session_factory": object(),
+            },
+            headers={},
+            remote="203.0.113.50",
+            json=AsyncMock(side_effect=AssertionError("request.json() must not be called")),
+        )
+
+        response = await yookassa_webhook_route(request)
+
+        self.assertEqual(response.status, 403)
+        request.json.assert_not_awaited()
+
+    async def test_account_email_routes_reject_when_email_auth_disabled(self):
+        settings = SimpleNamespace(email_auth_configured=False)
+        handlers = [
+            account_routes.account_email_request_route,
+            account_routes.account_email_verify_route,
+            account_routes.account_password_request_route,
+            account_routes.account_password_confirm_route,
+        ]
+
+        with patch.object(account_routes, "_require_user_id", return_value=42):
+            for handler in handlers:
+                request = SimpleNamespace(
+                    app={"settings": settings},
+                    json=AsyncMock(side_effect=AssertionError("request.json() must not be called")),
+                    headers={},
+                    cookies={},
+                )
+
+                response = await handler(request)
+
+                self.assertEqual(response.status, 503, handler.__name__)
+                self.assertIn("email_auth_not_configured", response.text)
+                request.json.assert_not_awaited()
+
+
+class FreeKassaServiceTests(unittest.TestCase):
+    def _make_service(self) -> FreeKassaService:
+        from bot.payment_providers.freekassa import FreeKassaConfig
+
+        settings = SimpleNamespace(
+            DEFAULT_CURRENCY_SYMBOL="RUB",
+            PAYMENT_REQUEST_TIMEOUT_SECONDS=15,
+            trusted_proxies=["127.0.0.1"],
+        )
+        config = FreeKassaConfig(
+            ENABLED=True,
+            MERCHANT_ID="123456",
+            API_KEY="api-key",
+            SECOND_SECRET="second-secret",
+            PAYMENT_IP="203.0.113.10",
+            PAYMENT_METHOD_ID=44,
+            TRUSTED_IPS="127.0.0.1,203.0.113.0/24",
+        )
+        return FreeKassaService(
+            bot=object(),
+            settings=settings,
+            config=config,
+            i18n=object(),
+            async_session_factory=object(),
+            subscription_service=object(),
+            referral_service=object(),
+        )
+
+    def test_validate_signature_accepts_documented_result_url_md5(self):
+        service = self._make_service()
+        expected_signature = hashlib.md5(b"123456:199.00:second-secret:42").hexdigest()
+
+        self.assertTrue(
+            service._validate_signature(
+                merchant_id="123456",
+                amount="199.00",
+                order_id="42",
+                provided_signature=expected_signature.upper(),
+            )
+        )
+
+    def test_validate_signature_rejects_wrong_signature(self):
+        service = self._make_service()
+
+        self.assertFalse(
+            service._validate_signature(
+                merchant_id="123456",
+                amount="199.00",
+                order_id="42",
+                provided_signature="not-a-signature",
+            )
+        )
+
+    def test_status_check_get_returns_yes_when_checkout_is_disabled(self):
+        service = SimpleNamespace(api_configured=False)
+        request = SimpleNamespace(method="GET", query={"status_check": "1"})
+
+        response = asyncio_run(FreeKassaService.webhook_route(service, request))
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.text, "YES")
+
+    def test_webhook_route_registers_get_and_post(self):
+        app = web.Application()
+        settings = SimpleNamespace(WEBHOOK_BASE_URL="")
+
+        with patch(
+            "bot.app.web.web_server.iter_provider_specs",
+            return_value=[FREEKASSA_SPEC],
+        ):
+            _register_provider_webhook_routes(app, settings)
+
+        registered_routes = {
+            (route.method, route.resource.canonical) for route in app.router.routes()
+        }
+        self.assertIn(("GET", "/webhook/freekassa"), registered_routes)
+        self.assertIn(("POST", "/webhook/freekassa"), registered_routes)
+
+    def test_webhook_rejects_unauthorized_ip_before_body_read(self):
+        service = self._make_service()
+        request = SimpleNamespace(
+            remote="198.51.100.250",
+            headers={},
+            read=AsyncMock(side_effect=AssertionError("request.read() must not be called")),
+        )
+
+        response = asyncio_run(service.webhook_route(request))
+
+        self.assertEqual(response.status, 403)
+        request.read.assert_not_awaited()
+
+
+class CryptoPayServiceTests(unittest.TestCase):
+    def _make_service(self) -> CryptoPayService:
+        from bot.payment_providers.cryptopay import CryptoPayConfig
+
+        service = CryptoPayService.__new__(CryptoPayService)
+        service.config = CryptoPayConfig(TOKEN="cryptopay-token")
+        return service
+
+    def test_validate_webhook_signature_accepts_valid_signature(self):
+        service = self._make_service()
+        raw_body = b'{"payload":"42"}'
+        expected_signature = hmac.new(
+            hashlib.sha256(service.token.encode("utf-8")).digest(),
+            raw_body,
+            hashlib.sha256,
+        ).hexdigest()
+
+        self.assertTrue(service._validate_webhook_signature(raw_body, expected_signature))
+
+    def test_validate_webhook_signature_rejects_invalid_signature(self):
+        service = self._make_service()
+
+        self.assertFalse(service._validate_webhook_signature(b"payload", "not-a-signature"))
+
+    def test_handle_verified_webhook_dispatches_invoice_paid_update(self):
+        service = self._make_service()
+        raw_body = json.dumps(
+            {
+                "update_id": 1,
+                "update_type": "invoice_paid",
+                "request_date": "2026-07-05T12:00:00Z",
+                "payload": {
+                    "invoice_id": 9001,
+                    "status": "paid",
+                    "amount": "100",
+                    "asset": "USDT",
+                    "payload": "{}",
+                },
+            }
+        ).encode()
+        service._invoice_paid_handler = AsyncMock()
+
+        response = asyncio_run(
+            service.handle_verified_webhook(
+                SimpleNamespace(app={"settings": object()}),
+                ProviderWebhookPayload(raw_body=raw_body),
+            )
+        )
+
+        self.assertEqual(response.status, 200)
+        service._invoice_paid_handler.assert_awaited_once()
+        update = service._invoice_paid_handler.await_args.args[0]
+        self.assertEqual(update.update_type, "invoice_paid")
+        self.assertEqual(update.payload.invoice_id, 9001)
+
+    def test_handle_verified_webhook_rejects_malformed_json(self):
+        service = self._make_service()
+
+        response = asyncio_run(
+            service.handle_verified_webhook(
+                SimpleNamespace(app={}),
+                ProviderWebhookPayload(raw_body=b"not-json"),
+            )
+        )
+
+        self.assertEqual(response.status, 400)
+
+
+class HeleketServiceTests(unittest.TestCase):
+    def _make_service(self, api_key: str = " payment-api-key ") -> HeleketService:
+        service = HeleketService.__new__(HeleketService)
+        service.config = HeleketConfig(ENABLED=True, MERCHANT_ID="merchant", API_KEY=api_key)
+        return service
+
+    def test_verify_signature_accepts_php_style_webhook_with_unicode_and_nested_payload(self):
+        payload = {
+            "type": "payment",
+            "uuid": "1467f384-b053-42db-9066-d8a445cc52d3",
+            "order_id": "435",
+            "amount": "190.00000000",
+            "payment_amount": "2.61000000",
+            "payment_amount_usd": "2.61",
+            "merchant_amount": "2.55780000",
+            "commission": "0.05220000",
+            "is_final": True,
+            "status": "paid",
+            "from": "0x7876fa0152a8eceb847154297b4ffdc85e3c4bd1",
+            "wallet_address_uuid": None,
+            "network": "polygon",
+            "currency": "RUB",
+            "payer_currency": "USDT",
+            "payer_amount": "2.61000000",
+            "payer_amount_exchange_rate": "72.72073217",
+            "additional_data": "Подписка на 1 месяц",
+            "transfer_id": None,
+            "convert": {
+                "to_currency": "USDC",
+                "commission": "0.00000000",
+                "rate": "0.99870036",
+                "amount": "2.55447580",
+            },
+            "txid": "0x91f2a28213bf79fba51675f92a741c820ee321babe6ec48a3ae9301d31977f83",
+        }
+        payload["sign"] = _compute_signature(payload, "payment-api-key")
+
+        self.assertTrue(self._make_service()._verify_signature(payload))
+
+    def test_verify_signature_accepts_escaped_unicode_webhook_variant(self):
+        payload = {
+            "order_id": "435",
+            "status": "paid",
+            "additional_data": "Подписка на 1 месяц",
+        }
+        payload["sign"] = _compute_signature(payload, "payment-api-key", ensure_ascii=True)
+
+        self.assertTrue(self._make_service()._verify_signature(payload))
+
+    def test_verify_signature_rejects_invalid_signature(self):
+        service = self._make_service("payment-api-key")
+
+        self.assertFalse(service._verify_signature({"order_id": "435", "sign": "bad"}))
+
+
+class PaykillaServiceTests(unittest.TestCase):
+    def _make_service(self, *, webhook_url: str = "https://shop.example/webhook/paykilla"):
+        service = PaykillaService.__new__(PaykillaService)
+        service.config = PaykillaConfig(
+            ENABLED=True,
+            API_KEY="public-key",
+            SECRET_KEY="secret-key",
+            WEBHOOK_URL=webhook_url,
+        )
+        service.settings = SimpleNamespace(
+            WEBHOOK_BASE_URL="https://shop.example",
+            WEBAPP_TITLE="/minishop",
+            trusted_proxies=["127.0.0.1"],
+        )
+        service._default_return_url = "test_bot"
+        return service
+
+    def test_sign_query_uses_timestamp_and_recv_window_only(self):
+        query, signature = _sign_query(1738800000000, 5000, "secret-key")
+        expected = hmac.new(
+            b"secret-key",
+            b"timestamp=1738800000000&recvWindow=5000",
+            hashlib.sha256,
+        ).hexdigest()
+
+        self.assertEqual(query, "timestamp=1738800000000&recvWindow=5000")
+        self.assertEqual(signature, expected)
+
+    def test_clean_text_transliterates_russian_description_for_invoice_fields(self):
+        text = _clean_paykilla_text(
+            "Оплата подписки на 1 мес. - тариф «Базовый» ✅",
+            fallback="Payment 556",
+        )
+
+        self.assertEqual(text, "Oplata podpiski na 1 mes. tarif Bazovyy")
+        self.assertRegex(text, r"^[A-Za-z0-9_\s.,]+$")
+
+    def test_invoice_body_uses_english_purpose_and_description(self):
+        service = self._make_service()
+        service.settings.WEBAPP_TITLE = "Tunnel Shop"
+
+        body = service._invoice_body(
+            payment_db_id=556,
+            amount=100,
+            currency="RUB",
+            description="Оплата подписки на 1 мес. - тариф «Базовый» ✅",
+        )
+
+        self.assertEqual(body["purpose"], "Tunnel Shop payment 556")
+        self.assertRegex(body["purpose"], r"^[A-Za-z0-9_\s.,]+$")
+        self.assertEqual(
+            body["paymentCurrencies"],
+            ["USDTTRC", "BTC", "ETH", "USDTBSC", "USDTTON"],
+        )
+        self.assertEqual(body["description"], body["purpose"])
+        self.assertTrue(body["expiredAt"].endswith("Z"))
+        self.assertTrue(body["userPaysNetworkFee"])
+        self.assertTrue(body["userPaysServiceFee"])
+        self.assertNotIn("urls", body)
+
+    def test_invoice_body_uses_payment_currency_before_configured_fallback(self):
+        service = self._make_service()
+        service.config.CURRENCY = "USD"
+
+        body = service._invoice_body(
+            payment_db_id=556,
+            amount=100,
+            currency="RUB",
+            description="ignored",
+        )
+
+        self.assertEqual(body["currency"], "RUB")
+        self.assertEqual(body["type"], "FIAT_BASED")
+
+    def test_invoice_body_uses_configured_currency_as_fallback(self):
+        service = self._make_service()
+        service.config.CURRENCY = "USD"
+
+        body = service._invoice_body(
+            payment_db_id=556,
+            amount=100,
+            currency=None,
+            description="ignored",
+        )
+
+        self.assertEqual(body["currency"], "USD")
+        self.assertEqual(body["type"], "FIAT_BASED")
+
+    def test_invoice_amount_converts_unsupported_tariff_currency_to_fallback(self):
+        service = self._make_service()
+        service.config.CURRENCY = "USD"
+        service.config.INVOICE_CURRENCIES = "USD,EUR"
+
+        with patch.object(
+            service,
+            "_exchange_rate",
+            AsyncMock(return_value=Decimal("0.013586")),
+        ) as exchange_rate:
+            amount, currency = asyncio_run(
+                service._invoice_amount_and_currency(
+                    amount=190,
+                    payment_currency="RUB",
+                )
+            )
+
+        self.assertEqual(currency, "USD")
+        self.assertEqual(amount, Decimal("2.58"))
+        exchange_rate.assert_awaited_once_with("RUB", "USD")
+
+    def test_invoice_amount_keeps_enabled_paykilla_invoice_currency(self):
+        service = self._make_service()
+        service.config.CURRENCY = "USD"
+        service.config.INVOICE_CURRENCIES = "RUB,USD"
+
+        with patch.object(
+            service,
+            "_exchange_rate",
+            AsyncMock(side_effect=AssertionError("conversion must not run")),
+        ):
+            amount, currency = asyncio_run(
+                service._invoice_amount_and_currency(
+                    amount=190,
+                    payment_currency="RUB",
+                )
+            )
+
+        self.assertEqual(currency, "RUB")
+        self.assertEqual(amount, Decimal("190.00"))
+
+    def test_invoice_amount_bounds_detects_paykilla_minimum(self):
+        service = self._make_service()
+
+        with patch.object(
+            service,
+            "_currency_info_for",
+            AsyncMock(return_value={"invoiceMin": "10", "invoiceMax": "500000"}),
+        ):
+            error = asyncio_run(
+                service._invoice_amount_bounds_error(
+                    amount=Decimal("2.58"),
+                    currency="USD",
+                )
+            )
+
+        self.assertEqual(error["message"], "invoice_amount_below_minimum")
+        self.assertEqual(error["currency"], "USD")
+        self.assertEqual(error["minimum"], "10.00")
+
+    def test_configured_minimum_detects_converted_rub_payment_below_usd_minimum(self):
+        service = self._make_service()
+        service.config.MIN_PAYMENT_AMOUNT = Decimal("10")
+        service.config.MIN_PAYMENT_CURRENCY = "USD"
+
+        with patch.object(
+            service,
+            "_exchange_rate",
+            AsyncMock(return_value=Decimal("0.013586")),
+        ):
+            error = asyncio_run(
+                service._configured_minimum_error(
+                    amount=190,
+                    payment_currency="RUB",
+                )
+            )
+
+        self.assertEqual(error["message"], "payment_amount_below_minimum")
+        self.assertEqual(error["minimum"], "10.00")
+        self.assertEqual(error["minimum_currency"], "USD")
+        self.assertEqual(error["converted_amount"], "2.58")
+
+    def test_invoice_body_omits_redirect_urls(self):
+        service = self._make_service()
+
+        body = service._invoice_body(
+            payment_db_id=556,
+            amount=100,
+            currency="RUB",
+            description="ignored",
+        )
+
+        self.assertNotIn("urls", body)
+
+    def test_verify_webhook_signature_accepts_raw_body_signature(self):
+        service = self._make_service()
+        raw_body = (
+            b'{"id":"evt_1","priority":"HIGH","eventType":"INVOICE_PAID",'
+            b'"data":{"id":"inv_1","clientOrderId":"42"}}'
+        )
+        timestamp = str(int(time.time() * 1000))
+        signature = _webhook_signature(
+            timestamp=timestamp,
+            method="POST",
+            url="https://shop.example/webhook/paykilla",
+            raw_body=raw_body,
+            secret_key="secret-key",
+        )
+        request = SimpleNamespace(
+            headers={
+                "X-API-KEY": "public-key",
+                "X-API-TIMESTAMP": timestamp,
+                "X-API-RECV-WINDOW": "5000",
+                "X-API-SIGN": signature,
+            },
+            method="POST",
+            scheme="https",
+            host="shop.example",
+            path_qs="/webhook/paykilla",
+        )
+
+        self.assertTrue(service._verify_webhook_signature(request, raw_body))
+
+    def test_verify_webhook_signature_rejects_invalid_signature(self):
+        service = self._make_service()
+        request = SimpleNamespace(
+            headers={
+                "X-API-KEY": "public-key",
+                "X-API-TIMESTAMP": str(int(time.time() * 1000)),
+                "X-API-RECV-WINDOW": "5000",
+                "X-API-SIGN": "bad",
+            },
+            method="POST",
+            scheme="https",
+            host="shop.example",
+            path_qs="/webhook/paykilla",
+        )
+
+        self.assertFalse(service._verify_webhook_signature(request, b"{}"))
+
+
+class WebAppSecurityTests(unittest.IsolatedAsyncioTestCase):
+    class _AsyncSessionFactory:
+        def __call__(self):
+            return self
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def commit(self):
+            return None
+
+        async def rollback(self):
+            return None
+
+        async def flush(self):
+            return None
+
+    def test_auth_response_sets_cookies_and_returns_session_token_fallback(self):
+        settings = SimpleNamespace(
+            WEBAPP_SESSION_SECRET="session-secret",
+            WEBAPP_SESSION_TTL_SECONDS=3600,
+        )
+
+        response = subscription_webapp._build_webapp_auth_response(
+            settings,
+            {"user_id": 321},
+            token="raw-session-token",
+            csrf_token="csrf-token",
+        )
+        payload = json.loads(response.text)
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["csrf_token"], "csrf-token")
+        self.assertEqual(payload["token"], "raw-session-token")
+        self.assertEqual(response.cookies["rw_webapp_session"].value, "raw-session-token")
+        self.assertTrue(response.cookies["rw_webapp_session"]["httponly"])
+        self.assertEqual(response.cookies["rw_webapp_csrf"].value, "csrf-token")
+        self.assertFalse(response.cookies["rw_webapp_csrf"]["httponly"])
+
+    def test_require_user_id_falls_back_to_cookie_session(self):
+        settings = SimpleNamespace(
+            WEBAPP_SESSION_SECRET="session-secret",
+            WEBAPP_SESSION_TTL_SECONDS=3600,
+        )
+        token = create_webapp_session_token(settings, 321)
+        request = SimpleNamespace(
+            app={"settings": settings},
+            headers={},
+            cookies={"rw_webapp_session": token},
+        )
+
+        self.assertEqual(subscription_webapp._require_user_id(request), 321)
+
+    async def test_csrf_middleware_rejects_mismatched_token_when_cookie_session_exists(self):
+        settings = SimpleNamespace(
+            WEBAPP_SESSION_SECRET="session-secret",
+            WEBAPP_SESSION_TTL_SECONDS=3600,
+        )
+        request = SimpleNamespace(
+            method="POST",
+            path="/api/payments",
+            headers={"X-CSRF-Token": "bad-token"},
+            cookies={"rw_webapp_session": "session-cookie", "rw_webapp_csrf": "good-token"},
+            app={"settings": settings},
+        )
+        handler = AsyncMock(return_value=web.Response(text="ok"))
+
+        response = await subscription_webapp._csrf_protection_middleware(request, handler)
+
+        self.assertEqual(response.status, 403)
+        handler.assert_not_awaited()
+
+    async def test_csrf_middleware_allows_matching_token_when_cookie_session_exists(self):
+        settings = SimpleNamespace(
+            WEBAPP_SESSION_SECRET="session-secret",
+            WEBAPP_SESSION_TTL_SECONDS=3600,
+        )
+        request = SimpleNamespace(
+            method="POST",
+            path="/api/payments",
+            headers={"X-CSRF-Token": "good-token"},
+            cookies={"rw_webapp_session": "session-cookie", "rw_webapp_csrf": "good-token"},
+            app={"settings": settings},
+        )
+        handler = AsyncMock(return_value=web.Response(text="ok"))
+
+        response = await subscription_webapp._csrf_protection_middleware(request, handler)
+
+        self.assertEqual(response.text, "ok")
+        handler.assert_awaited_once()
+
+    async def test_csrf_middleware_allows_valid_bearer_authorization_for_compatibility(self):
+        settings = SimpleNamespace(
+            WEBAPP_SESSION_SECRET="session-secret",
+            WEBAPP_SESSION_TTL_SECONDS=3600,
+        )
+        token = create_webapp_session_token(settings, 321)
+        request = SimpleNamespace(
+            method="POST",
+            path="/api/payments",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-CSRF-Token": "bad-token",
+            },
+            cookies={"rw_webapp_session": "session-cookie", "rw_webapp_csrf": "good-token"},
+            app={"settings": settings},
+        )
+        handler = AsyncMock(return_value=web.Response(text="ok"))
+
+        response = await subscription_webapp._csrf_protection_middleware(request, handler)
+
+        self.assertEqual(response.text, "ok")
+        handler.assert_awaited_once()
+
+    async def test_edge_token_middleware_rejects_protected_webapp_api_without_token(self):
+        settings = SimpleNamespace(
+            MINISHOP_EDGE_TOKEN="edge-secret",
+            MINISHOP_EDGE_TOKEN_HEADER="X-Minishop-Edge-Token",
+        )
+        request = SimpleNamespace(
+            path="/api/bootstrap",
+            headers={},
+            app={"settings": settings},
+        )
+        handler = AsyncMock(return_value=web.Response(text="ok"))
+
+        response = await _webapp_edge_token_middleware(request, handler)
+
+        self.assertEqual(response.status, 403)
+        handler.assert_not_awaited()
+
+    async def test_edge_token_middleware_allows_matching_token_and_skips_health(self):
+        settings = SimpleNamespace(
+            MINISHOP_EDGE_TOKEN="edge-secret",
+            MINISHOP_EDGE_TOKEN_HEADER="X-Minishop-Edge-Token",
+        )
+        api_request = SimpleNamespace(
+            path="/api/bootstrap",
+            headers={"X-Minishop-Edge-Token": "edge-secret"},
+            app={"settings": settings},
+        )
+        health_request = SimpleNamespace(
+            path="/health",
+            headers={},
+            app={"settings": settings},
+        )
+        handler = AsyncMock(return_value=web.Response(text="ok"))
+
+        api_response = await _webapp_edge_token_middleware(api_request, handler)
+        health_response = await _webapp_edge_token_middleware(health_request, handler)
+
+        self.assertEqual(api_response.text, "ok")
+        self.assertEqual(health_response.text, "ok")
+        self.assertEqual(handler.await_count, 2)
+
+    async def test_session_route_restores_cookie_session_and_csrf_token(self):
+        settings = SimpleNamespace(
+            WEBAPP_SESSION_SECRET="session-secret",
+            WEBAPP_SESSION_TTL_SECONDS=3600,
+        )
+        token = create_webapp_session_token(settings, 321)
+        request = SimpleNamespace(
+            app={"settings": settings},
+            headers={},
+            cookies={"rw_webapp_session": token},
+        )
+
+        response = await session_route(request)
+        payload = json.loads(response.text)
+
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["authenticated"])
+        self.assertTrue(payload["csrf_token"])
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertEqual(response.cookies["rw_webapp_session"].value, token)
+        self.assertEqual(response.cookies["rw_webapp_csrf"].value, payload["csrf_token"])
+
+    async def test_session_route_reports_unauthenticated_without_session(self):
+        settings = SimpleNamespace(
+            WEBAPP_SESSION_SECRET="session-secret",
+            WEBAPP_SESSION_TTL_SECONDS=3600,
+        )
+        request = SimpleNamespace(
+            app={"settings": settings},
+            headers={},
+            cookies={},
+        )
+
+        response = await session_route(request)
+        payload = json.loads(response.text)
+
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["authenticated"])
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+    def test_email_payload_rejects_overlong_email(self):
+        long_email = ("a" * 245) + "@example.com"
+
+        model, response = subscription_webapp._validate_model_payload(
+            subscription_webapp.WebAppEmailPayload,
+            {"email": long_email},
+        )
+
+        self.assertIsNone(model)
+        self.assertEqual(response.status, 400)
+        self.assertIn("email_too_long", response.text)
+
+    def test_email_password_hash_round_trips_without_plaintext(self):
+        password = "correct horse battery staple"
+
+        stored_hash = subscription_webapp._hash_email_password(password)
+
+        self.assertNotIn(password, stored_hash)
+        self.assertTrue(subscription_webapp._verify_email_password(password, stored_hash))
+        self.assertFalse(subscription_webapp._verify_email_password("wrong-password", stored_hash))
+
+    def test_set_password_email_code_copy_mentions_password_creation(self):
+        settings = SimpleNamespace(
+            DEFAULT_LANGUAGE="ru",
+            EMAIL_CODE_TTL_SECONDS=600,
+            WEBAPP_LOGO_URL="",
+            WEBAPP_PRIMARY_COLOR="#00fe7a",
+            WEBAPP_TITLE="Remnawave",
+        )
+
+        content = render_login_code(
+            settings,
+            code="123456",
+            language_code="ru",
+            magic_link="https://example.com/login",
+            purpose="set_password",
+        )
+
+        self.assertIn("создания пароля", content.subject)
+        self.assertIn("создание пароля", content.html)
+        self.assertIn("код для создания пароля", content.text)
+        self.assertNotIn("Подтвердите вход", content.html)
+        self.assertNotIn("https://example.com/login", content.text)
+
+    async def test_email_password_login_success_sets_session_cookie(self):
+        settings = SimpleNamespace(
+            WEBAPP_SESSION_SECRET="session-secret",
+            WEBAPP_SESSION_TTL_SECONDS=3600,
+            email_auth_configured=True,
+            BRUTE_FORCE_MAX_FAILURES=5,
+            BRUTE_FORCE_WINDOW_SECONDS=60,
+            BRUTE_FORCE_LOCK_SECONDS=300,
+        )
+        stored_hash = subscription_webapp._hash_email_password("secret-password")
+        db_user = SimpleNamespace(
+            user_id=42,
+            email_verified_at=object(),
+            password_hash=stored_hash,
+            is_banned=False,
+            telegram_id=None,
+        )
+        request = SimpleNamespace(
+            app={"settings": settings, "async_session_factory": self._AsyncSessionFactory()},
+            json=AsyncMock(
+                return_value={"email": "user@example.com", "password": "secret-password"}
+            ),
+        )
+
+        with (
+            patch.object(
+                subscription_webapp.security_dal,
+                "check_throttle",
+                AsyncMock(return_value=security_dal.ThrottleDecision(locked=False)),
+            ),
+            patch.object(
+                subscription_webapp.security_dal,
+                "clear_throttle_state",
+                AsyncMock(return_value=None),
+            ),
+            patch.object(
+                subscription_webapp.user_dal,
+                "get_user_by_email",
+                AsyncMock(return_value=db_user),
+            ),
+        ):
+            response = await subscription_webapp.email_password_auth_route(request)
+
+        payload = json.loads(response.text)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["user_id"], 42)
+        self.assertIn("rw_webapp_session", response.cookies)
+
+    async def test_email_password_login_failures_use_same_fallback_error(self):
+        settings = SimpleNamespace(
+            email_auth_configured=True,
+            BRUTE_FORCE_MAX_FAILURES=5,
+            BRUTE_FORCE_WINDOW_SECONDS=60,
+            BRUTE_FORCE_LOCK_SECONDS=300,
+        )
+        cases = [
+            None,
+            SimpleNamespace(
+                user_id=42,
+                email_verified_at=object(),
+                password_hash=None,
+                is_banned=False,
+            ),
+            SimpleNamespace(
+                user_id=42,
+                email_verified_at=object(),
+                password_hash=subscription_webapp._hash_email_password("other-password"),
+                is_banned=False,
+            ),
+        ]
+
+        for db_user in cases:
+            request = SimpleNamespace(
+                app={"settings": settings, "async_session_factory": self._AsyncSessionFactory()},
+                json=AsyncMock(
+                    return_value={"email": "user@example.com", "password": "secret-password"}
+                ),
+            )
+            with (
+                patch.object(
+                    subscription_webapp.security_dal,
+                    "check_throttle",
+                    AsyncMock(return_value=security_dal.ThrottleDecision(locked=False)),
+                ),
+                patch.object(
+                    subscription_webapp.security_dal,
+                    "record_throttle_failure",
+                    AsyncMock(return_value=security_dal.ThrottleDecision(locked=False)),
+                ),
+                patch.object(
+                    subscription_webapp.user_dal,
+                    "get_user_by_email",
+                    AsyncMock(return_value=db_user),
+                ),
+                patch.object(
+                    auth_email_routes.user_email_dal,
+                    "get_user_by_verified_email_address",
+                    AsyncMock(return_value=None),
+                ),
+            ):
+                response = await subscription_webapp.email_password_auth_route(request)
+
+            payload = json.loads(response.text)
+            self.assertEqual(response.status, 401)
+            self.assertEqual(payload["error"], "password_login_failed")
+            self.assertEqual(payload["fallback"], "email_code")
+
+    async def test_account_password_confirm_requires_matching_passwords(self):
+        request = SimpleNamespace(
+            app={"settings": settings_stub(email_auth_configured=True)},
+            json=AsyncMock(
+                return_value={
+                    "password": "secret-password",
+                    "password_confirm": "other-password",
+                    "code": "123456",
+                }
+            ),
+        )
+
+        with patch.object(account_routes, "_require_user_id", return_value=42):
+            response = await account_routes.account_password_confirm_route(request)
+
+        self.assertEqual(response.status, 400)
+        self.assertIn("password_mismatch", response.text)
+
+    async def test_account_password_confirm_sets_hash_after_email_code(self):
+        settings = settings_stub(
+            REDIS_URL=None,
+            REDIS_KEY_PREFIX="test",
+            email_auth_configured=True,
+        )
+        db_user = SimpleNamespace(
+            user_id=42,
+            email="user@example.com",
+            email_verified_at=object(),
+            is_banned=False,
+            password_hash=None,
+            password_set_at=None,
+        )
+        email_service = SimpleNamespace(
+            verify_code=AsyncMock(
+                return_value=SimpleNamespace(ok=True, error=None, retry_after=None)
+            )
+        )
+        request = SimpleNamespace(
+            app={
+                "settings": settings,
+                "email_auth_service": email_service,
+                "async_session_factory": self._AsyncSessionFactory(),
+            },
+            json=AsyncMock(
+                return_value={
+                    "password": "secret-password",
+                    "password_confirm": "secret-password",
+                    "code": "123456",
+                }
+            ),
+        )
+
+        with (
+            patch.object(account_routes, "_require_user_id", return_value=42),
+            patch.object(
+                account_routes.user_dal,
+                "get_user_by_id",
+                AsyncMock(return_value=db_user),
+            ),
+        ):
+            response = await account_routes.account_password_confirm_route(request)
+
+        self.assertEqual(response.status, 200)
+        self.assertTrue(
+            subscription_webapp._verify_email_password("secret-password", db_user.password_hash)
+        )
+        self.assertIsNotNone(db_user.password_set_at)
+
+    def test_payment_payload_rejects_overlong_description(self):
+        model, response = subscription_webapp._validate_model_payload(
+            subscription_webapp.WebAppPaymentCreatePayload,
+            {
+                "method": "platega",
+                "months": 3,
+                "description": "x" * 4097,
+            },
+        )
+
+        self.assertIsNone(model)
+        self.assertEqual(response.status, 400)
+        self.assertIn("description_too_long", response.text)
+
+    def test_telegram_oauth_nonce_round_trips(self):
+        settings = SimpleNamespace(
+            WEBAPP_SESSION_SECRET="session-secret",
+            WEBAPP_SESSION_TTL_SECONDS=3600,
+        )
+        nonce = create_telegram_oauth_nonce(settings, ttl_seconds=60)
+
+        self.assertTrue(verify_telegram_oauth_nonce(settings, nonce))
+        self.assertFalse(verify_telegram_oauth_nonce(settings, nonce + "tampered"))
+
+    async def test_telegram_oauth_start_uses_short_public_state(self):
+        settings = SimpleNamespace(
+            WEBAPP_ENABLED=True,
+            TELEGRAM_ENABLED=True,
+            TELEGRAM_LOGIN_ENABLED=True,
+            BOT_TOKEN="123456789:secret",
+            TELEGRAM_OAUTH_CLIENT_ID=None,
+            TELEGRAM_OAUTH_CLIENT_SECRET="client-secret",
+            TELEGRAM_OAUTH_REQUEST_ACCESS="write",
+            WEBAPP_LOGIN_TOKEN_TTL_SECONDS=600,
+            WEBAPP_SESSION_SECRET="session-secret",
+            WEBAPP_SESSION_TTL_SECONDS=3600,
+            SUBSCRIPTION_MINI_APP_URL="https://app.example.com/home",
+        )
+        request = SimpleNamespace(
+            app={"settings": settings},
+            query={
+                "purpose": "login",
+                "referral_code": "x" * 128,
+                "tariff_access": "AB" * 16,
+            },
+            headers={},
+            cookies={},
+        )
+
+        with self.assertRaises(web.HTTPFound) as raised:
+            await subscription_webapp.telegram_oauth_start_route(request)
+
+        redirect = raised.exception
+        query = parse_qs(urlsplit(redirect.headers["Location"]).query)
+        state = query["state"][0]
+        self.assertLessEqual(len(state), 64)
+
+        cookie_name = subscription_webapp.WEBAPP_TELEGRAM_OAUTH_STATE_COOKIE_NAME
+        signed_state = redirect.cookies[cookie_name].value
+        callback_request = SimpleNamespace(
+            app={"settings": settings},
+            cookies={cookie_name: signed_state},
+        )
+        payload = subscription_webapp._read_telegram_oauth_state_payload(callback_request, state)
+
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["referral_code"], "x" * 128)
+        self.assertEqual(payload["tariff_access_code"], "ab" * 16)
+        self.assertEqual(len(payload["code_verifier"]), 43)
+        self.assertIsNone(
+            subscription_webapp._read_telegram_oauth_state_payload(callback_request, state + "x")
+        )
+
+    def test_telegram_oauth_client_id_defaults_to_bot_id(self):
+        settings = SimpleNamespace(
+            BOT_TOKEN="123456789:secret",
+            TELEGRAM_OAUTH_CLIENT_ID=None,
+            TELEGRAM_OAUTH_REQUEST_ACCESS="write, phone, unknown, write",
+        )
+
+        self.assertEqual(subscription_webapp._resolve_telegram_oauth_client_id(settings), 123456789)
+        self.assertEqual(
+            subscription_webapp._resolve_telegram_oauth_request_access(settings),
+            ["write", "phone"],
+        )
+
+    def test_public_webapp_base_url_ignores_forwarded_headers_from_untrusted_remote(self):
+        settings = SimpleNamespace(
+            SUBSCRIPTION_MINI_APP_URL="",
+            trusted_proxies=["127.0.0.1"],
+        )
+        request = SimpleNamespace(
+            remote="203.0.113.10",
+            scheme="http",
+            host="internal.local",
+            headers={
+                "Host": "internal.local",
+                "X-Forwarded-Proto": "https",
+                "X-Forwarded-Host": "evil.example.com",
+            },
+        )
+
+        self.assertEqual(
+            subscription_webapp._public_webapp_base_url(settings, request),
+            "http://internal.local",
+        )
+
+    def test_public_webapp_base_url_accepts_forwarded_headers_from_trusted_proxy(self):
+        settings = SimpleNamespace(
+            SUBSCRIPTION_MINI_APP_URL="",
+            trusted_proxies=["127.0.0.1"],
+        )
+        request = SimpleNamespace(
+            remote="127.0.0.1",
+            scheme="http",
+            host="internal.local",
+            headers={
+                "Host": "internal.local",
+                "X-Forwarded-Proto": "https",
+                "X-Forwarded-Host": "app.example.com",
+            },
+        )
+
+        self.assertEqual(
+            subscription_webapp._public_webapp_base_url(settings, request),
+            "https://app.example.com",
+        )
+
+    async def test_security_headers_csp_excludes_unsafe_eval_and_plain_http_images(self):
+        request = {
+            "settings": SimpleNamespace(
+                SUBSCRIPTION_MINI_APP_URL="",
+                WEBAPP_API_BASE_URL="/api",
+            )
+        }
+        handler = AsyncMock(return_value=web.Response(text="ok"))
+
+        with patch(
+            "bot.app.web.webapp.assets.get_settings",
+            return_value=settings_stub(QR_LOGIN_ENABLED=False),
+        ):
+            response = await subscription_webapp._security_headers_middleware(request, handler)
+        csp = response.headers["Content-Security-Policy"]
+
+        self.assertNotIn("'unsafe-eval'", csp)
+        self.assertIn("frame-src 'self' https://oauth.telegram.org;", csp)
+        self.assertIn("frame-ancestors 'self' https://web.telegram.org https://t.me;", csp)
+        self.assertIn("img-src 'self' data: blob: https:;", csp)
+        self.assertNotIn("img-src 'self' data: https: http:;", csp)
+        self.assertEqual(response.headers["X-Robots-Tag"], "noindex, nofollow, noarchive")
+        self.assertIn("camera=()", response.headers["Permissions-Policy"])
+
+    async def test_qr_login_allows_only_the_shop_to_use_the_camera(self):
+        request = {}
+        handler = AsyncMock(return_value=web.Response(text="ok"))
+        with patch(
+            "bot.app.web.webapp.assets.get_settings",
+            return_value=settings_stub(QR_LOGIN_ENABLED=True),
+        ):
+            response = await subscription_webapp._security_headers_middleware(request, handler)
+        policy = response.headers["Permissions-Policy"]
+        self.assertIn("camera=(self)", policy)
+        self.assertIn("microphone=()", policy)
+
+
+class AdminSettingsSecurityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_admin_settings_masks_secret_values_and_exposes_has_value(self):
+        class AsyncSessionFactory:
+            def __call__(self):
+                return self
+
+            async def __aenter__(self):
+                return object()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        from bot.payment_providers import (
+            build_provider_configs,
+            get_provider_bundle,
+        )
+
+        build_provider_configs(force=True)
+        bundle = get_provider_bundle("yookassa_service")
+        if bundle and bundle.config is not None:
+            bundle.config.SECRET_KEY = "super-secret"
+
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            SHOP_NAME="Visible shop",
+        )
+        request = SimpleNamespace(
+            app={"settings": settings, "async_session_factory": AsyncSessionFactory()},
+            headers={},
+            cookies={},
+            admin_telegram_id=1,
+        )
+        request.get = lambda key, default=None: getattr(request, key, default)
+
+        with (
+            patch.object(admin_settings_routes, "_require_admin_user_id", return_value=1),
+            patch.object(
+                admin_api.app_settings_dal,
+                "get_overrides_with_meta",
+                AsyncMock(return_value=[]),
+            ),
+        ):
+            response = await admin_api.admin_settings_get_route(request)
+
+        payload = json.loads(response.text)
+        secret_field = next(
+            field
+            for section in payload["sections"]
+            for field in section["fields"]
+            if field["key"] == "YOOKASSA_SECRET_KEY"
+        )
+
+        self.assertEqual(secret_field["value"], "")
+        self.assertTrue(secret_field["has_value"])
+        self.assertEqual(secret_field["value_source"], "environment")
+        self.assertNotIn("super-secret", response.text)
+
+    async def test_admin_settings_marks_database_override_value_source(self):
+        class AsyncSessionFactory:
+            def __call__(self):
+                return self
+
+            async def __aenter__(self):
+                return object()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            SHOP_NAME="Visible shop",
+            PANEL_API_KEY="db-panel-key",
+        )
+        request = SimpleNamespace(
+            app={"settings": settings, "async_session_factory": AsyncSessionFactory()},
+            headers={},
+            cookies={},
+            admin_telegram_id=1,
+        )
+        request.get = lambda key, default=None: getattr(request, key, default)
+
+        with (
+            patch.object(admin_settings_routes, "_require_admin_user_id", return_value=1),
+            patch.object(
+                admin_api.app_settings_dal,
+                "get_overrides_with_meta",
+                AsyncMock(
+                    return_value=[
+                        {
+                            "key": "PANEL_API_KEY",
+                            "value": "db-panel-key",
+                            "updated_at": "2026-07-19T12:00:00+00:00",
+                            "updated_by": 1,
+                        }
+                    ]
+                ),
+            ),
+        ):
+            response = await admin_api.admin_settings_get_route(request)
+
+        payload = json.loads(response.text)
+        fields = {
+            field["key"]: field for section in payload["sections"] for field in section["fields"]
+        }
+        panel_key_field = fields["PANEL_API_KEY"]
+
+        self.assertTrue(panel_key_field["overridden"])
+        self.assertEqual(panel_key_field["value_source"], "database_override")
+        self.assertEqual(panel_key_field["updated_at"], "2026-07-19T12:00:00+00:00")
+        self.assertEqual(panel_key_field["value"], "")
+        self.assertTrue(panel_key_field["has_value"])
+        self.assertNotIn("db-panel-key", response.text)
+
+    async def test_admin_settings_value_source_separates_storage_from_domain_source(self):
+        class AsyncSessionFactory:
+            def __call__(self):
+                return self
+
+            async def __aenter__(self):
+                return object()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            SHOP_NAME="Visible shop",
+            SUBSCRIPTION_PAGE_CONFIG_JSON='{"platforms":[]}',
+        )
+        request = SimpleNamespace(
+            app={"settings": settings, "async_session_factory": AsyncSessionFactory()},
+            headers={},
+            cookies={},
+            admin_telegram_id=1,
+        )
+        request.get = lambda key, default=None: getattr(request, key, default)
+
+        with (
+            patch.object(admin_settings_routes, "_require_admin_user_id", return_value=1),
+            patch.object(
+                admin_api.app_settings_dal,
+                "get_overrides_with_meta",
+                AsyncMock(return_value=[]),
+            ),
+        ):
+            response = await admin_api.admin_settings_get_route(request)
+
+        payload = json.loads(response.text)
+        fields = {
+            field["key"]: field for section in payload["sections"] for field in section["fields"]
+        }
+        guide_config_field = fields["SUBSCRIPTION_PAGE_CONFIG_JSON"]
+
+        self.assertTrue(guide_config_field["overridden"])
+        self.assertEqual(guide_config_field["source"], "admin_json")
+        self.assertEqual(guide_config_field["value_source"], "environment")
+
+    async def test_admin_settings_exposes_payment_webhook_urls(self):
+        class AsyncSessionFactory:
+            def __call__(self):
+                return self
+
+            async def __aenter__(self):
+                return object()
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        settings = Settings(
+            _env_file=None,
+            BOT_TOKEN="token",
+            POSTGRES_USER="app_user",
+            POSTGRES_PASSWORD="app_password",
+            SHOP_NAME="Visible shop",
+            WEBHOOK_BASE_URL="https://web.tnnl.cc/",
+        )
+        request = SimpleNamespace(
+            app={"settings": settings, "async_session_factory": AsyncSessionFactory()},
+            headers={},
+            cookies={},
+            admin_telegram_id=1,
+        )
+        request.get = lambda key, default=None: getattr(request, key, default)
+
+        with (
+            patch.object(admin_settings_routes, "_require_admin_user_id", return_value=1),
+            patch.object(
+                admin_api.app_settings_dal,
+                "get_overrides_with_meta",
+                AsyncMock(return_value=[]),
+            ),
+        ):
+            response = await admin_api.admin_settings_get_route(request)
+
+        payload = json.loads(response.text)
+        section_ids = [section["id"] for section in payload["sections"]]
+        fields = {
+            field["key"]: field for section in payload["sections"] for field in section["fields"]
+        }
+
+        self.assertLess(section_ids.index("general"), section_ids.index("remnawave"))
+        self.assertLess(section_ids.index("remnawave"), section_ids.index("payments"))
+        self.assertEqual(
+            fields["FREEKASSA_ENABLED"]["webhook_url"],
+            "https://web.tnnl.cc/webhook/freekassa",
+        )
+        self.assertTrue(fields["FREEKASSA_ENABLED"]["webhook_base_url_configured"])
+        self.assertEqual(
+            fields["PAYMENT_PLATEGA_CRYPTO_WEBAPP_LABEL_RU"]["webhook_url"],
+            "https://web.tnnl.cc/webhook/platega",
+        )
+        self.assertEqual(
+            fields["PANEL_WEBHOOK_SECRET"]["webhook_url"],
+            "https://web.tnnl.cc/webhook/panel",
+        )
+        self.assertTrue(fields["PANEL_WEBHOOK_SECRET"]["webhook_requires_base_url"])
+        self.assertNotIn("webhook_url", fields["PAYMENT_STARS_WEBAPP_LABEL_RU"])
+
+
+class DatabaseLoggingSecurityTests(unittest.TestCase):
+    def test_database_url_redaction_hides_password(self):
+        raw_url = "postgresql+asyncpg://user:raw-password@db.example.com:5432/app"
+
+        redacted = redacted_database_url(raw_url)
+
+        self.assertIn("user:***@", redacted)
+        self.assertNotIn("raw-password", redacted)
+
+
+def asyncio_run(coro):
+    import asyncio
+
+    return asyncio.run(coro)

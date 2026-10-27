@@ -1,0 +1,283 @@
+{
+  "module_size": {
+    "max_lines": 1000,
+    "scopes": [
+      "backend/bot",
+      "backend/config",
+      "backend/db",
+      "frontend/src"
+    ],
+    "extensions": [
+      ".py",
+      ".ts",
+      ".svelte",
+      ".js"
+    ],
+    "allowlist": [
+      "backend/bot/app/web/templates/*.js",
+      "frontend/src/lib/api/openapi.generated.ts",
+      "frontend/src/lib/webapp/demoDataset.js"
+    ]
+  },
+  "cyrillic_fallbacks": {
+    "frontend_translation_calls": {
+      "scopes": [
+        "frontend/src"
+      ],
+      "extensions": [
+        ".ts",
+        ".svelte"
+      ],
+      "allowlist": [
+        "frontend/src/**/*.test.ts"
+      ],
+      "allowed_count": 0
+    },
+    "frontend_webapp_translation_calls": {
+      "scopes": [
+        "frontend/src/webapp",
+        "frontend/src/lib/webapp",
+        "frontend/src/lib/components/patterns/webapp"
+      ],
+      "extensions": [
+        ".ts",
+        ".svelte"
+      ],
+      "allowlist": [
+        "frontend/src/**/*.test.ts"
+      ],
+      "allowed_count": 0
+    },
+    "frontend_admin_payments_translation_calls": {
+      "scopes": [
+        "frontend/src/admin/sections/PaymentsSection.svelte",
+        "frontend/src/admin/sections/PaymentDetailModal.svelte"
+      ],
+      "extensions": [
+        ".svelte"
+      ],
+      "allowlist": [],
+      "allowed_count": 0
+    },
+    "frontend_source_lines": {
+      "scopes": [
+        "frontend/src"
+      ],
+      "extensions": [
+        ".ts",
+        ".svelte",
+        ".js"
+      ],
+      "allowlist": [
+        "frontend/src/**/*.test.ts",
+        "frontend/src/**/*.spec.ts",
+        "frontend/src/PreviewBoard.svelte",
+        "frontend/src/preview/**",
+        "frontend/src/lib/webapp/demoDataset.js",
+        "frontend/src/lib/webapp/mockApi/**",
+        "frontend/src/lib/webapp/previewMock/**"
+      ],
+      "allowed_count": 0
+    },
+    "python_literals": {
+      "scopes": [
+        "backend"
+      ],
+      "allowlist": [
+        "backend/bot/handlers/inline_mode.py",
+        "backend/bot/payment_providers/paykilla/config.py",
+        "backend/bot/utils/text_sanitizer.py",
+        "backend/db/migrator/chain_0001_0021.py"
+      ],
+      "allowed_count": 0
+    },
+    "python_literal_exceptions": {
+      "scopes": [
+        "backend/bot/handlers/inline_mode.py",
+        "backend/bot/payment_providers/paykilla/config.py",
+        "backend/bot/utils/text_sanitizer.py",
+        "backend/db/migrator/chain_0001_0021.py"
+      ],
+      "allowlist": [],
+      "allowed_count": 123
+    },
+    "python_source_lines": {
+      "scopes": [
+        "backend"
+      ],
+      "allowlist": [
+        "backend/bot/handlers/inline_mode.py",
+        "backend/bot/payment_providers/paykilla/config.py",
+        "backend/bot/utils/text_sanitizer.py",
+        "backend/db/migrator/chain_0001_0021.py"
+      ],
+      "allowed_count": 0
+    },
+    "python_source_exceptions": {
+      "scopes": [
+        "backend/bot/handlers/inline_mode.py",
+        "backend/bot/payment_providers/paykilla/config.py",
+        "backend/bot/utils/text_sanitizer.py",
+        "backend/db/migrator/chain_0001_0021.py"
+      ],
+      "allowlist": [],
+      "allowed_count": 116
+    },
+    "python_webapp_literals": {
+      "scopes": [
+        "backend/bot/app/web/webapp"
+      ],
+      "allowlist": [],
+      "allowed_count": 0
+    }
+  },
+  "frontend_i18n_scope": {
+    "scopes": [
+      "frontend/src/App.svelte",
+      "frontend/src/webapp",
+      "frontend/src/lib/webapp",
+      "frontend/src/lib/components/patterns/webapp"
+    ],
+    "extensions": [
+      ".ts",
+      ".svelte"
+    ],
+    "allowlist": [
+      "frontend/src/**/*.test.ts",
+      "frontend/src/**/*.spec.ts",
+      "frontend/src/lib/webapp/mockApi/**",
+      "frontend/src/lib/webapp/previewMock/**"
+    ],
+    "allowed_prefixes": [
+      "wa_"
+    ],
+    "allowed_keys": [
+      "menu_server_status_button",
+      "menu_support_button"
+    ],
+    "locale_key_aliases": {
+      "wa_devices_disconnect_title": "wa_devices_disconnect",
+      "wa_install_link_copied": "wa_link_copied",
+      "wa_link_email_modal_title": "wa_settings_link_email_action"
+    },
+    "locale_files": [
+      "locales/en.json",
+      "locales/ru.json"
+    ]
+  },
+  "type_ignore": {
+    "scopes": [
+      "backend/bot",
+      "backend/config"
+    ],
+    "allowlist": {
+      "backend/config/settings.py": 1
+    }
+  },
+  "raw_json_response": {
+    "scopes": [
+      "backend/bot/app/web/admin_api_impl",
+      "backend/bot/app/web/webapp"
+    ],
+    "allowlist": [
+      "backend/bot/app/web/response_helpers.py",
+      "backend/bot/app/web/webapp/response_helpers.py"
+    ]
+  },
+  "loose_schemas": {
+    "scopes": [
+      "backend/bot/app/web/admin_api_impl",
+      "backend/bot/app/web/webapp"
+    ],
+    "allowlist": {}
+  },
+  "frontend_weak_typing": {
+    "scopes": [
+      "frontend/src"
+    ],
+    "extensions": [
+      ".ts",
+      ".js",
+      ".svelte"
+    ],
+    "allowlist": [],
+    "allowed_counts": {}
+  },
+  "first_party_js": {
+    "scopes": [
+      "frontend/src"
+    ],
+    "allowlist": [
+      "frontend/src/lib/webapp/demoDataset.js"
+    ]
+  },
+  "svelte_lang_ts": {
+    "scopes": [
+      "frontend/src"
+    ],
+    "allowlist": []
+  },
+  "frontend_api_calls": {
+    "scopes": [
+      "frontend/src"
+    ],
+    "allowed_calls": [
+      "apiUnchecked"
+    ],
+    "allowlist_paths": []
+  },
+  "runtime_all_exports": {
+    "paths": [
+      "backend/bot/app/web/admin_api_impl/_runtime.py",
+      "backend/bot/app/web/webapp/_runtime.py",
+      "backend/bot/services/subscription_service_impl/_runtime.py"
+    ]
+  },
+  "runtime_imports": {
+    "scopes": [
+      "backend"
+    ],
+    "runtime_modules": {
+      "admin_api_impl_runtime": "bot.app.web.admin_api_impl._runtime",
+      "webapp_runtime": "bot.app.web.webapp._runtime",
+      "subscription_service_impl_runtime": "bot.services.subscription_service_impl._runtime"
+    },
+    "baseline_path": "scripts/runtime_import_baseline.json",
+    "allowlist_paths": []
+  },
+  "facade_imports": {
+    "scopes": [
+      "backend"
+    ],
+    "facades": {
+      "admin_api": "bot.app.web.admin_api",
+      "subscription_webapp": "bot.app.web.subscription_webapp",
+      "subscription_service": "bot.services.subscription_service"
+    },
+    "allowed_importers": {
+      "admin_api": [
+        "backend/bot/app/web/admin_api.py",
+        "backend/bot/app/web/web_server.py"
+      ],
+      "subscription_webapp": [
+        "backend/bot/app/web/subscription_webapp.py",
+        "backend/bot/app/web/web_server.py"
+      ],
+      "subscription_service": []
+    },
+    "allowlist_paths": []
+  },
+  "route_contracts": {
+    "route_setup_scopes": [
+      "backend/bot/app/web/admin_api_impl/routes.py",
+      "backend/bot/app/web/webapp/routes.py"
+    ],
+    "contract_scopes": [
+      "backend/bot/app/web/admin_api_impl",
+      "backend/bot/app/web/webapp"
+    ],
+    "path_allowlist": [
+      "/api/admin/payments/export.csv"
+    ]
+  }
+}

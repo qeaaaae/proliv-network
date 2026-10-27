@@ -1,0 +1,927 @@
+import logging
+import os
+from pathlib import Path
+from typing import Literal
+
+from pydantic import Field, PrivateAttr, SecretStr, ValidationError
+from pydantic_settings import SettingsConfigDict
+
+from config.settings_auth import AuthenticationSettings
+from config.settings_defaults import (
+    DEFAULT_SUBSCRIPTION_PURCHASE_DESCRIPTION_EN,
+    DEFAULT_SUBSCRIPTION_PURCHASE_DESCRIPTION_RU,
+    DEFAULT_TRUSTED_PROXIES,
+)
+from config.settings_mixins import SettingsComputedMixin, SettingsValidationMixin
+from config.settings_models import (
+    BalanceSettings,
+    CompatibilitySettings,
+    DBSettings,
+    EmailSettings,
+    PanelSettings,
+    PaymentSettings,
+    ReferralSettings,
+    RegistrationSettings,
+    SupportSettings,
+    WebAppSettings,
+)
+from config.settings_telegram import TelegramTransportSettings
+from config.settings_trial import TrialSettings
+
+logger = logging.getLogger(__name__)
+
+
+class Settings(
+    SettingsComputedMixin,
+    SettingsValidationMixin,
+    AuthenticationSettings,
+    TrialSettings,
+    TelegramTransportSettings,
+):
+    _trusted_subscription_config_path: Path = PrivateAttr()
+
+    def model_post_init(self, context: object) -> None:
+        # Freeze the operator's file selection before database overrides are applied.
+        path = Path(self.SUBSCRIPTION_PAGE_CONFIG_PATH)
+        root = Path(__file__).resolve().parents[2]
+        self._trusted_subscription_config_path = (
+            path if path.is_absolute() else root / path
+        ).resolve()
+
+    @property
+    def _trusted_outbound_urls(self) -> tuple[str, ...]:
+        """Trust the current administrator-selected monitoring destinations."""
+        return (
+            str(self.SERVER_STATUS_XRAY_CHECKER_URL or ""),
+            str(self.SERVER_STATUS_KUMA_URL or ""),
+        )
+
+    @property
+    def _trusted_smtp_endpoints(self) -> tuple[tuple[str, int], ...]:
+        # Admin assignments mark the field as set, just like explicit env values.
+        return (
+            tuple((self.SMTP_HOST.lower().rstrip("."), port) for port in self.smtp_ports_to_try)
+            if "SMTP_HOST" in self.model_fields_set
+            else ()
+        )
+
+    ADMIN_IDS_STR: str = Field(
+        default="", alias="ADMIN_IDS", description="Comma-separated list of admin Telegram User IDs"
+    )
+
+    POSTGRES_USER: str = Field(...)
+    POSTGRES_PASSWORD: str = Field(...)
+    POSTGRES_HOST: str = Field(default="localhost")
+    POSTGRES_PORT: int = Field(default=5432)
+    POSTGRES_DB: str = Field(default="vpn_shop_db")
+    DB_POOL_SIZE: int = Field(default=20)
+    DB_MAX_OVERFLOW: int = Field(default=10)
+    DB_POOL_TIMEOUT_SECONDS: int = Field(default=30)
+    DB_POOL_RECYCLE_SECONDS: int = Field(default=1800)
+
+    REDIS_URL: str | None = Field(default=None)
+    ADVERTISING_ENABLED: bool = Field(default=True)
+    MAINTENANCE_MODE_ENABLED: bool = Field(default=False)
+    REDIS_KEY_PREFIX: str = Field(default="remnawave-tg-shop")
+    WEBAPP_ME_CACHE_TTL_SECONDS: int = Field(default=15)
+    WEBAPP_DEVICES_CACHE_TTL_SECONDS: int = Field(default=5)
+    PANEL_USER_CACHE_TTL_SECONDS: int = Field(default=5)
+    PANEL_DEVICES_CACHE_TTL_SECONDS: int = Field(default=5)
+    SUBSCRIPTION_GUIDES_CONFIG_CACHE_TTL_SECONDS: int = Field(default=300)
+    SUBSCRIPTION_GUIDES_RESOLVED_CACHE_TTL_SECONDS: int = Field(default=300)
+    SUBSCRIPTION_GUIDES_PUBLIC_CACHE_TTL_SECONDS: int = Field(default=300)
+    PANEL_ALL_USERS_CACHE_TTL_SECONDS: int = Field(default=5)
+    PANEL_ALL_USERS_PAGE_SIZE: int = Field(default=1000)
+    # Courtesy delay between consecutive /users pages when fetching the full
+    # panel user list. The panel caps page size at 1000, so large deployments
+    # page many times (100k users -> 100 pages); at the default 0.1s that is
+    # ~10s of pure waiting per full sync. Operators with a panel that tolerates
+    # faster polling can lower this (0 disables the delay entirely).
+    PANEL_ALL_USERS_PAGE_DELAY_SECONDS: float = Field(default=0.1)
+    PANEL_API_TOTAL_TIMEOUT_SECONDS: float = Field(default=25)
+    PANEL_API_CONNECT_TIMEOUT_SECONDS: float = Field(default=8)
+    PANEL_API_SOCK_CONNECT_TIMEOUT_SECONDS: float = Field(default=8)
+    PANEL_API_SOCK_READ_TIMEOUT_SECONDS: float = Field(default=15)
+    ADMIN_PANEL_STATS_CACHE_TTL_SECONDS: int = Field(default=15)
+    ADMIN_DB_STATS_CACHE_TTL_SECONDS: int = Field(default=5)
+    ADMIN_USERS_LIST_CACHE_TTL_SECONDS: int = Field(default=3)
+    ADMIN_BROADCAST_AUDIENCE_COUNTS_CACHE_TTL_SECONDS: int = Field(default=30)
+    ADMIN_BROADCAST_EXCLUDE_BLOCKED_TELEGRAM: bool = Field(
+        default=False,
+        description=(
+            "Exclude Telegram recipients who are already known to have blocked the bot "
+            "from newly created admin broadcasts."
+        ),
+    )
+    PROFILE_SYNC_CACHE_TTL_SECONDS: int = Field(default=900)
+    PANEL_SYNC_LIFETIME_TRAFFIC_MIN_INTERVAL_SECONDS: int = Field(default=3600)
+    PANEL_SYNC_LIFETIME_TRAFFIC_MIN_DELTA_BYTES: int = Field(default=104857600)
+    WEBAPP_RATE_LIMIT_TTL_SECONDS: int = Field(default=60)
+    WEBAPP_RATE_LIMIT_MAX_REQUESTS: int = Field(default=30)
+    TELEGRAM_DROP_NON_PRIVATE_UPDATES: bool = Field(default=True)
+    TELEGRAM_ANTIFLOOD_ENABLED: bool = Field(default=True)
+    TELEGRAM_ANTIFLOOD_WINDOW_SECONDS: int = Field(default=60)
+    TELEGRAM_ANTIFLOOD_MAX_UPDATES_PER_WINDOW: int = Field(default=180)
+    TELEGRAM_ANTIFLOOD_MESSAGE_MAX_PER_WINDOW: int = Field(default=120)
+    TELEGRAM_ANTIFLOOD_CALLBACK_MAX_PER_WINDOW: int = Field(default=240)
+    TELEGRAM_ANTIFLOOD_INLINE_MAX_PER_WINDOW: int = Field(default=60)
+    TELEGRAM_ANTIFLOOD_START_MAX_PER_WINDOW: int = Field(default=30)
+    TELEGRAM_ANTIFLOOD_EXPENSIVE_CALLBACK_MAX_PER_WINDOW: int = Field(default=60)
+    TELEGRAM_ACTION_COOLDOWN_ENABLED: bool = Field(default=True)
+    TELEGRAM_PAYMENT_CALLBACK_COOLDOWN_SECONDS: int = Field(default=20)
+    TELEGRAM_TRIAL_CALLBACK_COOLDOWN_SECONDS: int = Field(default=30)
+    WEBHOOK_QUEUE_NAME: str = Field(default="webhook-events")
+    WEBHOOK_QUEUE_CONCURRENCY: int = Field(default=4)
+    WEBHOOK_QUEUE_MAX_ATTEMPTS: int = Field(default=5, ge=1)
+    WEBHOOK_QUEUE_RETRY_BASE_SECONDS: float = Field(default=1.0, ge=0)
+    WEBHOOK_QUEUE_RETRY_MAX_SECONDS: float = Field(default=30.0, ge=0)
+    WORKER_PANEL_SYNC_INTERVAL_SECONDS: int = Field(default=900)
+    TARIFF_WORKER_LOCK_TTL_SECONDS: int = Field(default=240)
+    TARIFF_WORKER_TICK_SECONDS: int = Field(default=300)
+    TARIFF_WORKER_BULK_PANEL_FETCH_THRESHOLD: int = Field(default=50)
+    TARIFF_PREMIUM_FAST_TICK_SECONDS: int = Field(
+        default=60,
+        ge=0,
+        description=(
+            "Interval of the premium squad re-check between full tariff worker ticks. "
+            "0 disables the fast lane and premium limits follow TARIFF_WORKER_TICK_SECONDS."
+        ),
+    )
+    TARIFF_PREMIUM_FAST_WATCH_PERCENT: int = Field(
+        default=80,
+        ge=0,
+        le=100,
+        description=(
+            "Premium usage percentage from which a subscription joins the fast re-check lane."
+        ),
+    )
+    TARIFF_PREMIUM_FAST_BATCH_LIMIT: int = Field(
+        default=200,
+        ge=0,
+        description=(
+            "Maximum subscriptions inspected in one premium fast tick. 0 removes the cap."
+        ),
+    )
+    TARIFF_PREMIUM_DROP_CONNECTIONS: bool = Field(
+        default=True,
+        description=(
+            "Ask the panel to tear down live connections on premium nodes once premium "
+            "access is limited. Requires CAP_NET_ADMIN on the Remnawave nodes."
+        ),
+    )
+    TARIFF_PREMIUM_DROP_CONNECTIONS_COOLDOWN_SECONDS: int = Field(
+        default=300,
+        ge=0,
+        description="Minimum delay between two connection teardowns of the same subscription.",
+    )
+    BACKUP_ENABLED: bool = Field(
+        default=False,
+        description="Run periodic backup jobs from the worker container.",
+    )
+    BACKUP_INTERVAL_SECONDS: int = Field(default=60 * 60)
+    BACKUP_LOCK_TTL_SECONDS: int = Field(default=2 * 60 * 60)
+    BACKUP_DIR: str = Field(default="data/backups")
+    BACKUP_LOCAL_RETENTION: int = Field(default=100)
+    BACKUP_CHAT_ID: int | None = Field(
+        default=None,
+        description="Telegram chat ID for backup archives. Falls back to LOG_CHAT_ID.",
+    )
+    BACKUP_THREAD_ID: int | None = Field(
+        default=None,
+        description="Telegram topic/thread ID for backup archives. Falls back to LOG_THREAD_ID.",
+    )
+    BACKUP_POSTGRES_DUMP_ENABLED: bool = Field(default=True)
+    BACKUP_PG_DUMP_PATH: str = Field(default="pg_dump")
+    BACKUP_PG_DUMP_TIMEOUT_SECONDS: int = Field(default=30 * 60)
+    BACKUP_PG_RESTORE_PATH: str = Field(default="pg_restore")
+    BACKUP_PG_RESTORE_TIMEOUT_SECONDS: int = Field(default=30 * 60)
+    BACKUP_COMPOSE_ENABLED: bool = Field(default=True)
+    BACKUP_COMPOSE_SOURCE_DIR: str | None = Field(default="/app/compose-source")
+    BACKUP_COMPOSE_RESTORE_DIR: str | None = Field(default=None)
+    BACKUP_COMPOSE_EXCLUDE_DIRS: str = Field(
+        default=".git,node_modules,__pycache__,.pytest_cache,.ruff_cache,postgres-data,redis-data,shop-data,backups"
+    )
+
+    DEFAULT_LANGUAGE: str = Field(default="ru")
+    DEFAULT_CURRENCY_SYMBOL: str = Field(default="RUB")
+    USER_BALANCE_ENABLED: bool = Field(default=False)
+    USER_BALANCE_RECURRING_ENABLED: bool = Field(default=False)
+    USER_BALANCE_CURRENCY: str = Field(
+        default="",
+        description="Currency code for user balances; blank follows DEFAULT_CURRENCY_SYMBOL.",
+    )
+    USER_BALANCE_TOPUP_MIN_AMOUNT: float = Field(default=100, gt=0, allow_inf_nan=False)
+    USER_BALANCE_TOPUP_MAX_AMOUNT: float = Field(default=100000, gt=0, allow_inf_nan=False)
+    USER_BALANCE_TOPUP_PRESETS: str = Field(
+        default="[500, 1000, 2000, 5000]",
+        description="JSON array of suggested user balance top-up amounts.",
+    )
+    BONUS_EXCHANGE_DAY_PRICE: float | None = Field(
+        default=None,
+        gt=0,
+        allow_inf_nan=False,
+        description="Balance price per 1 subscription day in the bonus exchange. Empty disables it.",
+    )
+
+    SUPPORT_LINK: str | None = Field(default=None)
+    SERVER_STATUS_URL: str | None = Field(default=None)
+    SERVER_STATUS_ENABLED: bool = Field(default=False)
+    SERVER_STATUS_SHOW_ON_HOME: bool = Field(default=False)
+    SERVER_STATUS_PROVIDER: Literal["url", "uptime-kuma", "xray-checker"] = Field(default="url")
+    SERVER_STATUS_KUMA_URL: str | None = Field(default=None)
+    # DEPRECATED: compatibility fallback for existing base-URL-plus-slug deployments.
+    # New configuration stores the complete published page in SERVER_STATUS_KUMA_URL.
+    SERVER_STATUS_KUMA_SLUG: str | None = Field(default="default")
+    SERVER_STATUS_XRAY_CHECKER_URL: str | None = Field(default=None)
+    SERVER_STATUS_CACHE_TTL_SECONDS: int = Field(default=30, ge=0)
+    SERVER_STATUS_STALE_TTL_SECONDS: int = Field(default=300, ge=0)
+    SERVER_STATUS_TIMEOUT_SECONDS: float = Field(default=5, gt=0)
+    PRIVACY_POLICY_URL: str | None = Field(default=None)
+    USER_AGREEMENT_URL: str | None = Field(default=None)
+    REFERRAL_INFO_URL: str | None = Field(
+        default=None,
+        description="Public page describing the referral program; shown as a link button in the bot.",
+    )
+    REQUIRED_CHANNEL_ID: int | None = Field(
+        default=None, description="Telegram channel ID the user must join to access the bot"
+    )
+    REQUIRED_CHANNEL_LINK: str | None = Field(
+        default=None,
+        description="Public username or invite link to the required channel for join button",
+    )
+
+    LKNPD_INN: str | None = Field(
+        default=None,
+        alias="NALOGO_INN",
+        description="INN for lknpd.nalog.ru (self-employed) authentication",
+    )
+    LKNPD_PASSWORD: str | None = Field(
+        default=None,
+        alias="NALOGO_PASSWORD",
+        description="Password for lknpd.nalog.ru (self-employed) authentication",
+    )
+    LKNPD_API_URL: str = Field(
+        default="https://lknpd.nalog.ru/api",
+        alias="NALOGO_API_URL",
+        description="Base URL for LKNPD API (can be overridden for proxies)",
+    )
+    LKNPD_RECEIPT_NAME_SUBSCRIPTION: str = Field(
+        default="subscription {months} months",
+        alias="NALOGO_RECEIPT_NAME_SUBSCRIPTION",
+        description="Receipt item name for time-based subscriptions. Use {months} placeholder for duration.",  # noqa: E501
+    )
+    LKNPD_RECEIPT_NAME_TRAFFIC: str = Field(
+        default="traffic package {gb} GB",
+        alias="NALOGO_RECEIPT_NAME_TRAFFIC",
+        description="Receipt item name for traffic packages. Use {gb} placeholder for traffic amount.",  # noqa: E501
+    )
+
+    WEBHOOK_BASE_URL: str | None = None
+    TRUSTED_PROXIES: str | None = Field(
+        default=DEFAULT_TRUSTED_PROXIES,
+        description="Comma-separated list of reverse proxy IPs or CIDRs trusted to forward X-Forwarded-For.",  # noqa: E501
+    )
+
+    STARS_ENABLED: bool = Field(default=True)
+    STARS_ADMIN_ONLY_ENABLED: bool = Field(default=False)
+    PAYMENT_METHODS_ORDER: str | None = Field(
+        default=None,
+        description="Comma-separated list of payment methods to show (e.g., severpay,wata,freekassa,yookassa,platega,stars,cryptopay,heleket,paykilla,lava,pally,cloudpayments,stripe,tribute)",  # noqa: E501
+    )
+    PAYMENT_METHODS_DISPLAY_MODE: Literal["dropdown", "buttons"] = Field(
+        default="dropdown",
+        description="Display payment methods as a compact dropdown or separate buttons.",
+    )
+    SUBSCRIPTION_PURCHASE_DESCRIPTION_ENABLED: bool = Field(
+        default=True,
+        description="Show a localized description of the subscription before users choose a purchase/renewal period.",  # noqa: E501
+    )
+    SUBSCRIPTION_PURCHASE_DESCRIPTION_RU: str = Field(
+        default=DEFAULT_SUBSCRIPTION_PURCHASE_DESCRIPTION_RU,
+        description="Russian subscription description shown before purchase/renewal options.",
+    )
+    SUBSCRIPTION_PURCHASE_DESCRIPTION_EN: str = Field(
+        default=DEFAULT_SUBSCRIPTION_PURCHASE_DESCRIPTION_EN,
+        description="English subscription description shown before purchase/renewal options.",
+    )
+    PAYMENT_REQUEST_TIMEOUT_SECONDS: float = Field(
+        default=20,
+        ge=1,
+        description="Maximum total time for one payment provider API request, in seconds.",
+    )
+    PAYMENT_FAILURE_NOTIFICATION_GRACE_SECONDS: int = Field(default=300, ge=0)
+
+    MONTH_1_ENABLED: bool = Field(default=True, alias="1_MONTH_ENABLED")
+    MONTH_3_ENABLED: bool = Field(default=True, alias="3_MONTHS_ENABLED")
+    MONTH_6_ENABLED: bool = Field(default=True, alias="6_MONTHS_ENABLED")
+    MONTH_12_ENABLED: bool = Field(default=True, alias="12_MONTHS_ENABLED")
+
+    RUB_PRICE_1_MONTH: int | None = Field(default=200)
+    RUB_PRICE_3_MONTHS: int | None = Field(default=600)
+    RUB_PRICE_6_MONTHS: int | None = Field(default=1200)
+    RUB_PRICE_12_MONTHS: int | None = Field(default=2400)
+    PROMO_DURATION_MULTIPLIER_MAX: float = Field(default=12.0)
+    PROMO_TRAFFIC_MULTIPLIER_MAX: float = Field(default=12.0)
+
+    STARS_PRICE_1_MONTH: int | None = Field(default=None)
+    STARS_PRICE_3_MONTHS: int | None = Field(default=None)
+    STARS_PRICE_6_MONTHS: int | None = Field(default=None)
+    STARS_PRICE_12_MONTHS: int | None = Field(default=None)
+    PANEL_WEBHOOK_SECRET: str | None = Field(default=None)
+
+    TRAFFIC_PACKAGES: str | None = Field(
+        default=None,
+        description="Comma-separated list of traffic packages in the format '<GB>:<price>', e.g. '10:199,50:799'",  # noqa: E501
+    )
+    STARS_TRAFFIC_PACKAGES: str | None = Field(
+        default=None,
+        description="Comma-separated list of traffic packages priced in Stars, e.g. '5:500,20:1500'",  # noqa: E501
+    )
+    TARIFFS_CONFIG_PATH: str = Field(default="data/tariffs.json")
+    TARIFF_TRAFFIC_WARNING_LEVELS: str = Field(
+        default="85,90,95",
+        description="Comma-separated traffic usage warning levels for tariff traffic limits, e.g. '85,90,95'",  # noqa: E501
+    )
+
+    SUBSCRIPTION_NOTIFICATIONS_ENABLED: bool = Field(default=True)
+    SUBSCRIPTION_EMAIL_NOTIFICATIONS_ENABLED: bool = Field(default=True)
+    SUBSCRIPTION_NOTIFY_ON_EXPIRE: bool = Field(default=True)
+    SUBSCRIPTION_NOTIFY_AFTER_EXPIRE: bool = Field(default=True)
+    SUBSCRIPTION_NOTIFY_DAYS_BEFORE: int = Field(default=3)
+    SUBSCRIPTION_NOTIFY_HOURS_BEFORE: int = Field(default=3)
+    SUBSCRIPTION_NOTIFICATION_WORKER_TICK_SECONDS: int = Field(default=300)
+    USER_NOTIFICATION_PREFERENCES_ENABLED: bool = Field(default=True)
+    USER_NOTIFICATION_SINGLE_CHANNEL_FALLBACK_ENABLED: bool = Field(default=True)
+    USER_NOTIFICATION_PAYMENTS_TELEGRAM_ENABLED: bool = Field(default=True)
+    USER_NOTIFICATION_PAYMENTS_EMAIL_ENABLED: bool = Field(default=True)
+    USER_NOTIFICATION_TRAFFIC_TELEGRAM_ENABLED: bool = Field(default=True)
+    USER_NOTIFICATION_TRAFFIC_EMAIL_ENABLED: bool = Field(default=True)
+    USER_NOTIFICATION_DEVICES_TELEGRAM_ENABLED: bool = Field(default=True)
+    USER_NOTIFICATION_DEVICES_EMAIL_ENABLED: bool = Field(default=True)
+    USER_NOTIFICATION_DEVICE_ACTIVITY_TELEGRAM_ENABLED: bool = Field(default=True)
+    USER_NOTIFICATION_DEVICE_ACTIVITY_EMAIL_ENABLED: bool = Field(default=True)
+    USER_NOTIFICATION_DEVICE_LIMIT_TELEGRAM_ENABLED: bool = Field(default=True)
+    USER_NOTIFICATION_DEVICE_LIMIT_EMAIL_ENABLED: bool = Field(default=True)
+    USER_NOTIFICATION_SUPPORT_TELEGRAM_ENABLED: bool = Field(default=True)
+    USER_NOTIFICATION_SUPPORT_EMAIL_ENABLED: bool = Field(default=True)
+    USER_NOTIFICATION_REFERRALS_TELEGRAM_ENABLED: bool = Field(default=True)
+    USER_NOTIFICATION_REFERRALS_EMAIL_ENABLED: bool = Field(default=True)
+    AUTO_RENEW_RETRY_ENABLED: bool = Field(default=False)
+    AUTO_RENEW_RETRY_DRY_RUN: bool = Field(default=True)
+    AUTO_RENEW_SCHEDULER_ENABLED: bool = Field(default=False)
+    AUTO_RENEW_MAX_FINANCIAL_ATTEMPTS: int = Field(default=2, ge=1, le=2)
+    AUTO_RENEW_MAX_TRANSPORT_REPLAYS: int = Field(default=4, ge=0, le=4)
+    AUTO_RENEW_WORKER_TICK_SECONDS: int = Field(default=60, ge=5, le=3600)
+    AUTO_RENEW_WORKER_BATCH_SIZE: int = Field(default=50, ge=1, le=500)
+    AUTO_RENEW_RETRY_GRACE_HOURS: int = Field(default=0, ge=0, le=24)
+    AUTO_RENEW_SCHEDULER_LEAD_HOURS: int = Field(default=24, ge=1, le=168)
+    TORRENT_BLOCKER_NOTIFICATIONS_ENABLED: bool = Field(default=False)
+    TORRENT_BLOCKER_TELEGRAM_NOTIFICATIONS_ENABLED: bool = Field(default=True)
+    TORRENT_BLOCKER_EMAIL_NOTIFICATIONS_ENABLED: bool = Field(default=False)
+    TORRENT_BLOCKER_NOTIFICATION_COOLDOWN_SECONDS: int = Field(
+        default=3600,
+        ge=0,
+        le=365 * 24 * 60 * 60,
+    )
+    TORRENT_BLOCKER_NOTIFICATION_INCLUDE_IP: bool = Field(default=False)
+
+    REFERRAL_BONUS_DAYS_INVITER_1_MONTH: int | None = Field(
+        default=3, alias="REFERRAL_BONUS_DAYS_1_MONTH"
+    )
+    REFERRAL_BONUS_DAYS_INVITER_3_MONTHS: int | None = Field(
+        default=7, alias="REFERRAL_BONUS_DAYS_3_MONTHS"
+    )
+    REFERRAL_BONUS_DAYS_INVITER_6_MONTHS: int | None = Field(
+        default=15, alias="REFERRAL_BONUS_DAYS_6_MONTHS"
+    )
+    REFERRAL_BONUS_DAYS_INVITER_12_MONTHS: int | None = Field(
+        default=30, alias="REFERRAL_BONUS_DAYS_12_MONTHS"
+    )
+
+    REFERRAL_BONUS_DAYS_REFEREE_1_MONTH: int | None = Field(
+        default=1, alias="REFEREE_BONUS_DAYS_1_MONTH"
+    )
+    REFERRAL_BONUS_DAYS_REFEREE_3_MONTHS: int | None = Field(
+        default=3, alias="REFEREE_BONUS_DAYS_3_MONTHS"
+    )
+    REFERRAL_BONUS_DAYS_REFEREE_6_MONTHS: int | None = Field(
+        default=7, alias="REFEREE_BONUS_DAYS_6_MONTHS"
+    )
+    REFERRAL_BONUS_DAYS_REFEREE_12_MONTHS: int | None = Field(
+        default=15, alias="REFEREE_BONUS_DAYS_12_MONTHS"
+    )
+    # Referral program configuration
+    GIFTS_ENABLED: bool = True
+    REFERRAL_PROGRAM_ENABLED: bool = True
+    REFERRAL_GIFT_ACTIVATION_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Count successful gift redemption by an invited recipient for referral period accrual."
+        ),
+    )
+    REFERRAL_ONE_BONUS_PER_REFEREE: bool = Field(
+        default=True,
+        description=(
+            "Limit referral period accrual to the first personal purchase "
+            "or qualifying gift activation."
+        ),
+    )
+    REFERRAL_WELCOME_BONUS_DAYS: int = Field(
+        default=3,
+        description="Welcome bonus days granted to a newly registered user who joined via referral link.",  # noqa: E501
+    )
+    REFERRAL_WELCOME_BONUS_WITHOUT_TELEGRAM_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Allow referral welcome bonus grants for users who have not linked Telegram. "
+            "Disposable email domains are still blocked until Telegram is linked."
+        ),
+    )
+    REFERRAL_WELCOME_BONUS_ADDS_TO_TRIAL: bool = Field(
+        default=False,
+        description=(
+            "Add the referral welcome bonus days to the free trial instead of granting a "
+            "separate bonus subscription at sign-up. Applies while a free trial is enabled."
+        ),
+    )
+    REFERRAL_WEBAPP_LINK_ENABLED: bool = Field(
+        default=True,
+        description="Show the website referral link in the user Web App bonus section.",
+    )
+    REFERRAL_TELEGRAM_LINK_ENABLED: bool = Field(
+        default=True,
+        description="Show the Telegram bot referral link in the user Web App bonus section.",
+    )
+    PARTNER_PROGRAM_ENABLED: bool = False
+    PARTNER_AUTO_ENROLLMENT_ENABLED: bool = Field(default=False)
+    PARTNER_REFERRAL_PROGRAM_DISABLED: bool = Field(default=False)
+    PARTNER_WITHDRAWALS_ENABLED: bool = Field(
+        default=True,
+        description="Allow active partners to create withdrawal requests.",
+    )
+    PARTNER_BALANCE_PAYMENT_ENABLED: bool = True
+    PARTNER_CLIENT_WELCOME_BONUS_ENABLED: bool = False
+    PARTNER_CLIENT_PAYMENT_BONUS_ENABLED: bool = False
+    PARTNER_ONE_BONUS_PER_CLIENT: bool = True
+    PARTNER_DEFAULT_COMMISSION_BPS: int = Field(default=3000, ge=0, le=10000)
+    PARTNER_COMMISSION_HOLD_DAYS: int = Field(default=0, ge=0, le=365)
+    PARTNER_ELIGIBLE_CURRENCIES: str = Field(
+        default='["RUB"]',
+        description="JSON array of currencies eligible for partner commission.",
+    )
+    PARTNER_EXCLUDED_SALE_MODES: str = Field(
+        default="[]",
+        description="JSON array of sale-mode base names excluded from partner commission.",
+    )
+    PARTNER_WITHDRAWAL_METHODS_JSON: str = Field(
+        default="[]",
+        description="Validated JSON array of manual partner withdrawal methods.",
+    )
+    PARTNER_TELEGRAM_LINK_ENABLED: bool = Field(default=True)
+    PARTNER_WEBAPP_LINK_ENABLED: bool = Field(default=True)
+    PARTNER_APPLICATION_MESSAGE_MAX_LENGTH: int = Field(default=2000, ge=10, le=10000)
+    PARTNER_MAX_ACTIVE_WITHDRAWALS: int = Field(default=3, ge=1, le=50)
+    PARTNER_REAPPLICATION_ENABLED: bool = Field(default=False)
+    PARTNER_REAPPLICATION_COOLDOWN_DAYS: int = Field(default=0, ge=0, le=3650)
+    PARTNER_LIST_PAGE_LIMIT: int = Field(default=50, ge=10, le=200)
+    PARTNER_APPLICATION_RATE_LIMIT_HOURS: int = Field(default=24, ge=1, le=8760)
+    PARTNER_WITHDRAWAL_RATE_LIMIT_SECONDS: int = Field(default=10, ge=1, le=3600)
+    PARTNER_AUDIT_RETENTION_DAYS: int = Field(default=0, ge=0, le=3650)
+    PARTNER_REQUISITES_RETENTION_DAYS: int = Field(default=90, ge=1, le=3650)
+    PARTNER_REQUISITES_ENCRYPTION_KEY: SecretStr | None = Field(
+        default=None,
+        description="Environment-only urlsafe base64 AES key for withdrawal requisites.",
+        exclude=True,
+    )
+    PARTNER_REQUISITES_KEY_ID: str = Field(default="v1", exclude=True)
+    LEGACY_REFS: bool = Field(
+        default=True,
+        description="Allow legacy referral links like /start ref_<telegram_id>, where the payload contains the inviter's Telegram/user ID.",  # noqa: E501
+    )
+    MIGRATION_REMNASHOP_REFERRAL_CODE_COMPAT_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Accept referral links imported from snoups/remnashop via legacy_referral_codes."
+        ),
+    )
+    MIGRATION_REMNASHOP_PROMO_CODE_COMPAT_ENABLED: bool = Field(
+        default=False,
+        description="Try exact legacy Remnashop promo codes before uppercase normalization.",
+    )
+    MIGRATION_REMNASHOP_IMPORTED_AT: str | None = Field(
+        default=None,
+        description="Timestamp of the latest Remnashop import run, managed by the import script.",
+    )
+    MIGRATION_REMNASHOP_NOTES: str | None = Field(
+        default=None,
+        description="Operator notes for instances migrated from Remnashop.",
+    )
+
+    APP_RUNTIME_MODE: str = Field(
+        default="production",
+        description="Runtime profile: production, development, staging or test.",
+    )
+    QA_AUTH_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Expose email verification codes through the public auth API in "
+            "development/test runtimes for full-stack QA."
+        ),
+    )
+    QA_PAYMENT_ENABLED: bool = Field(
+        default=False,
+        description="Enable the signed local QA payment provider in development/test runtimes.",
+    )
+    QA_PAYMENT_ADMIN_ONLY_ENABLED: bool = Field(
+        default=False,
+        description="Expose the local QA payment provider to admin users only.",
+    )
+    QA_PAYMENT_SECRET: str = Field(
+        default="",
+        description="HMAC secret used by the local QA payment webhook.",
+    )
+    PANEL_WRITE_MODE: str = Field(
+        default="auto",
+        description=(
+            "Panel write behavior: auto uses dry-run in development/test runtimes, "
+            "live always writes to Remnawave, dry_run validates and logs mutations only."
+        ),
+    )
+    PANEL_DRY_RUN_VALIDATE_REMOTE: bool = Field(
+        default=True,
+        description=(
+            "When panel dry-run is enabled, validate referenced users and squads "
+            "via live GET requests."
+        ),
+    )
+    PANEL_DRY_RUN_SYNTHETIC_CREATE: bool = Field(
+        default=True,
+        description=(
+            "When panel dry-run is enabled, return synthetic users for create-user attempts."
+        ),
+    )
+    PANEL_API_URL: str | None = None
+    PANEL_PUBLIC_URL: str | None = Field(
+        default=None,
+        description="Browser-facing Remnawave Panel URL; defaults to PANEL_API_URL when empty.",
+    )
+    PANEL_API_KEY: str | None = None
+    PANEL_API_COOKIE: str | None = None
+    USER_TRAFFIC_LIMIT_GB: float | None = Field(default=0.0)
+    USER_TRAFFIC_STRATEGY: str = Field(default="NO_RESET")
+    USER_SQUAD_UUIDS: str | None = Field(
+        default=None,
+        description="Comma-separated UUIDs of internal squads to assign to new panel users",
+    )
+    USER_EXTERNAL_SQUAD_UUID: str | None = Field(
+        default=None,
+        description="UUID of the external squad to assign to new panel users (optional)",
+    )
+
+    CRYPT4_ENABLED: bool = Field(
+        default=False, description="Enable happ crypt4 encryption for subscription URLs"
+    )
+    CRYPT4_REDIRECT_URL: str | None = Field(
+        default=None,
+        description="Base redirect URL used for the connect button when crypt4 is enabled",
+    )
+    CRYPT4_LINK_CACHE_TTL_SECONDS: int = Field(
+        default=3600,
+        description="TTL for cached happ crypt4 encryption results keyed by raw subscription URL",
+    )
+
+    WEB_SERVER_HOST: str = Field(default="0.0.0.0")
+    WEB_SERVER_PORT: int = Field(default=8080, ge=1, le=65535)
+    WEB_SERVER_INTERNAL_PORT: int | None = Field(default=None, ge=1, le=65535)
+
+    @property
+    def web_server_listen_port(self) -> int:
+        """Container listener port, with the legacy direct-run setting as fallback."""
+        return self.WEB_SERVER_INTERNAL_PORT or self.WEB_SERVER_PORT
+
+    WEBAPP_ENABLED: bool = Field(
+        default=True,
+        description="Run the subscription Mini App in the same container on a separate port.",
+    )
+    WEBAPP_SERVER_HOST: str = Field(default="0.0.0.0")
+    WEBAPP_SERVER_PORT: int = Field(default=8081)
+    WEBAPP_TITLE: str = Field(default="/minishop")
+    WEBAPP_PRIMARY_COLOR: str = Field(default="#00fe7a")
+    WEBAPP_USER_THEME_MODE_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Allow users to choose Auto, Light, or Dark mode within the active Web App theme."
+        ),
+    )
+    WEBAPP_COMPACT_HOME_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Combine subscription status, traffic usage, and balance into one compact Home card."
+        ),
+    )
+    WEBAPP_COMPACT_LOGIN_ENABLED: bool = Field(default=True)
+    WEBAPP_ADMIN_THEME_EFFECTS_ENABLED: bool = Field(
+        default=False,
+        description="Run consented theme JavaScript for administrators in the Mini App.",
+    )
+    WEBAPP_CHECKOUT_ADDON_VALUE_ANIMATION_ENABLED: bool = Field(default=True)
+    WEBAPP_CHECKOUT_ADDON_EDITOR_EXPANDED_BY_DEFAULT: bool = Field(default=False)
+    WEBAPP_THEMES_DIR: str = Field(
+        default="data/themes",
+        description=(
+            "Directory with per-theme folders. Each theme lives in "
+            "<key>/theme.json with optional CSS/assets next to it."
+        ),
+    )
+    WEBAPP_DEFAULT_THEME: str | None = Field(
+        default=None,
+        description=(
+            "Override the descriptor-marked default theme when set to an existing theme key."
+        ),
+    )
+    WEBAPP_LOGO_URL: str | None = Field(default=None)
+    WEBAPP_FAVICON_USE_CUSTOM: bool = Field(default=False)
+    WEBAPP_FAVICON_URL: str | None = Field(default=None)
+    WEBAPP_LOGO_FAVICON_URL: str | None = Field(default=None)
+    SUBSCRIPTION_GUIDES_ENABLED: bool = Field(
+        default=True,
+        description="Show embedded install instructions inside the subscription Mini App.",
+    )
+    SUBSCRIPTION_GUIDES_BOT_MENU_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Open Mini App install guides from Telegram bot connect buttons and show public "
+            "install guide share links."
+        ),
+    )
+    SUBSCRIPTION_PAGE_CONFIG_PANEL_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Use Remnawave Panel Subscription Page config for embedded guides when available."
+        ),
+    )
+    SUBSCRIPTION_PAGE_CONFIG_JSON_OVERRIDE_ENABLED: bool = Field(
+        default=False,
+        description="Enable admin JSON override for embedded guides config.",
+    )
+    SUBSCRIPTION_PAGE_CONFIG_PATH: str = Field(
+        default="data/subpage-config/multiapp.json",
+        description="Path to Remnawave Subscription Page v1 JSON config for embedded guides.",
+    )
+    SUBSCRIPTION_PAGE_CONFIG_JSON: str = Field(
+        default="",
+        description="Admin-provided Remnawave Subscription Page v1 JSON config override.",
+    )
+    LOGS_PAGE_SIZE: int = Field(default=10)
+    LOG_ADMIN_ACTIONS: bool = Field(
+        default=True,
+        description="Log updates/events triggered by users from ADMIN_IDS.",
+    )
+
+    SUPPORT_TICKETS_ENABLED: bool = Field(default=True)
+    SUPPORT_TICKET_MAX_BODY_LENGTH: int = Field(default=4000)
+    SUPPORT_TICKET_MAX_SUBJECT_LENGTH: int = Field(default=160)
+    SUPPORT_TICKET_RATE_LIMIT_PER_HOUR: int = Field(default=5)
+    SUPPORT_MESSAGE_RATE_LIMIT_PER_MINUTE: int = Field(default=10)
+    SUPPORT_IMAGE_RATE_LIMIT_PER_DAY: int = Field(default=20)
+    SUPPORT_ADMIN_TELEGRAM_NOTIFICATIONS_ENABLED: bool = Field(default=True)
+    SUPPORT_ADMIN_EMAIL_NOTIFICATIONS_ENABLED: bool = Field(default=False)
+    SUPPORT_ADMIN_NOTIFICATION_COOLDOWN_SECONDS: int = Field(default=5 * 60)
+    SUPPORT_ADMIN_EMAIL_COOLDOWN_SECONDS: int = Field(default=30 * 60)
+    SUBSCRIPTION_MINI_APP_URL: str | None = Field(default=None)
+    PUBLIC_APP_URL: str | None = Field(default=None)
+    SUBSCRIPTION_GATEWAY_ENABLED: bool = Field(default=True)
+    SUBSCRIPTION_LINK_MODE: Literal["panel", "minishop"] = Field(default="panel")
+    SUBSCRIPTION_GATEWAY_REWRITE_PROFILE_PAGE_URL: bool = Field(default=False)
+    WEBAPP_API_BASE_URL: str = Field(
+        default="/api",
+        description=(
+            "Base URL used by the Mini App frontend for backend API requests. "
+            "Keep /api; split deployments configure the frontend nginx upstream instead."
+        ),
+    )
+    MINISHOP_EDGE_TOKEN: str = Field(
+        default="",
+        description=(
+            "Optional server-side token required on protected Web App API upstream routes. "
+            "It must be injected by a trusted reverse proxy, never by browser JavaScript."
+        ),
+    )
+    MINISHOP_EDGE_TOKEN_HEADER: str = Field(
+        default="X-Minishop-Edge-Token",
+        description=(
+            "HTTP header name used by frontend nginx or an API edge to pass MINISHOP_EDGE_TOKEN."
+        ),
+    )
+    TELEGRAM_BOT_MENU_DISABLED: bool = Field(
+        default=False,
+        description=(
+            "Hide the in-bot user interface and /tg command. "
+            "User renewal prompts should open the Mini App."
+        ),
+    )
+    MENU_BUTTONS_JSON: str = Field(
+        default="[]",
+        description=(
+            "Validated JSON array of localized custom buttons with separate visibility for "
+            "the bot menu, Telegram Mini App, and web browser."
+        ),
+    )
+    TELEGRAM_MENU_APPEARANCE_JSON: str = Field(
+        default='{"schema_version":1,"buttons":{}}',
+        description="Telegram button styles and custom emoji icons, keyed by stable button ID.",
+    )
+    TELEGRAM_CUSTOM_EMOJI_LIBRARY_JSON: str = Field(
+        default='{"schema_version":1,"sets":[],"manual_ids":[]}',
+        description="Administrator-managed Telegram custom emoji sets and individual IDs.",
+    )
+
+    START_COMMAND_DESCRIPTION: str | None = Field(default=None)
+    DISABLE_WELCOME_MESSAGE: bool = Field(
+        default=False, description="Disable welcome message on /start command"
+    )
+    REGISTRATION_INVITE_ONLY_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "When true, new public registrations require a valid referral invitation. "
+            "Existing users can still sign in normally."
+        ),
+    )
+
+    MY_DEVICES_SECTION_ENABLED: bool = Field(
+        default=False, description="Enable the My Devices section in the subscription menu"
+    )
+    SUBSCRIPTION_REISSUE_ENABLED: bool = Field(
+        default=False,
+        description=(
+            "Allow users to reissue (revoke and regenerate) their subscription link "
+            "from the Mini App. The new link is delivered by email, Telegram, "
+            "or the application when external delivery is unavailable."
+        ),
+    )
+    USER_HWID_DEVICE_LIMIT: int | None = Field(
+        default=None, description="Default hardware device limit for panel users (0 = unlimited)"
+    )
+    HWID_DEVICE_TRAFFIC_BONUS_GB: float = Field(
+        default=0.0,
+        ge=0,
+        description=(
+            "Deprecated fallback per-device monthly traffic bonus for legacy HWID purchases "
+            "that do not have a package bonus snapshot."
+        ),
+    )
+
+    # Inline mode thumbnail URLs
+    INLINE_REFERRAL_THUMBNAIL_URL: str = Field(
+        default="https://cdn-icons-png.flaticon.com/512/1077/1077114.png"
+    )
+    INLINE_USER_STATS_THUMBNAIL_URL: str = Field(
+        default="https://cdn-icons-png.flaticon.com/512/681/681494.png"
+    )
+    INLINE_FINANCIAL_STATS_THUMBNAIL_URL: str = Field(
+        default="https://cdn-icons-png.flaticon.com/512/2769/2769339.png"
+    )
+    INLINE_SYSTEM_STATS_THUMBNAIL_URL: str = Field(
+        default="https://cdn-icons-png.flaticon.com/512/2920/2920277.png"
+    )
+
+    # Logging Configuration
+    LOG_LEVEL: str = Field(
+        default="INFO",
+        description="Global log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
+    )
+    LOG_CHAT_ID: int | None = Field(
+        default=None, description="Telegram chat/group ID for sending notifications"
+    )
+    LOG_THREAD_ID: int | None = Field(
+        default=None, description="Thread ID for supergroup messages (optional)"
+    )
+    LOG_SUPPORT_THREAD_ID: int | None = Field(
+        default=None, description="Thread ID for support ticket log messages"
+    )
+
+    # Notification types
+    LOG_NEW_USERS: bool = Field(
+        default=True, description="Send notifications for new user registrations"
+    )
+    LOG_PAYMENTS: bool = Field(
+        default=True, description="Send notifications for successful payments"
+    )
+    LOG_PROMO_ACTIVATIONS: bool = Field(
+        default=True, description="Send notifications for promo code activations"
+    )
+    LOG_TRIAL_ACTIVATIONS: bool = Field(
+        default=True, description="Send notifications for trial activations"
+    )
+    LOG_SUSPICIOUS_ACTIVITY: bool = Field(
+        default=True, description="Send notifications for suspicious promo attempts"
+    )
+    LOG_SUPPORT: bool = Field(default=True, description="Send support ticket notifications")
+
+    # Anonymous install telemetry (self-hosted friendly, opt-out).
+    TELEMETRY_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Send an anonymous daily install heartbeat (version, official/custom "
+            "image provenance, OS, locale, user-count range). No personal data. "
+            "Opt out here, via the web admin, or by clearing "
+            "TELEMETRY_ENDPOINT/TELEMETRY_API_KEY."
+        ),
+    )
+    TELEMETRY_ENDPOINT: str = Field(
+        default="https://eu.i.posthog.com",
+        description="PostHog ingestion host. Empty disables telemetry.",
+    )
+    TELEMETRY_API_KEY: str = Field(
+        default="phc_sRiAbbrjhyYPfsgBwSZyLvujDXBLaDpmWKt6paGmCCMm",
+        description=(
+            "PostHog project API key (phc_...). Safe to ship in the image: it is "
+            "a write-only ingest key. Empty disables telemetry."
+        ),
+    )
+    TELEMETRY_INTERVAL_HOURS: int = Field(default=24)
+
+    @property
+    def telemetry_configured(self) -> bool:
+        """True when telemetry is enabled and has a delivery target."""
+        return bool(
+            self.TELEMETRY_ENABLED
+            and str(self.TELEMETRY_ENDPOINT or "").strip()
+            and str(self.TELEMETRY_API_KEY or "").strip()
+        )
+
+    PLUGINS_ENABLED: bool = Field(
+        default=True,
+        description="Discover and load extension plugins from the minishop.plugins entry points.",
+    )
+    PLUGINS_STRICT: bool = Field(
+        default=False,
+        description=(
+            "Treat plugin load/setup errors as fatal instead of logging and skipping the plugin."
+        ),
+    )
+
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore", populate_by_name=True
+    )
+
+
+_settings_instance: Settings | None = None
+
+
+def get_settings() -> Settings:
+    global _settings_instance
+    if _settings_instance is None:
+        try:
+            # Third-party boundary: pydantic-settings fills required fields
+            # POSTGRES_* from the environment inside __init__, but
+            # dataclass_transform makes mypy demand them as named arguments.
+            # model_validate({}) would satisfy mypy yet skip the env sources.
+            _settings_instance = Settings()  # type: ignore[call-arg]
+            if not _settings_instance.PANEL_API_URL:
+                logger.warning(
+                    "CRITICAL: PANEL_API_URL is not set. Panel integration will not work."
+                )
+            if _settings_instance.panel_dry_run_enabled:
+                logger.warning(
+                    "PANEL_WRITE_MODE dry-run is enabled: Remnawave write requests will be "
+                    "validated and logged without changing panel users."
+                )
+            if not os.getenv("WEBAPP_SESSION_SECRET"):
+                logger.warning(
+                    "WEBAPP_SESSION_SECRET is not set. A generated secret will be used for this process only."  # noqa: E501
+                )
+            if not os.getenv("WEBHOOK_SECRET_TOKEN"):
+                logger.warning(
+                    "WEBHOOK_SECRET_TOKEN is not set. A generated secret will be used for this process only."  # noqa: E501
+                )
+            if (_settings_instance.LKNPD_INN or _settings_instance.LKNPD_PASSWORD) and not (
+                _settings_instance.LKNPD_INN and _settings_instance.LKNPD_PASSWORD
+            ):
+                logger.warning(
+                    "WARNING: LKNPD credentials are incomplete. Receipt sending will be disabled."
+                )
+
+        except ValidationError as e:
+            logger.critical("Pydantic validation error while loading settings: %s", e)
+
+            raise SystemExit(
+                f"CRITICAL SETTINGS ERROR: {e}. Please check your .env file and Settings model."
+            ) from e
+    return _settings_instance
+
+
+__all__ = [
+    "BalanceSettings",
+    "CompatibilitySettings",
+    "DBSettings",
+    "EmailSettings",
+    "PanelSettings",
+    "PaymentSettings",
+    "ReferralSettings",
+    "RegistrationSettings",
+    "Settings",
+    "SupportSettings",
+    "WebAppSettings",
+    "get_settings",
+]

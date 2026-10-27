@@ -1,0 +1,1000 @@
+import logging
+import time
+from collections import Counter
+from datetime import UTC, datetime
+from typing import cast
+
+from sqlalchemy import or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from bot.infra.performance import performance_operation
+from bot.middlewares.i18n import JsonI18n
+from bot.services.panel_activity import (
+    panel_status_means_active,
+    panel_user_last_connected_datetime,
+)
+from bot.services.panel_api_service import PanelApiService
+from bot.services.panel_identity_match import panel_origin_fingerprint
+from config.settings import Settings
+from db.advisory_locks import (
+    acquire_subscription_background_sync_lock,
+    commit_subscription_background_sync_batch,
+)
+from db.dal import (
+    panel_sync_dal,
+    subscription_dal,
+)
+from db.models import Subscription, User, UserEmailAddress
+
+from .sync_admin_common import (
+    _append_unique,
+    _coerce_panel_telegram_id,
+    _description_contains_email,
+    _description_without_email,
+    _format_counter,
+    _identity_panel_update_reasons,
+    _log_sync_panel_patch,
+    _normalize_panel_email,
+    _panel_description_for_user,
+    _panel_identity_fields_update_payload,
+    _panel_identity_matches_user,
+    _panel_identity_view_for_comparison,
+    _panel_update_changes,
+    _should_update_lifetime_used_traffic,
+    _subscription_update_delta,
+    _subscription_update_reason_labels,
+    _sync_lock,
+)
+from .sync_admin_duplicates import _absorb_duplicate_panel_identity, _preferred_panel_identity
+from .sync_admin_identity import (
+    _bind_panel_email_to_user,
+    _create_panel_user,
+    _extract_lifetime_used_traffic_bytes,
+    _merge_local_duplicate_panel_user_if_needed,
+    _prefetch_sync_indexes,
+    _select_existing_subscription_for_panel_sync,
+)
+from .sync_admin_relink import (
+    PanelSyncIdentityIndex,
+    bind_sync_panel_identity,
+    finish_sync_panel_relink,
+)
+from .sync_admin_snapshot import capture_subscription_snapshot
+from .sync_admin_summary import (
+    include_last_connected_snapshot as _include_last_connected_snapshot,
+)
+from .sync_admin_summary import (
+    localized_sync_details,
+)
+
+logger = logging.getLogger(__name__)
+
+PANEL_SYNC_TRANSACTION_BATCH_SIZE = 100
+
+
+async def perform_sync(
+    panel_service: PanelApiService,
+    session: AsyncSession,
+    settings: Settings,
+    i18n_instance: JsonI18n,
+) -> dict:
+    """Single-flight entry point — skips when another sync is already running."""
+    if _sync_lock.locked():
+        logger.info("perform_sync: skipped because another sync is already in progress")
+        return {
+            "status": "skipped",
+            "details": "Another sync run is already in progress.",
+            "errors": [],
+            "users_processed": 0,
+            "subs_synced": 0,
+        }
+    async with _sync_lock, performance_operation("panel_sync"):
+        return await _perform_sync_impl(
+            panel_service=panel_service,
+            session=session,
+            settings=settings,
+            i18n_instance=i18n_instance,
+        )
+
+
+async def _perform_sync_impl(
+    panel_service: PanelApiService,
+    session: AsyncSession,
+    settings: Settings,
+    i18n_instance: JsonI18n,
+) -> dict:
+    """
+    Perform panel synchronization and return results
+    Returns dict with status, details, and sync statistics
+    """
+    panel_records_checked = 0
+    users_found_in_db = 0
+    users_updated = 0
+    subscriptions_synced_count = 0
+    sync_errors = []
+
+    # Additional counters for detailed logging
+    users_without_telegram_id = 0
+    users_skipped_no_identity = 0
+    users_not_found_in_db = 0
+    users_created = 0
+    users_uuid_updated = 0
+    subscriptions_created = 0
+    subscriptions_updated = 0
+    local_update_reason_counts: Counter[str] = Counter()
+    panel_patch_reason_counts: Counter[str] = Counter()
+    panel_patch_field_counts: Counter[str] = Counter()
+    panel_patch_count = 0
+
+    try:
+        subscription_snapshot = await capture_subscription_snapshot(session)
+        panel_users_data = await panel_service.get_all_panel_users()
+
+        if panel_users_data is None:
+            error_msg = "Failed to fetch users from panel or panel API issue."
+            sync_errors.append(error_msg)
+            await panel_sync_dal.update_panel_sync_status(session, "failed", error_msg)
+            await session.commit()
+            return {"status": "failed", "details": error_msg, "errors": sync_errors}
+
+        if not panel_users_data:
+            status_msg = "No users found in the panel to sync."
+            await panel_sync_dal.update_panel_sync_status(session, "success", status_msg, 0, 0)
+            await session.commit()
+            return {
+                "status": "success",
+                "details": status_msg,
+                "users_synced": 0,
+                "subs_synced": 0,
+            }
+
+        total_panel_users = len(panel_users_data)
+        logger.info("Starting sync for %s panel users.", total_panel_users)
+        await acquire_subscription_background_sync_lock(session)
+        panel_uuids_by_telegram_id: dict[int, set[str]] = {}
+        for panel_user in panel_users_data:
+            telegram_id = _coerce_panel_telegram_id(panel_user.get("telegramId"))
+            if telegram_id and panel_user.get("uuid"):
+                panel_uuids_by_telegram_id.setdefault(telegram_id, set()).add(
+                    str(panel_user["uuid"])
+                )
+        reload_batch = True
+        batch_started = time.monotonic()
+        panel_users_by_uuid = {
+            str(panel_user["uuid"]): panel_user
+            for panel_user in panel_users_data
+            if panel_user.get("uuid")
+        }
+        identity_index = PanelSyncIdentityIndex(panel_users_data)
+
+        handled_panel_uuids: set[str] = set()
+        for panel_offset, panel_user_dict in enumerate(panel_users_data):
+            if reload_batch:
+                sync_indexes = await _prefetch_sync_indexes(
+                    session,
+                    panel_users_data[
+                        panel_offset : panel_offset + PANEL_SYNC_TRANSACTION_BATCH_SIZE
+                    ],
+                )
+                users_by_telegram_id = cast(dict[int, User], sync_indexes["users_by_telegram_id"])
+                users_by_user_id = cast(dict[int, User], sync_indexes["users_by_user_id"])
+                users_by_panel_uuid = cast(dict[str, User], sync_indexes["users_by_panel_uuid"])
+                users_by_email = cast(dict[str, User], sync_indexes["users_by_email"])
+                subscriptions_by_panel_uuid = cast(
+                    dict[str, Subscription],
+                    sync_indexes["subscriptions_by_panel_uuid"],
+                )
+                active_subscriptions_by_user_panel = cast(
+                    dict[tuple[int, str], Subscription],
+                    sync_indexes["active_subscriptions_by_user_panel"],
+                )
+                subscriptions_by_user_panel = cast(
+                    dict[tuple[int, str], Subscription],
+                    sync_indexes["subscriptions_by_user_panel"],
+                )
+                subscriptions_by_user = cast(
+                    dict[int, dict[str, Subscription]],
+                    sync_indexes.get("subscriptions_by_user", {}),
+                )
+                numeric_generation = bool(sync_indexes.get("numeric_generation", False))
+                stale_owners = identity_index.stale_owners(
+                    panel_users_data[
+                        panel_offset : panel_offset + PANEL_SYNC_TRANSACTION_BATCH_SIZE
+                    ],
+                    users_by_user_id,
+                )
+                reload_batch = False
+                batch_started = time.monotonic()
+            previous_panel_uuid_for_reconciliation: str | None = None
+            try:
+                panel_records_checked += 1
+                panel_uuid = panel_user_dict.get("uuid")
+                panel_user_dict.get("subscriptionUuid") or panel_user_dict.get("shortUuid")
+                telegram_id_from_panel = _coerce_panel_telegram_id(
+                    panel_user_dict.get("telegramId")
+                )
+                email_from_panel = _normalize_panel_email(panel_user_dict.get("email"))
+
+                if not panel_uuid:
+                    sync_errors.append(f"Panel user missing UUID: {panel_user_dict}")
+                    logger.warning("Skipping panel user without UUID: %s", panel_user_dict)
+                    continue
+                if str(panel_uuid) in handled_panel_uuids:
+                    continue
+
+                # Track users without telegram ID
+                if not telegram_id_from_panel:
+                    users_without_telegram_id += 1
+
+                # A proven Telegram duplicate can adopt an external native panel link.
+                # Panel email and a coincidentally equal internal ID prove nothing.
+                existing_user = users_by_panel_uuid.get(panel_uuid)
+                stale_owner = stale_owners.get(str(panel_uuid)) if existing_user is None else None
+                existing_user = existing_user or stale_owner
+                is_panel_telegram_duplicate = False
+                if stale_owner is None and existing_user is None and telegram_id_from_panel:
+                    existing_user = users_by_telegram_id.get(telegram_id_from_panel)
+                    if existing_user and existing_user.panel_user_uuid:
+                        is_panel_telegram_duplicate = bool(
+                            existing_user.telegram_id == telegram_id_from_panel
+                            and existing_user.panel_user_uuid
+                            in panel_uuids_by_telegram_id.get(telegram_id_from_panel, set())
+                        )
+                        if not is_panel_telegram_duplicate:
+                            sync_errors.append(
+                                f"Panel user {panel_uuid} claims Telegram identity already "
+                                "linked to another panel user; manual review required"
+                            )
+                            continue
+                if existing_user and telegram_id_from_panel:
+                    telegram_owner = users_by_telegram_id.get(telegram_id_from_panel)
+                    if telegram_owner and telegram_owner.user_id != existing_user.user_id:
+                        sync_errors.append(
+                            f"Panel user {panel_uuid} has conflicting Telegram identity; "
+                            "manual review required"
+                        )
+                        continue
+                    if (
+                        existing_user.panel_user_uuid == panel_uuid
+                        and len(panel_uuids_by_telegram_id.get(telegram_id_from_panel, set())) > 1
+                    ):
+                        # Reconcile before a stale snapshot can replace paid local state.
+                        continue
+
+                if not existing_user:
+                    users_not_found_in_db += 1
+                    if not telegram_id_from_panel and not email_from_panel:
+                        users_skipped_no_identity += 1
+                        continue
+                    email_is_owned = bool(
+                        email_from_panel
+                        and (
+                            email_from_panel in users_by_email
+                            or await session.scalar(
+                                select(UserEmailAddress.user_id).where(
+                                    UserEmailAddress.email == email_from_panel
+                                )
+                            )
+                        )
+                    )
+                    if email_is_owned:
+                        sync_errors.append(
+                            f"Panel user {panel_uuid} claims an email belonging to another "
+                            "local account; manual review required"
+                        )
+                        continue
+                    existing_user, was_created = await _create_panel_user(
+                        session,
+                        panel_uuid=panel_uuid,
+                        panel_username=str(panel_user_dict.get("username") or "").strip() or None,
+                        panel_origin=panel_origin_fingerprint(settings.PANEL_API_URL),
+                        telegram_id=telegram_id_from_panel,
+                        email=email_from_panel,
+                        language_code=settings.DEFAULT_LANGUAGE,
+                    )
+                    if not was_created or existing_user.panel_user_uuid != panel_uuid:
+                        sync_errors.append(
+                            f"Panel user {panel_uuid} collided with an existing local "
+                            "account; manual review required"
+                        )
+                        continue
+                    users_created += 1
+                    users_by_user_id[int(existing_user.user_id)] = existing_user
+                    users_by_panel_uuid[panel_uuid] = existing_user
+                    if telegram_id_from_panel:
+                        users_by_telegram_id[telegram_id_from_panel] = existing_user
+                    if email_from_panel:
+                        users_by_email[email_from_panel] = existing_user
+                    logger.info(
+                        "Created local user %s from panel UUID %s",
+                        existing_user.user_id,
+                        panel_uuid,
+                    )
+
+                panel_subscription = subscriptions_by_panel_uuid.get(
+                    panel_user_dict.get("subscriptionUuid") or panel_user_dict.get("shortUuid")
+                )
+                if panel_subscription and panel_subscription.user_id != existing_user.user_id:
+                    sync_errors.append(
+                        f"Panel user {panel_uuid} claims another account's subscription; "
+                        "manual review required"
+                    )
+                    continue
+                if not bind_sync_panel_identity(
+                    existing_user,
+                    panel_user_dict,
+                    panel_origin_fingerprint(settings.PANEL_API_URL),
+                    telegram_duplicate=is_panel_telegram_duplicate,
+                ):
+                    sync_errors.append(
+                        f"Panel user {panel_uuid} does not prove ownership of local account; "
+                        "manual review required"
+                    )
+                    continue
+
+                # User found in local DB
+                users_found_in_db += 1
+                user_was_updated = False
+                user_update_reasons: list[str] = []
+
+                # Get the actual user_id for subscription operations
+                actual_user_id = existing_user.user_id
+                is_duplicate_panel_identity = False
+
+                # Update panel UUID if different
+                if existing_user.panel_user_uuid != panel_uuid:
+                    linked_uuid = existing_user.panel_user_uuid
+                    linked_uuid_still_present = bool(
+                        telegram_id_from_panel
+                        and linked_uuid
+                        and str(linked_uuid)
+                        in panel_uuids_by_telegram_id.get(telegram_id_from_panel, set())
+                    )
+                    linked_uuid_present_on_panel = bool(
+                        linked_uuid and str(linked_uuid) in panel_users_by_uuid
+                    )
+                    panel_uuid_owner = users_by_panel_uuid.get(panel_uuid)
+                    if (
+                        panel_uuid_owner
+                        and panel_uuid_owner.user_id != existing_user.user_id
+                        and not linked_uuid_still_present
+                    ):
+                        if linked_uuid_present_on_panel:
+                            msg = (
+                                f"Panel UUID {panel_uuid} for user {actual_user_id} is already "
+                                f"linked to local user {panel_uuid_owner.user_id}, while current "
+                                f"local panel UUID {linked_uuid} still exists on panel."
+                            )
+                            sync_errors.append(msg)
+                            logger.warning("Sync: %s", msg)
+                            continue
+
+                        previous_panel_uuid = existing_user.panel_user_uuid
+                        previous_owner_user_id = panel_uuid_owner.user_id
+                        previous_owner_email = panel_uuid_owner.email
+                        previous_owner_telegram_id = panel_uuid_owner.telegram_id
+                        (
+                            existing_user,
+                            can_merge_panel_uuid_owner,
+                        ) = await _merge_local_duplicate_panel_user_if_needed(
+                            session,
+                            existing_user=existing_user,
+                            duplicate_panel_uuid=panel_uuid,
+                        )
+                        if not can_merge_panel_uuid_owner:
+                            logger.warning(
+                                "Sync: panel UUID %s is already linked to local user %s; "
+                                "skipping reassignment to user %s because local merge failed.",
+                                panel_uuid,
+                                previous_owner_user_id,
+                                actual_user_id,
+                            )
+                            continue
+
+                        existing_user.panel_user_uuid = panel_uuid
+                        actual_user_id = existing_user.user_id
+                        user_was_updated = True
+                        _append_unique(
+                            user_update_reasons,
+                            "panel_uuid_reassigned_after_local_merge",
+                        )
+                        users_uuid_updated += 1
+                        if previous_panel_uuid:
+                            users_by_panel_uuid.pop(str(previous_panel_uuid), None)
+                        users_by_panel_uuid[panel_uuid] = existing_user
+                        users_by_user_id.pop(int(previous_owner_user_id), None)
+                        users_by_user_id[int(existing_user.user_id)] = existing_user
+                        if previous_owner_telegram_id is not None:
+                            users_by_telegram_id.pop(int(previous_owner_telegram_id), None)
+                        if existing_user.telegram_id is not None:
+                            users_by_telegram_id[int(existing_user.telegram_id)] = existing_user
+                        if previous_owner_email:
+                            users_by_email.pop(previous_owner_email.strip().lower(), None)
+                        if existing_user.email:
+                            users_by_email[existing_user.email.strip().lower()] = existing_user
+                        logger.info(
+                            "Sync: merged local user %s owning panel UUID %s into user %s "
+                            "and reassigned stale local panel UUID %s.",
+                            previous_owner_user_id,
+                            panel_uuid,
+                            actual_user_id,
+                            previous_panel_uuid,
+                        )
+                    if linked_uuid_still_present:
+                        is_duplicate_panel_identity = True
+                        preferred_uuid = _preferred_panel_identity(
+                            existing_user,
+                            [
+                                panel_users_by_uuid[uuid]
+                                for uuid in panel_uuids_by_telegram_id.get(
+                                    int(existing_user.telegram_id), set()
+                                )
+                            ],
+                        )
+                        if preferred_uuid is None:
+                            sync_errors.append(
+                                f"Panel Telegram identity {telegram_id_from_panel} has ambiguous "
+                                "external accounts; manual review required"
+                            )
+                            continue
+                        if preferred_uuid not in {linked_uuid, panel_uuid}:
+                            continue
+                        (
+                            existing_user,
+                            can_absorb_duplicate_panel_user,
+                        ) = await _merge_local_duplicate_panel_user_if_needed(
+                            session,
+                            existing_user=existing_user,
+                            duplicate_panel_uuid=panel_uuid,
+                        )
+                        if not can_absorb_duplicate_panel_user:
+                            logger.warning(
+                                "Sync: duplicate panel users share telegramId %s; keeping local panel UUID %s and skipping duplicate panel UUID %s because local duplicate merge failed.",  # noqa: E501
+                                telegram_id_from_panel,
+                                linked_uuid,
+                                panel_uuid,
+                            )
+                            continue
+                        actual_user_id = existing_user.user_id
+                        users_by_panel_uuid[linked_uuid] = existing_user
+                        if existing_user.telegram_id is not None:
+                            users_by_telegram_id[int(existing_user.telegram_id)] = existing_user
+                        users_by_user_id[int(existing_user.user_id)] = existing_user
+                        if existing_user.email:
+                            users_by_email[existing_user.email.strip().lower()] = existing_user
+                        merge_result = await _absorb_duplicate_panel_identity(
+                            session,
+                            panel_service=panel_service,
+                            existing_user=existing_user,
+                            keep_panel_uuid=str(linked_uuid),
+                            keep_panel_user=panel_users_by_uuid.get(str(linked_uuid)),
+                            duplicate_panel_user=panel_user_dict,
+                            settings=settings,
+                            subscriptions_by_panel_uuid=subscriptions_by_panel_uuid,
+                            active_subscriptions_by_user_panel=(active_subscriptions_by_user_panel),
+                            preserve_duplicate_identity=preferred_uuid == panel_uuid,
+                        )
+                        handled_panel_uuids.update((str(linked_uuid), str(panel_uuid)))
+                        users_by_panel_uuid[str(existing_user.panel_user_uuid)] = existing_user
+                        subscriptions_created += int(merge_result["subscriptions_created"])
+                        subscriptions_updated += int(merge_result["subscriptions_updated"])
+                        subscriptions_synced_count += int(
+                            merge_result["subscriptions_created"]
+                        ) + int(merge_result["subscriptions_updated"])
+                        merge_panel_patches = int(merge_result.get("panel_patches", 0))
+                        if merge_panel_patches:
+                            panel_patch_count += merge_panel_patches
+                            panel_patch_reason_counts["duplicate_panel_merge_extend"] += (
+                                merge_panel_patches
+                            )
+                        if merge_result["resolved"]:
+                            users_updated += 1
+                            users_uuid_updated += 1
+                            local_update_reason_counts.update(["duplicate_panel_identity_resolved"])
+                            if telegram_id_from_panel is not None:
+                                panel_uuids_by_telegram_id.get(
+                                    telegram_id_from_panel,
+                                    set(),
+                                ).discard(str(merge_result.get("deleted_panel_uuid", panel_uuid)))
+                            users_by_panel_uuid.pop(
+                                str(merge_result.get("deleted_panel_uuid", panel_uuid)), None
+                            )
+                            logger.info(
+                                "Sync local update: user_id=%s telegram_id=%s panel_uuid=%s "
+                                "reasons=%s",
+                                actual_user_id,
+                                existing_user.telegram_id,
+                                existing_user.panel_user_uuid,
+                                "duplicate_panel_identity_resolved",
+                            )
+                        else:
+                            sync_errors.append(
+                                f"Panel duplicate {panel_uuid} could not be reconciled with "
+                                f"{linked_uuid}; synchronization will retry"
+                            )
+                        logger.warning(
+                            "Sync: duplicate panel users share telegramId %s; kept local panel UUID %s and processed duplicate panel UUID %s.",  # noqa: E501
+                            telegram_id_from_panel,
+                            existing_user.panel_user_uuid,
+                            merge_result.get("deleted_panel_uuid", panel_uuid),
+                        )
+                        continue
+                    elif existing_user.panel_user_uuid != panel_uuid:
+                        previous_panel_uuid = existing_user.panel_user_uuid
+                        previous_panel_uuid_for_reconciliation = (
+                            str(previous_panel_uuid) if previous_panel_uuid else None
+                        )
+                        existing_user.panel_user_uuid = panel_uuid
+                        user_was_updated = True
+                        _append_unique(user_update_reasons, "panel_uuid_synced")
+                        users_uuid_updated += 1
+                        if previous_panel_uuid:
+                            users_by_panel_uuid.pop(str(previous_panel_uuid), None)
+                        users_by_panel_uuid[panel_uuid] = existing_user
+                        logger.info(
+                            "Updated panel UUID for user %s: %s", actual_user_id, panel_uuid
+                        )
+                if not is_duplicate_panel_identity:
+                    existing_user, email_was_bound = await _bind_panel_email_to_user(
+                        session,
+                        existing_user=existing_user,
+                        email_from_panel=email_from_panel,
+                        panel_uuid=panel_uuid,
+                    )
+                    if email_was_bound:
+                        user_was_updated = True
+                        _append_unique(user_update_reasons, "email_bound_from_panel")
+                        if email_from_panel:
+                            users_by_email[email_from_panel] = existing_user
+                    # Panel metadata must never create or replace a login identity.
+
+                lifetime_used = _extract_lifetime_used_traffic_bytes(panel_user_dict)
+                if lifetime_used is not None and _should_update_lifetime_used_traffic(
+                    existing_user,
+                    lifetime_used,
+                    now=datetime.now(UTC),
+                    settings=settings,
+                    is_duplicate_panel_identity=is_duplicate_panel_identity,
+                ):
+                    existing_user.lifetime_used_traffic_bytes = lifetime_used
+                    existing_user.lifetime_used_traffic_synced_at = datetime.now(UTC)
+                    user_was_updated = True
+                    _append_unique(user_update_reasons, "lifetime_traffic_synced")
+
+                # Keep structural identity fields in panel and clean legacy email from
+                # description. Plain description text is intentionally not canonical.
+                try:
+                    if panel_uuid and existing_user and not is_duplicate_panel_identity:
+                        description_text = _panel_description_for_user(existing_user)
+                        desired_description = description_text.strip()
+                        (
+                            panel_user_for_identity,
+                            missing_identity_fields_match,
+                        ) = await _panel_identity_view_for_comparison(
+                            panel_service,
+                            panel_uuid,
+                            panel_user_dict,
+                            existing_user,
+                            desired_description,
+                        )
+                        current_description = panel_user_for_identity.get("description")
+                        description_has_email = _description_contains_email(
+                            current_description,
+                            existing_user.email,
+                        )
+                        identity_matches = _panel_identity_matches_user(
+                            panel_user_for_identity,
+                            existing_user,
+                            "",
+                            missing_identity_fields_match=missing_identity_fields_match,
+                        )
+                        panel_payload = _panel_identity_fields_update_payload(existing_user)
+                        if description_has_email:
+                            panel_payload["description"] = _description_without_email(
+                                current_description,
+                                existing_user.email,
+                            )
+                        if description_has_email or not identity_matches:
+                            panel_changes = _panel_update_changes(
+                                panel_user_for_identity,
+                                panel_payload,
+                            )
+                            panel_reasons = _identity_panel_update_reasons(
+                                panel_changes,
+                                description_has_email=description_has_email,
+                            )
+                            changed_fields = _log_sync_panel_patch(
+                                source="identity_sync",
+                                user=existing_user,
+                                panel_uuid=panel_uuid,
+                                update_payload=panel_payload,
+                                current_panel_user=panel_user_for_identity,
+                                reasons=panel_reasons,
+                                panel_view=(
+                                    "list" if missing_identity_fields_match else "full_fetch"
+                                ),
+                            )
+                            panel_patch_count += 1
+                            panel_patch_reason_counts.update(panel_reasons)
+                            panel_patch_field_counts.update(changed_fields)
+                            await panel_service.update_user_details_on_panel(
+                                panel_uuid,
+                                panel_payload,
+                            )
+                except Exception as e_desc:
+                    logger.warning(
+                        "Sync: Failed to update panel identity for panel user %s (tg %s): %s",
+                        panel_uuid,
+                        actual_user_id,
+                        e_desc,
+                    )
+
+                # Sync subscription data
+                panel_expire_at_iso = panel_user_dict.get("expireAt")
+                panel_status = panel_user_dict.get("status", "UNKNOWN")
+                panel_last_connected_at = panel_user_last_connected_datetime(panel_user_dict)
+
+                if panel_expire_at_iso:
+                    try:
+                        panel_expire_at = datetime.fromisoformat(
+                            panel_expire_at_iso.replace("Z", "+00:00")
+                        )
+
+                        # Prefer syncing by concrete subscription UUID (shortUuid/subscriptionUuid)
+                        subscription_uuid_from_panel = panel_user_dict.get(
+                            "subscriptionUuid"
+                        ) or panel_user_dict.get("shortUuid")
+
+                        if subscription_uuid_from_panel:
+                            existing_sub_by_uuid = _select_existing_subscription_for_panel_sync(
+                                user_id=int(actual_user_id),
+                                panel_uuid=panel_uuid,
+                                panel_subscription_uuid=subscription_uuid_from_panel,
+                                previous_panel_uuid=previous_panel_uuid_for_reconciliation,
+                                subscriptions_by_panel_uuid=subscriptions_by_panel_uuid,
+                                active_subscriptions_by_user_panel=(
+                                    active_subscriptions_by_user_panel
+                                ),
+                                subscriptions_by_user_panel=subscriptions_by_user_panel,
+                                subscriptions_by_user=subscriptions_by_user,
+                                numeric_generation=numeric_generation,
+                            )
+
+                            # If the panel reports the subscription as ACTIVE, deactivate all other active subscriptions first  # noqa: E501
+                            if panel_status_means_active(panel_status):
+                                deactivate_stmt = update(Subscription).where(
+                                    Subscription.panel_user_uuid == panel_uuid,
+                                    Subscription.is_active.is_(True),
+                                )
+                                if existing_sub_by_uuid is not None:
+                                    deactivate_stmt = deactivate_stmt.where(
+                                        Subscription.subscription_id
+                                        != existing_sub_by_uuid.subscription_id
+                                    )
+                                else:
+                                    deactivate_stmt = deactivate_stmt.where(
+                                        or_(
+                                            Subscription.panel_subscription_uuid
+                                            != subscription_uuid_from_panel,
+                                            Subscription.panel_subscription_uuid.is_(None),
+                                        )
+                                    )
+                                candidates = (
+                                    subscription_snapshot.active_by_panel.get(panel_uuid, [])
+                                    if subscription_snapshot is not None
+                                    else None
+                                )
+                                if candidates is None or any(
+                                    sub_id != getattr(existing_sub_by_uuid, "subscription_id", None)
+                                    for sub_id in candidates
+                                ):
+                                    if subscription_snapshot is not None:
+                                        deactivate_stmt = deactivate_stmt.where(
+                                            subscription_snapshot.siblings_filter(panel_uuid)
+                                        )
+                                    await session.execute(
+                                        deactivate_stmt.values(
+                                            is_active=False,
+                                            status_from_panel="INACTIVE",
+                                        )
+                                    )
+
+                            if existing_sub_by_uuid:
+                                previous_subscription_uuid = str(
+                                    existing_sub_by_uuid.panel_subscription_uuid or ""
+                                )
+                                previous_subscription_panel_user = str(
+                                    existing_sub_by_uuid.panel_user_uuid
+                                )
+                                update_payload = {
+                                    "user_id": actual_user_id,
+                                    "panel_user_uuid": panel_uuid,
+                                    "panel_subscription_uuid": subscription_uuid_from_panel,
+                                    "end_date": panel_expire_at,
+                                    "is_active": panel_status_means_active(panel_status),
+                                    "status_from_panel": panel_status,
+                                }
+                                _include_last_connected_snapshot(
+                                    update_payload,
+                                    existing_sub_by_uuid,
+                                    panel_last_connected_at,
+                                )
+                                update_delta = _subscription_update_delta(
+                                    existing_sub_by_uuid, update_payload
+                                )
+                                if update_delta:
+                                    # Atomic update of changed relevant fields
+                                    updated_sub = await subscription_dal.update_subscription(
+                                        session,
+                                        existing_sub_by_uuid.subscription_id,
+                                        update_delta,
+                                        refresh=False,
+                                        expected_version=(
+                                            subscription_snapshot.versions.get(
+                                                existing_sub_by_uuid.subscription_id, "missing"
+                                            )
+                                            if subscription_snapshot is not None
+                                            else None
+                                        ),
+                                    )
+                                    if subscription_snapshot is not None and updated_sub is None:
+                                        continue
+                                    subscriptions_updated += 1
+                                    user_was_updated = True
+                                    for reason in _subscription_update_reason_labels(update_delta):
+                                        _append_unique(user_update_reasons, reason)
+                                if previous_subscription_uuid:
+                                    subscriptions_by_panel_uuid.pop(
+                                        previous_subscription_uuid,
+                                        None,
+                                    )
+                                subscriptions_by_panel_uuid[subscription_uuid_from_panel] = (
+                                    existing_sub_by_uuid
+                                )
+                                subscriptions_by_user_panel.pop(
+                                    (
+                                        int(actual_user_id),
+                                        previous_subscription_panel_user,
+                                    ),
+                                    None,
+                                )
+                                subscriptions_by_user_panel[(int(actual_user_id), panel_uuid)] = (
+                                    existing_sub_by_uuid
+                                )
+                                active_subscriptions_by_user_panel.pop(
+                                    (
+                                        int(actual_user_id),
+                                        previous_subscription_panel_user,
+                                    ),
+                                    None,
+                                )
+                                if existing_sub_by_uuid.is_active:
+                                    active_subscriptions_by_user_panel[
+                                        (int(actual_user_id), panel_uuid)
+                                    ] = existing_sub_by_uuid
+                                subscriptions_synced_count += 1
+                                logger.debug(
+                                    "Synced existing subscription %s for user %s: expires %s, "
+                                    "status %s",
+                                    existing_sub_by_uuid.subscription_id,
+                                    actual_user_id,
+                                    panel_expire_at,
+                                    panel_status,
+                                )
+                            else:
+                                # Create a new subscription only when we have a concrete subscription UUID  # noqa: E501
+                                sub_payload = {
+                                    "user_id": actual_user_id,
+                                    "panel_user_uuid": panel_uuid,
+                                    "panel_subscription_uuid": subscription_uuid_from_panel,
+                                    # Do not guess precise start_date from panel; keep nullable
+                                    "start_date": None,
+                                    "end_date": panel_expire_at,
+                                    "duration_months": None,
+                                    "is_active": panel_status_means_active(panel_status),
+                                    "status_from_panel": panel_status,
+                                    "traffic_limit_bytes": settings.user_traffic_limit_bytes,
+                                    "auto_renew_enabled": False,
+                                }
+                                _include_last_connected_snapshot(
+                                    sub_payload,
+                                    None,
+                                    panel_last_connected_at,
+                                )
+                                created_sub = await subscription_dal.upsert_subscription(
+                                    session, sub_payload
+                                )
+                                subscriptions_by_panel_uuid[subscription_uuid_from_panel] = (
+                                    created_sub
+                                )
+                                if created_sub.is_active and created_sub.end_date > datetime.now(
+                                    UTC
+                                ):
+                                    active_subscriptions_by_user_panel[
+                                        (int(created_sub.user_id), created_sub.panel_user_uuid)
+                                    ] = created_sub
+                                subscriptions_synced_count += 1
+                                subscriptions_created += 1
+                                user_was_updated = True
+                                _append_unique(user_update_reasons, "subscription_created")
+                                logger.debug(
+                                    "Created subscription %s for user %s by panel_sub_uuid %s",
+                                    created_sub.subscription_id,
+                                    actual_user_id,
+                                    subscription_uuid_from_panel,
+                                )
+                        else:
+                            # No subscription UUID from panel: only update an already active subscription for this user/panel UUID  # noqa: E501
+                            active_sub = active_subscriptions_by_user_panel.get(
+                                (actual_user_id, panel_uuid)
+                            )
+                            if active_sub:
+                                update_payload = {
+                                    "end_date": panel_expire_at,
+                                    "is_active": panel_status_means_active(panel_status),
+                                    "status_from_panel": panel_status,
+                                }
+                                _include_last_connected_snapshot(
+                                    update_payload,
+                                    active_sub,
+                                    panel_last_connected_at,
+                                )
+                                update_delta = _subscription_update_delta(
+                                    active_sub, update_payload
+                                )
+                                if update_delta:
+                                    updated_sub = await subscription_dal.update_subscription(
+                                        session,
+                                        active_sub.subscription_id,
+                                        update_delta,
+                                        refresh=False,
+                                        expected_version=(
+                                            subscription_snapshot.versions.get(
+                                                active_sub.subscription_id, "missing"
+                                            )
+                                            if subscription_snapshot is not None
+                                            else None
+                                        ),
+                                    )
+                                    if subscription_snapshot is not None and updated_sub is None:
+                                        continue
+                                    subscriptions_updated += 1
+                                    user_was_updated = True
+                                    for reason in _subscription_update_reason_labels(update_delta):
+                                        _append_unique(user_update_reasons, reason)
+                                subscriptions_synced_count += 1
+                                logger.debug(
+                                    "Updated active subscription %s for user %s: expires %s, "
+                                    "status %s",
+                                    active_sub.subscription_id,
+                                    actual_user_id,
+                                    panel_expire_at,
+                                    panel_status,
+                                )
+                            else:
+                                # Without a concrete subscription UUID we avoid creating new records to keep sync idempotent  # noqa: E501
+                                logger.debug(
+                                    "No subscriptionUuid for panel user %s; skipped creation for "
+                                    "user %s",
+                                    panel_uuid,
+                                    actual_user_id,
+                                )
+
+                    except Exception as e:
+                        sync_errors.append(
+                            f"Error syncing subscription for user {actual_user_id}: {e!s}"
+                        )
+                        logger.error(
+                            "Error syncing subscription for user %s: %s", actual_user_id, e
+                        )
+
+                if user_was_updated:
+                    users_updated += 1
+                    if not user_update_reasons:
+                        user_update_reasons.append("unspecified")
+                    local_update_reason_counts.update(user_update_reasons)
+                    logger.info(
+                        "Sync local update: user_id=%s telegram_id=%s panel_uuid=%s reasons=%s",
+                        actual_user_id,
+                        existing_user.telegram_id,
+                        panel_uuid,
+                        ",".join(user_update_reasons),
+                    )
+
+            except Exception as e_user:
+                panel_user_uuid = panel_user_dict.get("uuid", "unknown")
+                sync_errors.append(f"Error processing panel user {panel_user_uuid}: {e_user!s}")
+                logger.exception("Error syncing user: %s", e_user)
+            finally:
+                if previous_panel_uuid_for_reconciliation:
+                    await finish_sync_panel_relink(
+                        session,
+                        user_id=int(actual_user_id),
+                        old_reference=previous_panel_uuid_for_reconciliation,
+                        new_reference=str(panel_uuid),
+                    )
+                if (
+                    panel_records_checked % PANEL_SYNC_TRANSACTION_BATCH_SIZE == 0
+                    or time.monotonic() - batch_started >= 0.75
+                ) and panel_records_checked < total_panel_users:
+                    await commit_subscription_background_sync_batch(session)
+                    reload_batch = True
+
+        # Update sync status
+        status = "completed_with_errors" if sync_errors else "completed"
+        default_lang = settings.DEFAULT_LANGUAGE
+        details = localized_sync_details(
+            i18n_instance,
+            default_lang,
+            panel_records_checked=panel_records_checked,
+            users_found_in_db=users_found_in_db,
+            users_created=users_created,
+            users_updated=users_updated,
+            subscriptions_synced_count=subscriptions_synced_count,
+            subscriptions_created=subscriptions_created,
+            subscriptions_updated=subscriptions_updated,
+            users_without_telegram_id=users_without_telegram_id,
+            users_not_found_in_db=users_not_found_in_db,
+            users_skipped_no_identity=users_skipped_no_identity,
+            error_count=len(sync_errors),
+        )
+
+        await panel_sync_dal.update_panel_sync_status(
+            session,
+            status,
+            details,
+            panel_records_checked,
+            subscriptions_synced_count,
+        )
+        await session.commit()
+
+        # Detailed logging summary
+        logger.info("Sync completed - Summary:")
+        logger.info("  Panel records checked: %s", panel_records_checked)
+        logger.info("  Users without telegramId: %s", users_without_telegram_id)
+        logger.info("  Users not found in local DB: %s", users_not_found_in_db)
+        logger.info(
+            "  Panel-only users skipped without login identity: %s", users_skipped_no_identity
+        )
+        logger.info("  Users found in local DB: %s", users_found_in_db)
+        logger.info("  Users created: %s", users_created)
+        logger.info("  Users with UUID updated: %s", users_uuid_updated)
+        logger.info("  Users updated overall: %s", users_updated)
+        logger.info("  Local update reasons: %s", _format_counter(local_update_reason_counts))
+        logger.info("  Panel PATCHes from sync: %s", panel_patch_count)
+        logger.info("  Panel PATCH reasons: %s", _format_counter(panel_patch_reason_counts))
+        logger.info("  Panel PATCH fields: %s", _format_counter(panel_patch_field_counts))
+        logger.info("  Subscriptions total synced: %s", subscriptions_synced_count)
+        logger.info("  Subscriptions created: %s", subscriptions_created)
+        logger.info("  Subscriptions updated: %s", subscriptions_updated)
+        logger.info("  Sync errors: %s", len(sync_errors))
+
+        return {
+            "status": status,
+            "details": details,
+            "users_processed": panel_records_checked,
+            "users_synced": users_found_in_db,
+            "users_created": users_created,
+            "subs_synced": subscriptions_synced_count,
+            "errors": sync_errors,
+        }
+
+    except Exception as e_sync_global:
+        await session.rollback()
+        logger.exception("Global error during sync: %s", e_sync_global)
+        error_detail = f"Unexpected error during sync: {e_sync_global!s}"
+
+        await panel_sync_dal.update_panel_sync_status(
+            session,
+            "failed",
+            error_detail,
+            panel_records_checked,
+            subscriptions_synced_count,
+        )
+        await session.commit()
+
+        return {
+            "status": "failed",
+            "details": error_detail,
+            "errors": [str(e_sync_global)],
+        }

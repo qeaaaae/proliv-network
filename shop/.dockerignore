@@ -1,0 +1,179 @@
+# Git
+.gitignore
+.github
+.gitattributes
+LICENSE
+README.md
+.env
+.env.*
+!.env.example
+scratch_*.py
+scratch/
+.claude/
+*.local.*
+node_modules/
+frontend/node_modules/
+docs-site/node_modules/
+docs-site/.astro/
+docs-site/dist/
+docs-site/public/demo/runtime/
+docs-site/src/content/docs/
+frontend-nginx-dist/
+deploy/compose/docker-compose-dev.yml
+data/*
+!data/tariffs.example.json
+!data/locales-overrides.example.json
+
+
+# CI
+.codeclimate.yml
+.travis.yml
+.taskcluster.yml
+
+# Docker
+docker-compose.yml
+deploy/compose/*.yml
+.dockerignore
+tmp/
+.tmp/
+
+# WebApp build artifacts (regenerated inside Docker)
+bot/app/web/templates/subscription_webapp.css
+bot/app/web/templates/subscription_webapp.js
+bot/app/web/templates/subscription_webapp.min.*.js
+bot/app/web/templates/subscription_webapp.*.css
+bot/app/web/templates/subscription_webapp.min.*.js.br
+bot/app/web/templates/subscription_webapp.min.*.js.gz
+bot/app/web/templates/subscription_webapp.*.css.br
+bot/app/web/templates/subscription_webapp.*.css.gz
+bot/app/web/templates/subscription_webapp_admin.css
+bot/app/web/templates/subscription_webapp_admin.js
+bot/app/web/templates/subscription_webapp_admin.min.*.js
+bot/app/web/templates/subscription_webapp_admin.*.*.js
+bot/app/web/templates/subscription_webapp_admin.*.css
+bot/app/web/templates/subscription_webapp_admin.min.*.js.br
+bot/app/web/templates/subscription_webapp_admin.min.*.js.gz
+bot/app/web/templates/subscription_webapp_admin.*.css.br
+bot/app/web/templates/subscription_webapp_admin.*.css.gz
+bot/app/web/templates/subscription_webapp_docs_demo.css
+bot/app/web/templates/subscription_webapp_docs_demo.js
+bot/app/web/templates/subscription_webapp_docs_demo.*.css
+bot/app/web/templates/subscription_webapp_docs_demo.*.css.br
+bot/app/web/templates/subscription_webapp_docs_demo.*.css.gz
+backend/bot/app/web/templates/subscription_webapp.css
+backend/bot/app/web/templates/subscription_webapp.js
+backend/bot/app/web/templates/subscription_webapp.min.*.js
+backend/bot/app/web/templates/subscription_webapp.*.css
+backend/bot/app/web/templates/subscription_webapp.min.*.js.br
+backend/bot/app/web/templates/subscription_webapp.min.*.js.gz
+backend/bot/app/web/templates/subscription_webapp.*.css.br
+backend/bot/app/web/templates/subscription_webapp.*.css.gz
+backend/bot/app/web/templates/subscription_webapp_admin.css
+backend/bot/app/web/templates/subscription_webapp_admin.js
+backend/bot/app/web/templates/subscription_webapp_admin.min.*.js
+backend/bot/app/web/templates/subscription_webapp_admin.*.*.js
+backend/bot/app/web/templates/subscription_webapp_admin.*.css
+backend/bot/app/web/templates/subscription_webapp_admin.min.*.js.br
+backend/bot/app/web/templates/subscription_webapp_admin.min.*.js.gz
+backend/bot/app/web/templates/subscription_webapp_admin.*.css.br
+backend/bot/app/web/templates/subscription_webapp_admin.*.css.gz
+backend/bot/app/web/templates/subscription_webapp_docs_demo.css
+backend/bot/app/web/templates/subscription_webapp_docs_demo.js
+backend/bot/app/web/templates/subscription_webapp_docs_demo.*.css
+backend/bot/app/web/templates/subscription_webapp_docs_demo.*.css.br
+backend/bot/app/web/templates/subscription_webapp_docs_demo.*.css.gz
+
+# Split chunks, source maps and compressed variants are rebuilt in Docker too.
+bot/app/web/templates/subscription_webapp*.js*
+bot/app/web/templates/subscription_webapp*.css*
+backend/bot/app/web/templates/subscription_webapp*.js*
+backend/bot/app/web/templates/subscription_webapp*.css*
+
+# Byte-compiled / optimized / DLL files
+**/__pycache__/
+**/*.py[cod]
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# Virtual environment
+.env*
+.venv/
+.venv*/
+graphify-out/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+venv/
+
+# PyCharm
+.idea
+
+# Python mode for VIM
+.ropeproject
+**/.ropeproject
+
+# Vim swap files
+**/*.swp
+
+# VS Code
+.vscode/
+
+# The QA stage copies the repository into /workspace; its contract tests
+# inspect these source files even though application images do not use them.
+!.github/
+!docker-compose.yml
+!deploy/compose/*.yml
+!.dockerignore
+!.env.example

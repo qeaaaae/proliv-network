@@ -1,0 +1,771 @@
+from __future__ import annotations
+
+import json
+import logging
+import re
+from typing import (
+    Any,
+)
+
+from pydantic import field_validator
+
+from config.menu_buttons import normalize_menu_buttons_json
+from config.settings_models import (
+    BalanceSettings,
+    CompatibilitySettings,
+    DBSettings,
+    EmailSettings,
+    PanelSettings,
+    PartnerSettings,
+    PartnerWithdrawalMethod,
+    PaymentSettings,
+    ReferralSettings,
+    RegistrationSettings,
+    SupportSettings,
+    WebAppSettings,
+)
+from config.settings_protocol import _SettingsComputedMixinBase, computed_field
+from config.settings_validation import SettingsValidationMixin as SettingsValidationMixin
+from config.support_links import normalize_support_link
+from config.tariffs_config import (
+    TariffsConfig,
+    default_payment_currency_code_for_settings,
+    load_tariffs_config,
+)
+from config.webapp_themes_config import WebappThemesConfig, resolved_webapp_themes_catalog
+
+logger = logging.getLogger(__name__)
+
+
+def _split_csv(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in re.split(r"[,;\r\n]+", value) if item.strip()]
+
+
+class SettingsComputedMixin(_SettingsComputedMixinBase):
+    @field_validator(
+        "TELEGRAM_MENU_APPEARANCE_JSON", "TELEGRAM_CUSTOM_EMOJI_LIBRARY_JSON", mode="before"
+    )
+    @classmethod
+    def validate_telegram_menu_setting(cls, value: Any, info: Any) -> str:
+        from config.telegram_menu import normalized_telegram_setting
+
+        return normalized_telegram_setting(info.field_name, value)
+
+    @field_validator("MENU_BUTTONS_JSON", mode="before")
+    @classmethod
+    def validate_menu_buttons_json(cls, value: Any) -> str:
+        return normalize_menu_buttons_json(value)
+
+    @computed_field
+    def DATABASE_URL(self) -> str:
+        return f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+
+    @computed_field
+    def db_settings(self) -> DBSettings:
+        return DBSettings(
+            user=self.POSTGRES_USER,
+            password=self.POSTGRES_PASSWORD,
+            host=self.POSTGRES_HOST,
+            port=self.POSTGRES_PORT,
+            database=self.POSTGRES_DB,
+        )
+
+    @computed_field
+    def email_settings(self) -> EmailSettings:
+        return EmailSettings(
+            smtp_host=self.SMTP_HOST,
+            smtp_port=self.SMTP_PORT,
+            smtp_fallback_ports=self.SMTP_FALLBACK_PORTS,
+            smtp_timeout_seconds=self.SMTP_TIMEOUT_SECONDS,
+            smtp_username=self.SMTP_USERNAME,
+            smtp_password=self.SMTP_PASSWORD,
+            smtp_from_email=self.SMTP_FROM_EMAIL,
+            smtp_from_name=self.SMTP_FROM_NAME,
+            smtp_starttls=self.SMTP_STARTTLS,
+            smtp_use_ssl=self.SMTP_USE_SSL,
+            email_code_ttl_seconds=self.EMAIL_CODE_TTL_SECONDS,
+            email_code_resend_seconds=self.EMAIL_CODE_RESEND_SECONDS,
+            email_code_max_attempts=self.EMAIL_CODE_MAX_ATTEMPTS,
+            brute_force_max_failures=self.BRUTE_FORCE_MAX_FAILURES,
+            brute_force_window_seconds=self.BRUTE_FORCE_WINDOW_SECONDS,
+            brute_force_lock_seconds=self.BRUTE_FORCE_LOCK_SECONDS,
+        )
+
+    @computed_field
+    def webapp_settings(self) -> WebAppSettings:
+        return WebAppSettings(
+            title=self.WEBAPP_TITLE,
+            primary_color=self.WEBAPP_PRIMARY_COLOR,
+            user_theme_mode_enabled=self.WEBAPP_USER_THEME_MODE_ENABLED,
+            admin_theme_effects_enabled=self.WEBAPP_ADMIN_THEME_EFFECTS_ENABLED,
+            compact_home_enabled=self.WEBAPP_COMPACT_HOME_ENABLED,
+            compact_login_enabled=self.WEBAPP_COMPACT_LOGIN_ENABLED,
+            checkout_addon_value_animation_enabled=(
+                self.WEBAPP_CHECKOUT_ADDON_VALUE_ANIMATION_ENABLED
+            ),
+            checkout_addon_editor_expanded_by_default=(
+                self.WEBAPP_CHECKOUT_ADDON_EDITOR_EXPANDED_BY_DEFAULT
+            ),
+            logo_url=self.WEBAPP_LOGO_URL,
+            favicon_use_custom=self.WEBAPP_FAVICON_USE_CUSTOM,
+            favicon_url=self.WEBAPP_FAVICON_URL,
+            logo_favicon_url=self.WEBAPP_LOGO_FAVICON_URL,
+            session_ttl_seconds=self.WEBAPP_SESSION_TTL_SECONDS,
+            session_secret=self.WEBAPP_SESSION_SECRET,
+            webhook_secret_token=self.WEBHOOK_SECRET_TOKEN,
+            auth_max_age_seconds=self.WEBAPP_AUTH_MAX_AGE_SECONDS,
+            login_token_ttl_seconds=self.WEBAPP_LOGIN_TOKEN_TTL_SECONDS,
+            server_host=self.WEBAPP_SERVER_HOST,
+            server_port=self.WEBAPP_SERVER_PORT,
+            enabled=self.WEBAPP_ENABLED,
+            trusted_proxies=self.trusted_proxies,
+        )
+
+    @property
+    def payment_settings(self) -> PaymentSettings:
+        return PaymentSettings(
+            default_currency_symbol=self.DEFAULT_CURRENCY_SYMBOL,
+            payment_request_timeout_seconds=self.PAYMENT_REQUEST_TIMEOUT_SECONDS,
+            payment_methods_order=self.payment_methods_order,
+            subscription_options=self.subscription_options,
+            stars_subscription_options=self.stars_subscription_options,
+            traffic_packages=self.traffic_packages,
+            stars_traffic_packages=self.stars_traffic_packages,
+            traffic_sale_mode=self.traffic_sale_mode,
+        )
+
+    @property
+    def balance_settings(self) -> BalanceSettings:
+        try:
+            raw_presets = json.loads(self.USER_BALANCE_TOPUP_PRESETS or "[]")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("USER_BALANCE_TOPUP_PRESETS must be valid JSON") from exc
+        if not isinstance(raw_presets, list):
+            raise ValueError("USER_BALANCE_TOPUP_PRESETS must be a JSON array")
+        currency = (
+            self.USER_BALANCE_CURRENCY or default_payment_currency_code_for_settings(self) or "RUB"
+        ).strip()
+        return BalanceSettings(
+            enabled=self.USER_BALANCE_ENABLED,
+            recurring_enabled=self.USER_BALANCE_RECURRING_ENABLED,
+            currency=currency,
+            topup_min_amount=self.USER_BALANCE_TOPUP_MIN_AMOUNT,
+            topup_max_amount=self.USER_BALANCE_TOPUP_MAX_AMOUNT,
+            topup_presets=raw_presets,
+        )
+
+    @property
+    def referral_settings(self) -> ReferralSettings:
+        return ReferralSettings(
+            enabled=self.REFERRAL_PROGRAM_ENABLED,
+            bonus_days_inviter_1_month=self.REFERRAL_BONUS_DAYS_INVITER_1_MONTH,
+            bonus_days_inviter_3_months=self.REFERRAL_BONUS_DAYS_INVITER_3_MONTHS,
+            bonus_days_inviter_6_months=self.REFERRAL_BONUS_DAYS_INVITER_6_MONTHS,
+            bonus_days_inviter_12_months=self.REFERRAL_BONUS_DAYS_INVITER_12_MONTHS,
+            bonus_days_referee_1_month=self.REFERRAL_BONUS_DAYS_REFEREE_1_MONTH,
+            bonus_days_referee_3_months=self.REFERRAL_BONUS_DAYS_REFEREE_3_MONTHS,
+            bonus_days_referee_6_months=self.REFERRAL_BONUS_DAYS_REFEREE_6_MONTHS,
+            bonus_days_referee_12_months=self.REFERRAL_BONUS_DAYS_REFEREE_12_MONTHS,
+            one_bonus_per_referee=self.REFERRAL_ONE_BONUS_PER_REFEREE,
+            welcome_bonus_days=self.REFERRAL_WELCOME_BONUS_DAYS,
+            welcome_bonus_without_telegram_enabled=self.REFERRAL_WELCOME_BONUS_WITHOUT_TELEGRAM_ENABLED,
+            webapp_link_enabled=self.REFERRAL_WEBAPP_LINK_ENABLED,
+            telegram_link_enabled=self.REFERRAL_TELEGRAM_LINK_ENABLED,
+            legacy_refs_enabled=self.LEGACY_REFS,
+        )
+
+    @property
+    def partner_settings(self) -> PartnerSettings:
+        def _json_list(raw: str, key: str) -> list[Any]:
+            try:
+                value = json.loads(raw or "[]")
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{key} must be valid JSON") from exc
+            if not isinstance(value, list):
+                raise ValueError(f"{key} must be a JSON array")
+            return value
+
+        return PartnerSettings(
+            enabled=self.PARTNER_PROGRAM_ENABLED,
+            auto_enrollment_enabled=self.PARTNER_AUTO_ENROLLMENT_ENABLED,
+            referral_program_disabled=self.PARTNER_REFERRAL_PROGRAM_DISABLED,
+            withdrawals_enabled=self.PARTNER_WITHDRAWALS_ENABLED,
+            balance_payment_enabled=self.PARTNER_BALANCE_PAYMENT_ENABLED,
+            client_welcome_bonus_enabled=self.PARTNER_CLIENT_WELCOME_BONUS_ENABLED,
+            client_payment_bonus_enabled=self.PARTNER_CLIENT_PAYMENT_BONUS_ENABLED,
+            one_bonus_per_client=self.PARTNER_ONE_BONUS_PER_CLIENT,
+            default_commission_bps=self.PARTNER_DEFAULT_COMMISSION_BPS,
+            commission_hold_days=self.PARTNER_COMMISSION_HOLD_DAYS,
+            eligible_currencies=_json_list(
+                self.PARTNER_ELIGIBLE_CURRENCIES,
+                "PARTNER_ELIGIBLE_CURRENCIES",
+            ),
+            excluded_sale_modes=_json_list(
+                self.PARTNER_EXCLUDED_SALE_MODES,
+                "PARTNER_EXCLUDED_SALE_MODES",
+            ),
+            withdrawal_methods=[
+                PartnerWithdrawalMethod.model_validate(item)
+                for item in _json_list(
+                    self.PARTNER_WITHDRAWAL_METHODS_JSON,
+                    "PARTNER_WITHDRAWAL_METHODS_JSON",
+                )
+            ],
+            telegram_link_enabled=self.PARTNER_TELEGRAM_LINK_ENABLED,
+            webapp_link_enabled=self.PARTNER_WEBAPP_LINK_ENABLED,
+            application_message_max_length=self.PARTNER_APPLICATION_MESSAGE_MAX_LENGTH,
+            max_active_withdrawals=self.PARTNER_MAX_ACTIVE_WITHDRAWALS,
+            reapplication_enabled=self.PARTNER_REAPPLICATION_ENABLED,
+            reapplication_cooldown_days=self.PARTNER_REAPPLICATION_COOLDOWN_DAYS,
+            list_page_limit=self.PARTNER_LIST_PAGE_LIMIT,
+            application_rate_limit_hours=self.PARTNER_APPLICATION_RATE_LIMIT_HOURS,
+            withdrawal_rate_limit_seconds=self.PARTNER_WITHDRAWAL_RATE_LIMIT_SECONDS,
+            audit_retention_days=self.PARTNER_AUDIT_RETENTION_DAYS,
+            requisites_retention_days=self.PARTNER_REQUISITES_RETENTION_DAYS,
+        )
+
+    @property
+    def registration_settings(self) -> RegistrationSettings:
+        return RegistrationSettings(
+            invite_only_enabled=self.REGISTRATION_INVITE_ONLY_ENABLED,
+        )
+
+    @property
+    def support_settings(self) -> SupportSettings:
+        return SupportSettings(
+            link=normalize_support_link(self.SUPPORT_LINK),
+            tickets_enabled=self.SUPPORT_TICKETS_ENABLED,
+            ticket_max_body_length=self.SUPPORT_TICKET_MAX_BODY_LENGTH,
+            ticket_max_subject_length=self.SUPPORT_TICKET_MAX_SUBJECT_LENGTH,
+            ticket_rate_limit_per_hour=self.SUPPORT_TICKET_RATE_LIMIT_PER_HOUR,
+            message_rate_limit_per_minute=self.SUPPORT_MESSAGE_RATE_LIMIT_PER_MINUTE,
+            image_rate_limit_per_day=self.SUPPORT_IMAGE_RATE_LIMIT_PER_DAY,
+            admin_telegram_notifications_enabled=(
+                self.SUPPORT_ADMIN_TELEGRAM_NOTIFICATIONS_ENABLED
+            ),
+            admin_email_notifications_enabled=self.SUPPORT_ADMIN_EMAIL_NOTIFICATIONS_ENABLED,
+            admin_notification_cooldown_seconds=self.SUPPORT_ADMIN_NOTIFICATION_COOLDOWN_SECONDS,
+            admin_email_cooldown_seconds=self.SUPPORT_ADMIN_EMAIL_COOLDOWN_SECONDS,
+        )
+
+    @property
+    def server_status_external_url(self) -> str | None:
+        if not self.SERVER_STATUS_ENABLED or self.SERVER_STATUS_PROVIDER != "url":
+            return None
+        value = str(self.SERVER_STATUS_URL or "").strip()
+        return value or None
+
+    @property
+    def panel_settings(self) -> PanelSettings:
+        return PanelSettings(
+            api_url=self.PANEL_API_URL,
+            api_key=self.PANEL_API_KEY,
+            api_cookie=self.PANEL_API_COOKIE,
+            webhook_secret=self.PANEL_WEBHOOK_SECRET,
+            write_mode=self.PANEL_WRITE_MODE,
+            dry_run_enabled=self.panel_dry_run_enabled,
+            api_total_timeout_seconds=self.PANEL_API_TOTAL_TIMEOUT_SECONDS,
+            api_connect_timeout_seconds=self.PANEL_API_CONNECT_TIMEOUT_SECONDS,
+            api_sock_connect_timeout_seconds=self.PANEL_API_SOCK_CONNECT_TIMEOUT_SECONDS,
+            api_sock_read_timeout_seconds=self.PANEL_API_SOCK_READ_TIMEOUT_SECONDS,
+        )
+
+    @property
+    def compatibility_settings(self) -> CompatibilitySettings:
+        return CompatibilitySettings(
+            remnashop_referral_code_compat_enabled=self.MIGRATION_REMNASHOP_REFERRAL_CODE_COMPAT_ENABLED,
+            remnashop_promo_code_compat_enabled=self.MIGRATION_REMNASHOP_PROMO_CODE_COMPAT_ENABLED,
+            remnashop_imported_at=self.MIGRATION_REMNASHOP_IMPORTED_AT,
+            remnashop_notes=self.MIGRATION_REMNASHOP_NOTES,
+        )
+
+    @computed_field
+    def ADMIN_IDS(self) -> list[int]:
+        if self.ADMIN_IDS_STR:
+            try:
+                return [
+                    int(admin_id.strip())
+                    for admin_id in self.ADMIN_IDS_STR.split(",")
+                    if admin_id.strip().isdigit()
+                ]
+            except ValueError:
+                logger.error(
+                    "Invalid ADMIN_IDS_STR format: '%s'. Expected comma-separated integers.",
+                    self.ADMIN_IDS_STR,
+                )
+                return []
+        return []
+
+    @computed_field
+    def PRIMARY_ADMIN_ID(self) -> int | None:
+        ids: list[int] = self.ADMIN_IDS
+        return ids[0] if ids else None
+
+    @computed_field
+    def panel_dry_run_enabled(self) -> bool:
+        mode = str(self.PANEL_WRITE_MODE or "auto").strip().lower().replace("-", "_")
+        if mode == "dry_run":
+            return True
+        if mode == "live":
+            return False
+        runtime = str(self.APP_RUNTIME_MODE or "production").strip().lower()
+        return runtime in {"dev", "development", "local", "test", "testing"}
+
+    @computed_field
+    def qa_auth_enabled(self) -> bool:
+        runtime = str(self.APP_RUNTIME_MODE or "production").strip().lower()
+        return bool(
+            self.QA_AUTH_ENABLED and runtime in {"dev", "development", "local", "test", "testing"}
+        )
+
+    @computed_field
+    def trial_traffic_limit_bytes(self) -> int:
+        if self.TRIAL_TRAFFIC_LIMIT_GB is None or self.TRIAL_TRAFFIC_LIMIT_GB <= 0:
+            return 0
+        return int(self.TRIAL_TRAFFIC_LIMIT_GB * (1024**3))
+
+    @computed_field
+    def trial_premium_traffic_limit_bytes(self) -> int:
+        if self.TRIAL_PREMIUM_TRAFFIC_LIMIT_GB is None or self.TRIAL_PREMIUM_TRAFFIC_LIMIT_GB <= 0:
+            return 0
+        return int(self.TRIAL_PREMIUM_TRAFFIC_LIMIT_GB * (1024**3))
+
+    @computed_field
+    def user_traffic_limit_bytes(self) -> int:
+        if self.USER_TRAFFIC_LIMIT_GB is None or self.USER_TRAFFIC_LIMIT_GB <= 0:
+            return 0
+        return int(self.USER_TRAFFIC_LIMIT_GB * (1024**3))
+
+    @computed_field
+    def parsed_user_squad_uuids(self) -> list[str] | None:
+        if self.USER_SQUAD_UUIDS:
+            return [uuid.strip() for uuid in self.USER_SQUAD_UUIDS.split(",") if uuid.strip()]
+        return None
+
+    @computed_field
+    def parsed_trial_squad_uuids(self) -> list[str] | None:
+        if self.TRIAL_SQUAD_UUIDS:
+            trial_squads = [
+                uuid.strip() for uuid in self.TRIAL_SQUAD_UUIDS.split(",") if uuid.strip()
+            ]
+            if trial_squads:
+                return trial_squads
+        return self.parsed_user_squad_uuids
+
+    @computed_field
+    def parsed_trial_premium_squad_uuids(self) -> list[str] | None:
+        if self.TRIAL_PREMIUM_SQUAD_UUIDS:
+            premium_squads = [
+                uuid.strip() for uuid in self.TRIAL_PREMIUM_SQUAD_UUIDS.split(",") if uuid.strip()
+            ]
+            if premium_squads:
+                return premium_squads
+        return None
+
+    @computed_field
+    def disposable_email_domains(self) -> list[str]:
+        domains: list[str] = []
+        for domain in _split_csv(self.DISPOSABLE_EMAIL_DOMAINS):
+            normalized = domain.strip().lower().lstrip("@.")
+            if normalized and normalized not in domains:
+                domains.append(normalized)
+        return domains
+
+    @computed_field
+    def parsed_user_external_squad_uuid(self) -> str | None:
+        if self.USER_EXTERNAL_SQUAD_UUID:
+            cleaned = self.USER_EXTERNAL_SQUAD_UUID.strip()
+            if cleaned:
+                return cleaned
+        return None
+
+    @computed_field
+    def trusted_proxies(self) -> list[str]:
+        return _split_csv(self.TRUSTED_PROXIES)
+
+    @computed_field
+    def telegram_webhook_path(self) -> str:
+        return "/tg/webhook"
+
+    @computed_field
+    def panel_webhook_path(self) -> str:
+        return "/webhook/panel"
+
+    @computed_field
+    def panel_full_webhook_url(self) -> str | None:
+        base = self.WEBHOOK_BASE_URL
+        if base:
+            return f"{base.rstrip('/')}{self.panel_webhook_path}"
+        return None
+
+    @computed_field
+    def subscription_options(self) -> dict[int, float]:
+        options: dict[int, float] = {}
+
+        if self.MONTH_1_ENABLED and self.RUB_PRICE_1_MONTH is not None:
+            options[1] = float(self.RUB_PRICE_1_MONTH)
+        if self.MONTH_3_ENABLED and self.RUB_PRICE_3_MONTHS is not None:
+            options[3] = float(self.RUB_PRICE_3_MONTHS)
+        if self.MONTH_6_ENABLED and self.RUB_PRICE_6_MONTHS is not None:
+            options[6] = float(self.RUB_PRICE_6_MONTHS)
+        if self.MONTH_12_ENABLED and self.RUB_PRICE_12_MONTHS is not None:
+            options[12] = float(self.RUB_PRICE_12_MONTHS)
+        return options
+
+    @computed_field
+    def stars_subscription_options(self) -> dict[int, int]:
+        options: dict[int, int] = {}
+        stars_enabled = self.STARS_ENABLED or self.STARS_ADMIN_ONLY_ENABLED
+        if stars_enabled and self.MONTH_1_ENABLED and self.STARS_PRICE_1_MONTH is not None:
+            options[1] = self.STARS_PRICE_1_MONTH
+        if stars_enabled and self.MONTH_3_ENABLED and self.STARS_PRICE_3_MONTHS is not None:
+            options[3] = self.STARS_PRICE_3_MONTHS
+        if stars_enabled and self.MONTH_6_ENABLED and self.STARS_PRICE_6_MONTHS is not None:
+            options[6] = self.STARS_PRICE_6_MONTHS
+        if stars_enabled and self.MONTH_12_ENABLED and self.STARS_PRICE_12_MONTHS is not None:
+            options[12] = self.STARS_PRICE_12_MONTHS
+        return options
+
+    @computed_field
+    def traffic_packages(self) -> dict[float, float]:
+        """
+        Mapping of traffic size in GB to price in the default currency.
+        """
+        packages: dict[float, float] = {}
+        raw = (self.TRAFFIC_PACKAGES or "").strip()
+        if not raw:
+            return packages
+        for part in raw.split(","):
+            chunk = part.strip()
+            if not chunk or ":" not in chunk:
+                continue
+            size_str, price_str = chunk.split(":", 1)
+            try:
+                size_gb = float(size_str.strip())
+                price_val = float(price_str.strip())
+                if size_gb > 0 and price_val >= 0:
+                    packages[size_gb] = price_val
+            except ValueError:
+                logger.warning("Invalid TRAFFIC_PACKAGES entry skipped: %s", chunk)
+                continue
+        return packages
+
+    @computed_field
+    def stars_traffic_packages(self) -> dict[float, int]:
+        """
+        Mapping of traffic size in GB to price in Telegram Stars.
+        """
+        packages: dict[float, int] = {}
+        raw = (self.STARS_TRAFFIC_PACKAGES or "").strip()
+        if not raw:
+            return packages
+        for part in raw.split(","):
+            chunk = part.strip()
+            if not chunk or ":" not in chunk:
+                continue
+            size_str, price_str = chunk.split(":", 1)
+            try:
+                size_gb = float(size_str.strip())
+                price_val = int(float(price_str.strip()))
+                if size_gb > 0 and price_val >= 0:
+                    packages[size_gb] = price_val
+            except ValueError:
+                logger.warning("Invalid STARS_TRAFFIC_PACKAGES entry skipped: %s", chunk)
+                continue
+        return packages
+
+    @computed_field
+    def traffic_sale_mode(self) -> bool:
+        """When true, the bot sells traffic packages instead of time-based subscriptions."""
+        if self.tariffs_config is not None:
+            return False
+        return bool(self.traffic_packages or self.stars_traffic_packages)
+
+    @computed_field
+    def tariff_traffic_warning_levels(self) -> list[int]:
+        levels: list[int] = []
+        for part in (self.TARIFF_TRAFFIC_WARNING_LEVELS or "").split(","):
+            chunk = part.strip()
+            if not chunk:
+                continue
+            try:
+                level = int(float(chunk))
+            except ValueError:
+                logger.warning("Invalid TARIFF_TRAFFIC_WARNING_LEVELS entry skipped: %s", chunk)
+                continue
+            if 0 < level < 100 and level not in levels:
+                levels.append(level)
+        return sorted(levels) or [85, 90, 95]
+
+    @computed_field
+    def tariffs_config(self) -> TariffsConfig | None:
+        return load_tariffs_config(self.TARIFFS_CONFIG_PATH)
+
+    @computed_field
+    def webapp_themes_catalog(self) -> WebappThemesConfig:
+        return resolved_webapp_themes_catalog(
+            primary_accent=self.WEBAPP_PRIMARY_COLOR or "#00fe7a",
+            env_default_theme=self.WEBAPP_DEFAULT_THEME,
+            theme_dir=self.WEBAPP_THEMES_DIR,
+        )
+
+    @field_validator("WEBAPP_PRIMARY_COLOR", mode="before")
+    @classmethod
+    def ignore_deprecated_webapp_primary_color_env(cls, _value):
+        return "#00fe7a"
+
+    @field_validator("WEBAPP_LOGO_URL", mode="before")
+    @classmethod
+    def ignore_deprecated_webapp_logo_url_env(cls, _value):
+        return None
+
+    @field_validator("WEBAPP_FAVICON_USE_CUSTOM", mode="before")
+    @classmethod
+    def ignore_deprecated_webapp_favicon_use_custom_env(cls, _value):
+        return False
+
+    @field_validator("WEBAPP_FAVICON_URL", mode="before")
+    @classmethod
+    def ignore_deprecated_webapp_favicon_url_env(cls, _value):
+        return None
+
+    @field_validator("WEBAPP_LOGO_FAVICON_URL", mode="before")
+    @classmethod
+    def ignore_deprecated_webapp_logo_favicon_url_env(cls, _value):
+        return None
+
+    @computed_field
+    def referral_bonus_inviter(self) -> dict[int, int]:
+        bonuses: dict[int, int] = {}
+        if self.REFERRAL_BONUS_DAYS_INVITER_1_MONTH is not None:
+            bonuses[1] = self.REFERRAL_BONUS_DAYS_INVITER_1_MONTH
+        if self.REFERRAL_BONUS_DAYS_INVITER_3_MONTHS is not None:
+            bonuses[3] = self.REFERRAL_BONUS_DAYS_INVITER_3_MONTHS
+        if self.REFERRAL_BONUS_DAYS_INVITER_6_MONTHS is not None:
+            bonuses[6] = self.REFERRAL_BONUS_DAYS_INVITER_6_MONTHS
+        if self.REFERRAL_BONUS_DAYS_INVITER_12_MONTHS is not None:
+            bonuses[12] = self.REFERRAL_BONUS_DAYS_INVITER_12_MONTHS
+        return bonuses
+
+    @computed_field
+    def referral_bonus_referee(self) -> dict[int, int]:
+        bonuses: dict[int, int] = {}
+        if self.REFERRAL_BONUS_DAYS_REFEREE_1_MONTH is not None:
+            bonuses[1] = self.REFERRAL_BONUS_DAYS_REFEREE_1_MONTH
+        if self.REFERRAL_BONUS_DAYS_REFEREE_3_MONTHS is not None:
+            bonuses[3] = self.REFERRAL_BONUS_DAYS_REFEREE_3_MONTHS
+        if self.REFERRAL_BONUS_DAYS_REFEREE_6_MONTHS is not None:
+            bonuses[6] = self.REFERRAL_BONUS_DAYS_REFEREE_6_MONTHS
+        if self.REFERRAL_BONUS_DAYS_REFEREE_12_MONTHS is not None:
+            bonuses[12] = self.REFERRAL_BONUS_DAYS_REFEREE_12_MONTHS
+        return bonuses
+
+    @property
+    def yookassa_autopayments_active(self) -> bool:
+        """Autopay features are available only when YooKassa itself is enabled.
+
+        Proxies into the YooKassaConfig BaseSettings model that lives in the
+        yookassa provider module — env-config is owned by the provider now.
+        """
+        from bot.payment_providers import get_provider_bundle
+
+        bundle = get_provider_bundle("yookassa_service")
+        if bundle is None or bundle.config is None:
+            return False
+        return bool(bundle.config.autopayments_active)
+
+    @computed_field
+    def payment_methods_order(self) -> list[str]:
+        """
+        Ordered list of payment providers to show in the subscription payment keyboard.
+
+        Honors PAYMENT_METHODS_ORDER from the env (user-controlled order), but
+        always appends any newly added provider that the user hasn't listed —
+        otherwise upgrading to a release that adds, say, ``heleket`` would
+        silently hide the new button until the operator manually updated their
+        .env. Toggling the button on/off stays on the per-provider ENABLED
+        flag, not on this list.
+        """
+        from bot.payment_providers import iter_provider_specs
+
+        all_specs = list(iter_provider_specs())
+        spec_ids: list[str] = []
+        seen_ids: set = set()
+        for spec in all_specs:
+            if spec.id not in seen_ids:
+                spec_ids.append(spec.id)
+                seen_ids.add(spec.id)
+
+        default_order = [
+            "freekassa",
+            "platega_sbp",
+            "platega_card",
+            "platega_crypto",
+            "platega_international",
+            "platega_all_methods",
+            "severpay",
+            "wata",
+            "wata_crypto",
+            "yookassa",
+            "stars",
+            "cryptopay",
+            "heleket",
+            "paykilla",
+            "lava",
+            "pally",
+            "cloudpayments",
+            "overpay",
+            "stripe",
+        ]
+        # Make sure default_order itself includes every registered spec.
+        for sid in spec_ids:
+            if sid not in default_order:
+                default_order.append(sid)
+
+        if not self.PAYMENT_METHODS_ORDER:
+            return default_order
+
+        methods: list[str] = []
+        for item in self.PAYMENT_METHODS_ORDER.split(","):
+            slug = item.strip().lower()
+            if not slug:
+                continue
+            if slug == "platega":
+                # Legacy slug — expand to the new sub-methods preserving order
+                if "platega_sbp" not in methods:
+                    methods.append("platega_sbp")
+                if "platega_card" not in methods:
+                    methods.append("platega_card")
+                if "platega_crypto" not in methods:
+                    methods.append("platega_crypto")
+                if "platega_international" not in methods:
+                    methods.append("platega_international")
+                if "platega_all_methods" not in methods:
+                    methods.append("platega_all_methods")
+                continue
+            methods.append(slug)
+        if "platega_card" not in methods and "platega_sbp" in methods:
+            methods.insert(methods.index("platega_sbp") + 1, "platega_card")
+        # Append any registered spec that the operator didn't list — keeps
+        # newly shipped providers visible after an upgrade without forcing a
+        # .env edit. Toggling the button is still controlled by ENABLED.
+        for sid in spec_ids:
+            if sid not in methods:
+                methods.append(sid)
+        return methods or default_order
+
+    def subscription_purchase_description(self, language: str | None = None) -> str:
+        if not self.SUBSCRIPTION_PURCHASE_DESCRIPTION_ENABLED:
+            return ""
+        lang = (language or self.DEFAULT_LANGUAGE or "ru").split("-")[0].lower()
+        text = (
+            self.SUBSCRIPTION_PURCHASE_DESCRIPTION_EN
+            if lang == "en"
+            else self.SUBSCRIPTION_PURCHASE_DESCRIPTION_RU
+        )
+        return (text or "").strip()
+
+    @computed_field
+    def email_auth_configured(self) -> bool:
+        return bool(
+            self.EMAIL_LOGIN_ENABLED and (self.qa_auth_enabled or self.smtp_delivery_configured)
+        )
+
+    @property
+    def email_auth_secret(self) -> str:
+        return self.EMAIL_AUTH_SECRET or self.WEBAPP_SESSION_SECRET
+
+    @computed_field
+    def public_app_url(self) -> str | None:
+        return self.PUBLIC_APP_URL or self.SUBSCRIPTION_MINI_APP_URL
+
+    @computed_field
+    def webapp_auth_providers(self) -> list[str]:
+        providers: list[str] = []
+        if self.TELEGRAM_ENABLED and self.TELEGRAM_LOGIN_ENABLED:
+            providers.append("telegram")
+        if self.email_auth_configured:
+            providers.append("email")
+        if (
+            self.GOOGLE_OIDC_ENABLED
+            and self.GOOGLE_OIDC_CLIENT_ID
+            and self.GOOGLE_OIDC_CLIENT_SECRET
+        ):
+            providers.append("google")
+        if (
+            self.YANDEX_OIDC_ENABLED
+            and self.YANDEX_OIDC_CLIENT_ID
+            and self.YANDEX_OIDC_CLIENT_SECRET
+        ):
+            providers.append("yandex")
+        if (
+            self.DISCORD_OIDC_ENABLED
+            and self.DISCORD_OIDC_CLIENT_ID
+            and self.DISCORD_OIDC_CLIENT_SECRET
+        ):
+            providers.append("discord")
+        if self.PASSKEY_LOGIN_ENABLED:
+            providers.append("passkey")
+        if self.QR_LOGIN_ENABLED:
+            providers.append("qr")
+        return providers
+
+    @computed_field
+    def webapp_recommended_auth_providers(self) -> list[str]:
+        available = set(self.webapp_auth_providers)
+        recommendations = (
+            ("telegram", self.TELEGRAM_LOGIN_RECOMMENDED),
+            ("email", self.EMAIL_LOGIN_RECOMMENDED),
+            ("google", self.GOOGLE_LOGIN_RECOMMENDED),
+            ("yandex", self.YANDEX_LOGIN_RECOMMENDED),
+            ("discord", self.DISCORD_LOGIN_RECOMMENDED),
+            ("passkey", self.PASSKEY_LOGIN_RECOMMENDED),
+        )
+        return [
+            provider
+            for provider, recommended in recommendations
+            if recommended and provider in available
+        ]
+
+    @computed_field
+    def webapp_wide_auth_providers(self) -> list[str]:
+        available = set(self.webapp_auth_providers)
+        preferences = (
+            ("telegram", self.TELEGRAM_LOGIN_WIDE_BUTTON),
+            ("email", self.EMAIL_LOGIN_WIDE_BUTTON),
+            ("google", self.GOOGLE_LOGIN_WIDE_BUTTON),
+            ("yandex", self.YANDEX_LOGIN_WIDE_BUTTON),
+            ("discord", self.DISCORD_LOGIN_WIDE_BUTTON),
+            ("passkey", self.PASSKEY_LOGIN_WIDE_BUTTON),
+            ("qr", self.QR_LOGIN_WIDE_BUTTON),
+        )
+        return [provider for provider, wide in preferences if wide and provider in available]
+
+    @computed_field
+    def smtp_delivery_configured(self) -> bool:
+        return bool(
+            self.SMTP_HOST
+            and self.SMTP_PORT
+            and self.SMTP_USERNAME
+            and self.SMTP_PASSWORD
+            and self.SMTP_FROM_EMAIL
+        )
+
+    @computed_field
+    def smtp_ports_to_try(self) -> list[int]:
+        ports: list[int] = []
+
+        def add_port(value: Any) -> None:
+            try:
+                port = int(str(value).strip())
+            except (TypeError, ValueError):
+                return
+            if 0 < port <= 65535 and port not in ports:
+                ports.append(port)
+
+        add_port(self.SMTP_PORT)
+        for item in (self.SMTP_FALLBACK_PORTS or "").split(","):
+            add_port(item)
+        return ports

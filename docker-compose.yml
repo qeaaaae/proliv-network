@@ -1,0 +1,174 @@
+x-common: &common
+  ulimits:
+    nofile:
+      soft: 1048576
+      hard: 1048576
+  restart: always
+  networks:
+    - remnawave-network
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: 30m
+      max-file: 3
+
+x-env: &env
+  env_file: proliv.env
+
+services:
+  # ---------- Remnawave Panel ----------
+  remnawave:
+    image: remnawave/backend:3
+    container_name: remnawave
+    hostname: remnawave
+    <<: [*common, *logging, *env]
+    volumes:
+      - valkey-socket:/var/run/valkey
+    ports:
+      - 127.0.0.1:3000:${APP_PORT:-3000}
+      - 127.0.0.1:3001:${METRICS_PORT:-3001}
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -f http://localhost:${METRICS_PORT:-3001}/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      remnawave-db:
+        condition: service_healthy
+      remnawave-redis:
+        condition: service_healthy
+
+  remnawave-db:
+    image: postgres:18.4
+    container_name: remnawave-db
+    hostname: remnawave-db
+    shm_size: 512mb
+    <<: [*common, *logging, *env]
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - TZ=UTC
+    ports:
+      - 127.0.0.1:6767:5432
+    volumes:
+      - remnawave-db-data:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 3s
+      timeout: 10s
+      retries: 5
+
+  remnawave-redis:
+    image: valkey/valkey:9-alpine
+    container_name: remnawave-redis
+    hostname: remnawave-redis
+    <<: [*common, *logging]
+    volumes:
+      - valkey-socket:/var/run/valkey
+    command: >
+      valkey-server
+      --save ""
+      --appendonly no
+      --maxmemory-policy noeviction
+      --loglevel warning
+      --unixsocket /var/run/valkey/valkey.sock
+      --unixsocketperm 777
+      --port 0
+    healthcheck:
+      test: ['CMD', 'valkey-cli', '-s', '/var/run/valkey/valkey.sock', 'ping']
+      interval: 3s
+      timeout: 3s
+      retries: 5
+
+  # ---------- Subscription page ----------
+  remnawave-subscription-page:
+    image: remnawave/subscription-page:latest
+    container_name: remnawave-subscription-page
+    hostname: remnawave-subscription-page
+    <<: [*common, *logging]
+    profiles: ['subpage']
+    environment:
+      - APP_PORT=3010
+      - REMNAWAVE_PANEL_URL=http://remnawave:3000
+      - REMNAWAVE_API_TOKEN=${SUBPAGE_API_TOKEN:-change_me}
+      - TRUST_PROXY=1
+    ports:
+      - 127.0.0.1:3010:3010
+    depends_on:
+      remnawave:
+        condition: service_healthy
+
+  # ---------- Local dev proxy: panel требует HTTPS через reverse proxy ----------
+  devproxy:
+    image: caddy:2-alpine
+    container_name: proliv-devproxy
+    restart: unless-stopped
+    networks:
+      - remnawave-network
+      - remnawave-minishop-network
+    profiles: ['dev']
+    volumes:
+      - ./infra/Caddyfile.local:/etc/caddy/Caddyfile:ro
+    ports:
+      - 127.0.0.1:3443:3443
+      - 127.0.0.1:3444:3444
+      - 127.0.0.1:8090:8090
+    depends_on:
+      remnawave:
+        condition: service_started
+
+  # ---------- Landing (Nuxt, static via nginx) ----------
+  landing:
+    build:
+      context: ./landing
+      args:
+        NUXT_PUBLIC_CABINET_URL: ${NUXT_PUBLIC_CABINET_URL:-http://localhost:8082}
+    container_name: proliv-landing
+    restart: unless-stopped
+    profiles: ['site']
+    volumes:
+      - ./status:/usr/share/nginx/html/status:ro
+    ports:
+      - 127.0.0.1:8080:80
+
+  # ---------- Cabinet (личный кабинет, Nuxt SSR server) ----------
+  cabinet:
+    build:
+      context: ./cabinet
+      args:
+        NUXT_PUBLIC_LANDING_URL: ${NUXT_PUBLIC_LANDING_URL:-http://localhost:8080}
+        NUXT_PUBLIC_BOT_USERNAME: ${NUXT_PUBLIC_BOT_USERNAME:-}
+    container_name: proliv-cabinet
+    restart: unless-stopped
+    profiles: ['app']
+    networks:
+      - remnawave-network
+    env_file: proliv.env
+    environment:
+      - NUXT_PUBLIC_DEV_AUTH=${NUXT_PUBLIC_DEV_AUTH:-1}
+      # Внутренний URL WebApp API бэкенда (minishop), по docker-сети
+      - NUXT_SHOP_API_URL=${NUXT_SHOP_API_URL:-http://remnawave-minishop-backend:8081}
+    ports:
+      - 127.0.0.1:8082:80
+
+  # ---------- TG shop bot ----------
+  # См. infra/bot.md. Запуск:
+  # docker compose --env-file infra/tg-shop.env -f docker-compose.yml -f infra/tg-shop.compose.yml up -d
+
+networks:
+  remnawave-network:
+    name: remnawave-network
+    driver: bridge
+  remnawave-minishop-network:
+    name: remnawave-minishop-network
+    external: true
+
+volumes:
+  remnawave-db-data:
+    name: remnawave-db-data
+  valkey-socket:
+    name: valkey-socket

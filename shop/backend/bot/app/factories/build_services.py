@@ -1,0 +1,147 @@
+import logging
+from typing import cast
+
+from aiogram import Bot
+from sqlalchemy.orm import sessionmaker
+
+from bot.app.factories.core_services import CoreServices
+from bot.middlewares.i18n import JsonI18n
+from bot.payment_providers import (
+    ServiceFactoryContext,
+    build_provider_configs,
+    build_provider_services,
+    managed_recurring_provider_services,
+    recurring_provider_services,
+)
+from bot.payment_providers.shared import RecurringProviderService
+from bot.services.audience_segmentation import AudienceSegmentationService
+from bot.services.balance_recurring import BalanceRecurringService
+from bot.services.email_auth_service import EmailAuthService
+from bot.services.notification_service import NotificationService
+from bot.services.outbound_messaging import OutboundMessagingService
+from bot.services.panel_api_service import PanelApiService
+from bot.services.panel_dry_run_api_service import PanelDryRunApiService
+from bot.services.panel_webhook_service import PanelWebhookService
+from bot.services.partner_commission_service import PartnerCommissionService
+from bot.services.partner_program_service import PartnerProgramService
+from bot.services.partner_withdrawal_service import PartnerWithdrawalService
+from bot.services.promo_code_service import PromoCodeService
+from bot.services.referral_service import ReferralService
+from bot.services.subscription_service_impl.core import SubscriptionService
+from bot.services.support_service import SupportService
+from config.settings import Settings
+
+logger = logging.getLogger(__name__)
+
+
+def build_core_services(
+    settings: Settings,
+    bot: Bot | None,
+    async_session_factory: sessionmaker,
+    i18n: JsonI18n,
+    bot_username_for_default_return: str,
+) -> CoreServices:
+    panel_service = (
+        PanelDryRunApiService(settings)
+        if bool(settings.panel_dry_run_enabled)
+        else PanelApiService(settings)
+    )
+    subscription_service = SubscriptionService(settings, panel_service, bot, i18n)
+    referral_service = ReferralService(settings, subscription_service, bot, i18n)
+    promo_code_service = PromoCodeService(settings, subscription_service, bot, i18n)
+    email_auth_service = EmailAuthService(settings, i18n)
+    notification_service = NotificationService(
+        bot,
+        settings,
+        i18n,
+        session_factory=async_session_factory,
+        email_auth_service=email_auth_service,
+        bot_username=bot_username_for_default_return,
+    )
+    support_service = SupportService(
+        async_session_factory,
+        settings,
+        bot,
+        i18n,
+        notification_service,
+        email_auth_service,
+    )
+    panel_webhook_service = PanelWebhookService(
+        bot, settings, i18n, async_session_factory, panel_service
+    )
+    audience_segmentation_service = AudienceSegmentationService(
+        async_session_factory,
+        panel_service=panel_service,
+        tariffs=_broadcast_tariff_audiences(settings),
+    )
+    outbound_messaging_service = OutboundMessagingService(bot)
+    partner_program_service = PartnerProgramService(settings)
+    partner_commission_service = PartnerCommissionService(settings)
+    partner_withdrawal_service = PartnerWithdrawalService(settings)
+    provider_configs = build_provider_configs()
+    payment_services = build_provider_services(
+        ServiceFactoryContext(
+            settings=settings,
+            bot=bot,
+            async_session_factory=async_session_factory,
+            i18n=i18n,
+            bot_username_for_default_return=bot_username_for_default_return,
+            subscription_service=subscription_service,
+            referral_service=referral_service,
+            provider_configs=provider_configs,
+        )
+    )
+    # These attachments are critical for auto-renew and panel pre-expiry hooks.
+    subscription_service.yookassa_service = cast(
+        RecurringProviderService | None,
+        payment_services.get("yookassa_service"),
+    )
+    subscription_service.recurring_provider_services = recurring_provider_services(payment_services)
+    for balance_provider in ("user_balance", "partner_balance"):
+        subscription_service.recurring_provider_services[balance_provider] = (
+            BalanceRecurringService(
+                settings,
+                provider=balance_provider,
+                subscription_service=subscription_service,
+                referral_service=referral_service,
+                bot=bot,
+                i18n=i18n,
+            )
+        )
+    subscription_service.managed_recurring_provider_services = managed_recurring_provider_services(
+        payment_services
+    )
+    panel_webhook_service.subscription_service = subscription_service
+
+    return CoreServices(
+        panel_service=panel_service,
+        subscription_service=subscription_service,
+        referral_service=referral_service,
+        promo_code_service=promo_code_service,
+        notification_service=notification_service,
+        email_auth_service=email_auth_service,
+        support_service=support_service,
+        panel_webhook_service=panel_webhook_service,
+        audience_segmentation_service=audience_segmentation_service,
+        outbound_messaging_service=outbound_messaging_service,
+        partner_program_service=partner_program_service,
+        partner_commission_service=partner_commission_service,
+        partner_withdrawal_service=partner_withdrawal_service,
+        payment_services=payment_services,
+    )
+
+
+def _broadcast_tariff_audiences(settings: Settings) -> list[tuple[str, str]]:
+    """Offer every configured tariff as its own broadcast audience.
+
+    Reads the configured catalog rather than the database, so a tariff shows up
+    as a target even when hidden from the storefront or before anyone buys it.
+    A broken or absent catalog simply means no tariff audiences.
+    """
+
+    try:
+        tariffs = settings.tariffs_config.tariffs
+    except Exception:
+        logger.debug("Broadcast tariff audiences are unavailable", exc_info=True)
+        return []
+    return [(str(tariff.key), tariff.name("ru")) for tariff in tariffs if tariff.key]

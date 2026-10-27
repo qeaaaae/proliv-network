@@ -1,0 +1,772 @@
+<script lang="ts">
+  import BrandMark from "$lib/webapp/BrandMark.svelte";
+  import { Button } from "$components/ui/index.js";
+  import type { AppActionRuntime } from "../lib/webapp/appActionRuntime.js";
+  import type { AppShellView } from "../lib/webapp/appShellView.js";
+  import type { AccountStore } from "../lib/webapp/stores/accountStore.js";
+  import type { ActionsStore } from "../lib/webapp/stores/actionsStore.js";
+  import type { AuthStore } from "../lib/webapp/stores/authStore.js";
+  import type { BillingStore } from "../lib/webapp/stores/billingStore.js";
+  import type { DevicesStore } from "../lib/webapp/stores/devicesStore.js";
+  import type { SupportStore } from "../lib/webapp/stores/supportStore.js";
+  import type { ServerStatusStore } from "../lib/webapp/stores/serverStatusStore.svelte.js";
+  import type { ApiClient } from "../lib/webapp/publicApi.js";
+  import type { WebappDataClient } from "../lib/webapp/dataClient.js";
+  import AppLaunchScreen from "./screens/AppLaunchScreen.svelte";
+  import AuthenticatedDialogs from "./AuthenticatedDialogs.svelte";
+  import TrialCaptchaDialog from "./security/TrialCaptchaDialog.svelte";
+  import { lazyScreen } from "$lib/webapp/lazyScreen.svelte.js";
+  import {
+    activeThemeOption,
+    themeOptions as buildThemeOptions,
+    themeSwitcherAvailable,
+  } from "$lib/webapp/themePreference.js";
+
+  import AuthenticatedScreens from "./AuthenticatedScreens.svelte";
+  import ScreenLoading from "./screens/ScreenLoading.svelte";
+  import MaintenanceScreen from "./screens/MaintenanceScreen.svelte";
+  import AuthScreen from "./auth/AuthScreen.svelte";
+  import CheckoutEntryScreen from "./checkout/CheckoutEntryScreen.svelte";
+  import PaymentCheckoutDialog from "./payment-dialogs/PaymentCheckoutDialog.svelte";
+  import GiftFeature from "./gifts/GiftFeature.svelte";
+  import type { CheckoutDeeplink } from "$lib/webapp/deeplinks.js";
+  import {
+    type BooleanAction,
+    type BalanceView,
+    type PendingPaymentView,
+    type PlanView,
+    type StringAction,
+    type SubscriptionView,
+    type TermUnitLabel,
+    type Translate,
+    type VoidAction,
+    type WebappConfig,
+    type WebappRecord,
+  } from "$lib/webapp/types.js";
+
+  type SubmitEmailOnEnterAction = (event: KeyboardEvent) => void;
+
+  type AppModeStores = {
+    api: ApiClient["api"];
+    dataClient: WebappDataClient;
+    accountStore: AccountStore;
+    actionsStore: ActionsStore;
+    authStore: AuthStore;
+    billingStore: BillingStore;
+    giftBillingStore: BillingStore;
+    devicesStore: DevicesStore;
+    supportStore: SupportStore;
+    serverStatusStore: ServerStatusStore;
+  };
+
+  type AppModeViewState = {
+    activationSuccessDialogOpen: boolean;
+    activationSuccessUseInstallGuides: boolean;
+    activeTab: string;
+    adminBundleApi: WebappRecord | null;
+    adminBundleError: string;
+    appLaunchTarget: string;
+    autoRenewBusy: boolean;
+    creatorCancelStep: 0 | 1 | 2;
+    subscriptionReissueDialogOpen: boolean;
+    subscriptionReissueBusy: boolean;
+    cfg: WebappConfig;
+    checkoutDeeplink: CheckoutDeeplink | null;
+    checkoutEntryRequested: boolean;
+    checkoutPlans: PlanView[];
+    languageBusy: boolean;
+    languageClickGuard: boolean;
+    languageClickGuardArmed: boolean;
+    mode: string;
+    themePreference: string;
+    systemColorScheme: string;
+    publicInstallSubscription: SubscriptionView | null;
+    publicInstallToken: string;
+    telegramPlatform: string;
+  };
+
+  type AppModeControls = {
+    closeActivationSuccessDialog: VoidAction;
+    setLanguageMenuOpen: BooleanAction;
+    setThemePreference: StringAction;
+    setPasswordLoginMode: BooleanAction;
+    submitEmailOnEnter: SubmitEmailOnEnterAction;
+    t: Translate;
+    termUnitLabel: TermUnitLabel;
+    updateGuestLanguage: StringAction;
+  };
+
+  type Props = {
+    routePrefix?: string;
+    stores: AppModeStores;
+    shellView: AppShellView;
+    appActions: AppActionRuntime;
+    viewState: AppModeViewState;
+    controls: AppModeControls;
+    adminMountTarget?: HTMLElement | null;
+    languageMenuOpen?: boolean;
+    screen?: string;
+  };
+
+  let {
+    routePrefix = "",
+    stores,
+    shellView,
+    appActions,
+    viewState,
+    controls,
+    adminMountTarget = $bindable(null),
+    languageMenuOpen = $bindable(false),
+    screen = $bindable("home"),
+  }: Props = $props();
+
+  const accountStore = $derived(stores.accountStore);
+  const actionsStore = $derived(stores.actionsStore);
+  const authStore = $derived(stores.authStore);
+  const billingStore = $derived(stores.billingStore);
+  const devicesStore = $derived(stores.devicesStore);
+  const supportStore = $derived(stores.supportStore);
+  const serverStatusStore = $derived(stores.serverStatusStore);
+
+  const closeActivationSuccessDialog = $derived(controls.closeActivationSuccessDialog);
+  const setLanguageMenuOpen = $derived(controls.setLanguageMenuOpen);
+  const setPasswordLoginMode = $derived(controls.setPasswordLoginMode);
+  const submitEmailOnEnter = $derived(controls.submitEmailOnEnter);
+  const t = $derived(controls.t);
+  const termUnitLabel = $derived(controls.termUnitLabel);
+  const updateGuestLanguage = $derived(controls.updateGuestLanguage);
+
+  const activationSuccessDialogOpen = $derived(viewState.activationSuccessDialogOpen);
+  const activationSuccessUseInstallGuides = $derived(viewState.activationSuccessUseInstallGuides);
+  const activeTab = $derived(viewState.activeTab);
+  const adminBundleApi = $derived(viewState.adminBundleApi);
+  const adminBundleError = $derived(viewState.adminBundleError);
+  const appLaunchTarget = $derived(viewState.appLaunchTarget);
+  const autoRenewBusy = $derived(viewState.autoRenewBusy);
+  const creatorCancelStep = $derived(viewState.creatorCancelStep);
+  const subscriptionReissueDialogOpen = $derived(viewState.subscriptionReissueDialogOpen);
+  const subscriptionReissueBusy = $derived(viewState.subscriptionReissueBusy);
+  const cfg = $derived(viewState.cfg);
+  const checkoutDeeplink = $derived(viewState.checkoutDeeplink);
+  const checkoutEntryRequested = $derived(viewState.checkoutEntryRequested);
+  const checkoutPlans = $derived(viewState.checkoutPlans);
+  const languageBusy = $derived(viewState.languageBusy);
+  const languageClickGuard = $derived(viewState.languageClickGuard);
+  const languageClickGuardArmed = $derived(viewState.languageClickGuardArmed);
+  const mode = $derived(viewState.mode);
+  const publicInstallSubscription = $derived(viewState.publicInstallSubscription);
+  const publicInstallToken = $derived(viewState.publicInstallToken);
+  const telegramPlatform = $derived(viewState.telegramPlatform);
+
+  const authState = $derived(authStore);
+  const accountView = $derived(shellView.accountView);
+  const appDataView = $derived(shellView.appDataView);
+  const billingView = $derived(shellView.billingView);
+  const languageView = $derived(shellView.languageView);
+  const telegramLoginView = $derived(shellView.telegramLoginView);
+  const themeView = $derived(shellView.themeView);
+
+  const authStatus = $derived(authState.authStatus);
+  const authIsError = $derived(authState.authIsError);
+  const authBusy = $derived(authState.authBusy);
+  const telegramLoginBusy = $derived(authState.telegramLoginBusy);
+  let loginEmailFieldError = $state("");
+  let loginEmailTooltipOpen = $state(false);
+  const passwordLoginFallback = $derived(authState.passwordLoginFallback);
+  const passwordLoginMode = $derived(authState.passwordLoginMode);
+  const authResendCooldown = $derived(authState.authResendCooldown);
+  const pendingEmail = $derived(authState.pendingEmail);
+
+  const devicesData = $derived(devicesStore.devicesData);
+  const devicesLoaded = $derived(devicesStore.devicesLoaded);
+  const devicesBusy = $derived(devicesStore.devicesBusy);
+  const devicesStatus = $derived(devicesStore.devicesStatus);
+  const devicesIsError = $derived(devicesStore.devicesIsError);
+  const devicesErrorCode = $derived(devicesStore.devicesErrorCode);
+
+  const supportUnreadCount = $derived(supportStore.unreadCount);
+  const supportUnreadLoading = $derived(supportStore.unreadLoading);
+  const supportUnreadLoaded = $derived(supportStore.unreadLoaded);
+  const linkTelegramBusy = $derived(accountStore.linkTelegramBusy);
+
+  const promoCode = $derived(actionsStore.promoCode);
+  const promoBusy = $derived(actionsStore.promoBusy);
+  const promoStatus = $derived(actionsStore.promoStatus);
+  const promoIsError = $derived(actionsStore.promoIsError);
+  const promoFieldError = $derived(actionsStore.promoFieldError);
+  const trialBusy = $derived(actionsStore.trialBusy);
+  const trialActivationResult = $derived(actionsStore.trialActivationResult);
+  const trialActivationError = $derived(actionsStore.trialActivationError);
+
+  $effect(() => {
+    loginEmailFieldError = authState.loginEmailFieldError ?? loginEmailFieldError;
+    loginEmailTooltipOpen = authState.loginEmailTooltipOpen ?? loginEmailTooltipOpen;
+  });
+
+  const hasUnlinkedIdentity = $derived(accountView.hasUnlinkedIdentity);
+  const privacyPolicyUrl = $derived(accountView.privacyPolicyUrl);
+  const profileAvatarUrl = $derived(accountView.profileAvatarUrl);
+  const profileEmail = $derived(accountView.profileEmail);
+  const profileTelegramId = $derived(accountView.profileTelegramId);
+  const serverStatusInternal = $derived(cfg.serverStatusInternal === true);
+  const serverStatusShowOnHome = $derived(cfg.serverStatusShowOnHome === true);
+  const compactHomeEnabled = $derived(cfg.compactHomeEnabled === true);
+  const checkoutAddonValueAnimationEnabled = $derived(
+    cfg.checkoutAddonValueAnimationEnabled !== false
+  );
+  const checkoutAddonEditorExpandedByDefault = $derived(
+    cfg.checkoutAddonEditorExpandedByDefault === true
+  );
+  const serverStatusUrl = $derived(accountView.serverStatusUrl);
+  const supportUrl = $derived(accountView.supportUrl);
+  const telegramNotificationsNeedPrompt = $derived(accountView.telegramNotificationsNeedPrompt);
+  const telegramNotificationsStartLink = $derived(accountView.telegramNotificationsStartLink);
+  const telegramNotificationsStatus = $derived(accountView.telegramNotificationsStatus);
+  const telegramProfileName = $derived(accountView.telegramProfileName);
+  const userAgreementUrl = $derived(accountView.userAgreementUrl);
+
+  const appSettings = $derived(appDataView.appSettings);
+  const balance = $derived(appDataView.balance as BalanceView);
+  const brand = $derived(appDataView.brand);
+  const brandTitle = $derived(appDataView.brandTitle);
+  const devicesEnabled = $derived(appDataView.devicesEnabled);
+  const subscriptionReissueEnabled = $derived(appDataView.subscriptionReissueEnabled);
+  const emailAuthEnabled = $derived(appDataView.emailAuthEnabled);
+  const notificationPreferencesEnabled = $derived(appDataView.notificationPreferencesEnabled);
+  const methods = $derived(appDataView.methods);
+  const paymentMethodsDisplayMode = $derived(
+    String(appSettings.payment_methods_display_mode || "dropdown")
+  );
+  const pendingPayment = $derived(appDataView.pendingPayment as PendingPaymentView | null);
+  const plans = $derived(appDataView.plans);
+  const referral = $derived(appDataView.referral);
+  const referralBonusDetails = $derived(appDataView.referralBonusDetails);
+  const referralOneBonusPerReferee = $derived(appDataView.referralOneBonusPerReferee);
+  const referralProgramEnabled = $derived(appDataView.referralProgramEnabled);
+  const referralWelcomeBonusDays = $derived(appDataView.referralWelcomeBonusDays);
+  const subscription = $derived(appDataView.subscription);
+  const subscriptionPurchaseDescription = $derived(appDataView.subscriptionPurchaseDescription);
+  const supportEnabled = $derived(appDataView.supportEnabled);
+  const partnerEnabled = $derived(appDataView.partnerProgramEnabled);
+
+  const canChangeTariff = $derived(billingView.canChangeTariff);
+  const currentTariffName = $derived(billingView.currentTariffName);
+  const hasActiveTariffSubscription = $derived(billingView.hasActiveTariffSubscription);
+  const hasMultipleTariffs = $derived(billingView.hasMultipleTariffs);
+  const premiumTrafficTopupBarClickable = $derived(billingView.premiumTrafficTopupBarClickable);
+  const premiumTrafficTopupUnlocked = $derived(billingView.premiumTrafficTopupUnlocked);
+  const regularTrafficTopupBarClickable = $derived(billingView.regularTrafficTopupBarClickable);
+  const regularTrafficTopupUnlocked = $derived(billingView.regularTrafficTopupUnlocked);
+  const selectedTariff = $derived(billingView.selectedTariff);
+  const selectedTariffPlans = $derived(billingView.selectedTariffPlans);
+  const singleTariffMode = $derived(billingView.singleTariffMode);
+  const tariffCatalog = $derived(billingView.tariffCatalog);
+  const tariffMode = $derived(billingView.tariffMode);
+  const trafficMode = $derived(billingView.trafficMode);
+  const canReturnToTariffList = $derived(
+    hasMultipleTariffs &&
+      !singleTariffMode &&
+      !(
+        subscription?.active &&
+        subscription?.tariff_key &&
+        tariffCatalog.some((tariff) => tariff.key === subscription.tariff_key)
+      )
+  );
+
+  const currentLang = $derived(shellView.currentLang);
+  const isAdmin = $derived(shellView.isAdmin);
+  const currentLanguageOption = $derived(languageView.currentLanguageOption ?? null);
+  const languageOptions = $derived(languageView.languageOptions);
+  const telegramLoginChecking = $derived(telegramLoginView.telegramLoginChecking);
+  const telegramLoginLabel = $derived(telegramLoginView.telegramLoginLabel);
+  const telegramLoginUnavailable = $derived(telegramLoginView.telegramLoginUnavailable);
+  const telegramLoginUnavailableMessage = $derived(
+    telegramLoginView.telegramLoginUnavailableMessage
+  );
+  const telegramMiniAppContext = $derived(shellView.telegramMiniAppContext);
+  const shellStyle = $derived(themeView.shellStyle);
+  const shellThemeClass = $derived(themeView.shellThemeClass);
+  const themePreference = $derived(activeThemeOption(viewState.themePreference));
+  const themeSwitcherVisible = $derived(
+    themeView.userThemeModeEnabled && themeSwitcherAvailable(themeView.themesCatalog)
+  );
+  const themeOptions = $derived(
+    buildThemeOptions(
+      t("wa_settings_theme_auto"),
+      t("wa_settings_theme_light"),
+      t("wa_settings_theme_dark")
+    )
+  );
+  const setThemePreference = $derived(controls.setThemePreference);
+  const shellToneClass = $derived(themeView.shellToneClass);
+  const user = $derived(shellView.user);
+  const userLanguage = $derived(shellView.userLanguage);
+
+  const activateTrial = $derived(appActions.activateTrial);
+  const applyPromo = $derived(appActions.applyPromo);
+  const backToTariffList = $derived(appActions.backToTariffList);
+  const clearPromoFieldError = $derived(appActions.clearPromoFieldError);
+  const closeDeviceTopupModal = $derived(appActions.closeDeviceTopupModal);
+  const continueWithSelectedTariff = $derived(appActions.continueWithSelectedTariff);
+  const copyText = $derived(appActions.copyText);
+  const disconnectDevice = $derived(appActions.disconnectDevice);
+  const openSubscriptionReissueDialog = $derived(appActions.openSubscriptionReissueDialog);
+  const closeSubscriptionReissueDialog = $derived(appActions.closeSubscriptionReissueDialog);
+  const confirmSubscriptionReissue = $derived(appActions.confirmSubscriptionReissue);
+  const goDevices = $derived(appActions.goDevices);
+  const goHome = $derived(appActions.goHome);
+  const goInstall = $derived(appActions.goInstall);
+  const goInvite = $derived(appActions.goInvite);
+  const goPartner = $derived(appActions.goPartner);
+  const goSettings = $derived(appActions.goSettings);
+  const goNotifications = $derived(appActions.goNotifications);
+  const goPaymentHistory = $derived(appActions.goPaymentHistory);
+  const goSecurity = $derived(appActions.goSecurity);
+  const goTrial = $derived(appActions.goTrial);
+  const goStatus = $derived(appActions.goStatus);
+  const goSupport = $derived(appActions.goSupport);
+
+  $effect(() => {
+    if (screen === "notifications" && !notificationPreferencesEnabled) {
+      goSettings();
+    }
+  });
+  const linkTelegramAndActivateTrial = $derived(appActions.linkTelegramAndActivateTrial);
+  const linkTelegramAndClaimReferralWelcome = $derived(
+    appActions.linkTelegramAndClaimReferralWelcome
+  );
+  const loadDevices = $derived(appActions.loadDevices);
+  const openAdminPanel = $derived(appActions.openAdminPanel);
+  // Same chunk the authenticated install tab loads, so a customer who has
+  // already opened one path gets the other for free.
+  const installGuideScreen = lazyScreen(() => import("./screens/InstallGuideScreen.svelte"));
+
+  $effect(() => {
+    if (mode === "publicInstall") installGuideScreen.load();
+  });
+  const openAppLaunchTarget = $derived(appActions.openAppLaunchTarget);
+  const openAppLink = $derived(appActions.openAppLink);
+  const openConnectLink = $derived(appActions.openConnectLink);
+  const openDeviceTopupModal = $derived(appActions.openDeviceTopupModal);
+  const openExternalLink = $derived(appActions.openExternalLink);
+  const openInstallOrConnect = $derived(appActions.openInstallOrConnect);
+  const openLoginTelegram = $derived(appActions.openLoginTelegram);
+  const openPaymentModal = $derived(appActions.openPaymentModal);
+  const openPremiumTopupModal = $derived(appActions.openPremiumTopupModal);
+  const openPublicConnectLink = $derived(appActions.openPublicConnectLink);
+  const openRegularTopupModal = $derived(appActions.openRegularTopupModal);
+  const openSettingsLinkEmailDialog = $derived(appActions.openSettingsLinkEmailDialog);
+  const openSettingsSetPasswordDialog = $derived(appActions.openSettingsSetPasswordDialog);
+  const openTariffChangeModal = $derived(appActions.openTariffChangeModal);
+  const openTelegramNotificationsBot = $derived(appActions.openTelegramNotificationsBot);
+  const openTrialInstallOrConnect = $derived(appActions.openTrialInstallOrConnect);
+  const primaryPayActionLabel = $derived(appActions.primaryPayActionLabel);
+  const refreshAppLaunchTarget = $derived(appActions.refreshAppLaunchTarget);
+  const selectTariff = $derived(appActions.selectTariff);
+  const setPromoCode = $derived(appActions.setPromoCode);
+  const toggleAutoRenew = $derived(appActions.toggleAutoRenew);
+</script>
+
+<div class="app-shell {shellToneClass} {shellThemeClass}" style={shellStyle}>
+  {#if mode !== "maintenance"}
+    <GiftFeature
+      api={stores.api}
+      billing={stores.giftBillingStore}
+      userId={String(user?.id ?? "")}
+      userLabel={String(user?.email || user?.username || user?.id || "")}
+      loggedIn={mode === "app"}
+      guestPromptBlocked={checkoutEntryRequested}
+      enabled={typeof appSettings.gifts_enabled === "boolean"
+        ? appSettings.gifts_enabled
+        : undefined}
+      {methods}
+      {paymentMethodsDisplayMode}
+      {pendingPayment}
+      {checkoutAddonValueAnimationEnabled}
+      {checkoutAddonEditorExpandedByDefault}
+      {t}
+      {termUnitLabel}
+      onactivated={async () => {
+        await stores.dataClient.loadData({ fresh: true });
+        goHome();
+      }}
+    />
+  {/if}
+  {#if mode === "maintenance"}
+    <MaintenanceScreen {brand} {brandTitle} {t} />
+  {:else if mode === "bootError"}
+    <div class="loader" role="alert">
+      <BrandMark {brand} size="md" />
+      <div>{t("wa_boot_failed")}</div>
+      <Button onclick={() => window.location.reload()}>{t("wa_retry")}</Button>
+    </div>
+  {:else if mode === "loading"}
+    <div class="loader">
+      <BrandMark {brand} size="md" />
+      <div>{t("wa_loading")}</div>
+    </div>
+  {:else if mode === "appLaunch"}
+    <AppLaunchScreen {brand} {appLaunchTarget} {refreshAppLaunchTarget} {openAppLaunchTarget} {t} />
+  {:else if mode === "publicInstall"}
+    <div class="public-install-shell">
+      <a class="public-install-brand" href="/" aria-label={brandTitle}>
+        <BrandMark {brand} />
+        <strong>{brandTitle}</strong>
+      </a>
+      {#if installGuideScreen.component}
+        {@const Screen = installGuideScreen.component}
+        <Screen
+          {currentLang}
+          {telegramPlatform}
+          user={{}}
+          subscription={publicInstallSubscription || {
+            install_share_token: publicInstallToken,
+          }}
+          {goHome}
+          openConnectLink={openPublicConnectLink}
+          {openExternalLink}
+          {openAppLink}
+          {copyText}
+          {t}
+          publicMode
+        />
+      {:else}
+        <ScreenLoading screen={installGuideScreen} {t} />
+      {/if}
+    </div>
+  {:else if mode === "login" && checkoutEntryRequested && emailAuthEnabled}
+    <CheckoutEntryScreen
+      {screen}
+      {brand}
+      {brandTitle}
+      plans={checkoutPlans}
+      deeplink={checkoutDeeplink}
+      bind:email={authStore.email}
+      bind:emailCode={authStore.emailCode}
+      {pendingEmail}
+      {authStatus}
+      {authIsError}
+      {authBusy}
+      {authResendCooldown}
+      {loginEmailFieldError}
+      {privacyPolicyUrl}
+      {userAgreementUrl}
+      {openExternalLink}
+      {submitEmailOnEnter}
+      {t}
+      requestEmailCode={() =>
+        authStore.requestEmailCode((nextScreen: string) => (screen = nextScreen))}
+      verifyEmailCode={authStore.verifyEmailCode}
+      onBackToEmail={() => {
+        screen = "login";
+      }}
+      clearLoginEmailError={() => {
+        loginEmailFieldError = "";
+        loginEmailTooltipOpen = false;
+      }}
+    />
+  {:else if mode === "login"}
+    <AuthScreen
+      {screen}
+      CFG={cfg}
+      {brandTitle}
+      {brand}
+      bind:email={authStore.email}
+      bind:emailPassword={authStore.emailPassword}
+      bind:emailCode={authStore.emailCode}
+      {pendingEmail}
+      {authStatus}
+      {authIsError}
+      {authBusy}
+      {authResendCooldown}
+      {loginEmailFieldError}
+      {loginEmailTooltipOpen}
+      {passwordLoginFallback}
+      {passwordLoginMode}
+      {telegramLoginBusy}
+      {telegramLoginUnavailable}
+      {telegramLoginChecking}
+      {telegramLoginLabel}
+      {telegramLoginUnavailableMessage}
+      {privacyPolicyUrl}
+      {userAgreementUrl}
+      {currentLang}
+      {currentLanguageOption}
+      {languageOptions}
+      {languageMenuOpen}
+      {languageClickGuard}
+      {languageClickGuardArmed}
+      {t}
+      {setLanguageMenuOpen}
+      updateLoginLanguage={updateGuestLanguage}
+      requestEmailCode={() =>
+        authStore.requestEmailCode((nextScreen: string) => (screen = nextScreen))}
+      loginWithEmailPassword={authStore.loginWithEmailPassword}
+      verifyEmailCode={authStore.verifyEmailCode}
+      openTelegramLogin={openLoginTelegram}
+      {openExternalLink}
+      {submitEmailOnEnter}
+      onBackToLogin={() => {
+        void authStore.cancelPendingExternalOauth();
+        screen = "login";
+      }}
+      clearLoginEmailError={() => {
+        loginEmailFieldError = "";
+        loginEmailTooltipOpen = false;
+      }}
+      setPasswordLoginMode={(enabled: boolean) => setPasswordLoginMode(enabled)}
+    />
+  {:else if checkoutEntryRequested && billingStore.paymentModalOpen}
+    <CheckoutEntryScreen
+      {brand}
+      {brandTitle}
+      deeplink={checkoutDeeplink}
+      flowStep="payment"
+      paymentPlan={billingStore.selectedPlan}
+      paymentStep={billingStore.paymentStep}
+      paymentTariff={selectedTariff}
+      canChangePaymentPlan={canReturnToTariffList}
+      onChangePaymentPlan={backToTariffList}
+      {t}
+    >
+      <PaymentCheckoutDialog
+        api={stores.api}
+        inline
+        createPayment={billingStore.createPayment}
+        resumePendingPayment={billingStore.resumePendingPayment}
+        cancelPendingPayment={billingStore.cancelPendingPayment}
+        bind:paymentModalOpen={billingStore.paymentModalOpen}
+        bind:paymentStep={billingStore.paymentStep}
+        bind:selectedMethod={billingStore.selectedMethod}
+        bind:selectedPlan={billingStore.selectedPlan}
+        bind:renewHwidDevices={billingStore.renewHwidDevices}
+        bind:selectedTariffKey={billingStore.selectedTariffKey}
+        {hasMultipleTariffs}
+        {methods}
+        {paymentMethodsDisplayMode}
+        {pendingPayment}
+        payBusy={billingStore.payBusy}
+        {plans}
+        {selectedTariff}
+        {selectedTariffPlans}
+        {singleTariffMode}
+        {subscription}
+        {subscriptionPurchaseDescription}
+        {tariffCatalog}
+        {tariffMode}
+        {trafficMode}
+        {checkoutAddonValueAnimationEnabled}
+        {checkoutAddonEditorExpandedByDefault}
+        closePaymentModal={billingStore.closePaymentModal}
+        checkoutPromoInput={billingStore.checkoutPromoInput}
+        checkoutPromoAppliedCode={billingStore.checkoutPromoAppliedCode}
+        checkoutPromoIsError={billingStore.checkoutPromoIsError}
+        checkoutPromoPriceText={billingStore.checkoutPromoPriceText}
+        checkoutPromoEffectiveAmount={billingStore.checkoutPromoEffectiveAmount}
+        checkoutPromoStatus={billingStore.checkoutPromoStatus}
+        checkoutPromoDiscountPercent={billingStore.checkoutPromoDiscountPercent}
+        checkoutPromoAppliesTo={billingStore.checkoutPromoAppliesTo}
+        checkoutPromoMinSubscriptionDays={billingStore.checkoutPromoMinSubscriptionDays}
+        checkoutPromoMinTrafficGb={billingStore.checkoutPromoMinTrafficGb}
+        checkoutAddonPreset={billingStore.checkoutAddonPreset}
+        applyCheckoutPromo={billingStore.applyCheckoutPromo}
+        clearCheckoutPromo={billingStore.clearCheckoutPromo}
+        setCheckoutPromoInput={billingStore.setCheckoutPromoInput}
+        {backToTariffList}
+        {continueWithSelectedTariff}
+        {selectTariff}
+        {t}
+        {termUnitLabel}
+      />
+    </CheckoutEntryScreen>
+  {:else if screen === "admin" && isAdmin}
+    {#if adminBundleApi}
+      <div class="admin-mount" bind:this={adminMountTarget}></div>
+    {:else}
+      <div class="loader">
+        <BrandMark {brand} size="md" />
+        <div>{adminBundleError ? t("wa_unavailable") : t("wa_loading")}</div>
+      </div>
+    {/if}
+  {:else}
+    <AuthenticatedScreens
+      apiClient={stores.dataClient.apiClient}
+      {routePrefix}
+      api={stores.api}
+      {accountStore}
+      {activateTrial}
+      {activeTab}
+      {appSettings}
+      {balance}
+      {applyPromo}
+      {autoRenewBusy}
+      {brand}
+      {brandTitle}
+      {canChangeTariff}
+      {clearPromoFieldError}
+      {copyText}
+      {currentLang}
+      {currentLanguageOption}
+      {themeOptions}
+      {themePreference}
+      {themeSwitcherVisible}
+      {setThemePreference}
+      referralBonusListMode={themeView.referralBonusListMode}
+      homeElementVisibility={themeView.homeElementVisibility}
+      {currentTariffName}
+      {devicesBusy}
+      {devicesData}
+      {devicesEnabled}
+      {subscriptionReissueEnabled}
+      {subscriptionReissueBusy}
+      {openSubscriptionReissueDialog}
+      {devicesErrorCode}
+      {devicesIsError}
+      {devicesLoaded}
+      {devicesStatus}
+      {devicesStore}
+      {emailAuthEnabled}
+      {notificationPreferencesEnabled}
+      {goDevices}
+      {goHome}
+      {goInstall}
+      {goInvite}
+      {goPartner}
+      {partnerEnabled}
+      {goSettings}
+      {goNotifications}
+      {goPaymentHistory}
+      {goSecurity}
+      {goTrial}
+      {goStatus}
+      {goSupport}
+      {hasActiveTariffSubscription}
+      {hasMultipleTariffs}
+      {hasUnlinkedIdentity}
+      {isAdmin}
+      {languageBusy}
+      {languageClickGuard}
+      {languageClickGuardArmed}
+      bind:languageMenuOpen
+      {languageOptions}
+      {linkTelegramAndActivateTrial}
+      {linkTelegramAndClaimReferralWelcome}
+      {linkTelegramBusy}
+      {loadDevices}
+      {openAdminPanel}
+      {openAppLink}
+      {openConnectLink}
+      {openDeviceTopupModal}
+      {openExternalLink}
+      {openInstallOrConnect}
+      openLinkEmailDialog={openSettingsLinkEmailDialog}
+      {openPaymentModal}
+      {methods}
+      {paymentMethodsDisplayMode}
+      {openPremiumTopupModal}
+      {openRegularTopupModal}
+      openSetPasswordDialog={openSettingsSetPasswordDialog}
+      {openTariffChangeModal}
+      {openTelegramNotificationsBot}
+      {openTrialInstallOrConnect}
+      {premiumTrafficTopupBarClickable}
+      {premiumTrafficTopupUnlocked}
+      {primaryPayActionLabel}
+      {privacyPolicyUrl}
+      {profileAvatarUrl}
+      {profileEmail}
+      {profileTelegramId}
+      {promoBusy}
+      {promoCode}
+      {promoFieldError}
+      {promoIsError}
+      {promoStatus}
+      {referral}
+      {referralBonusDetails}
+      {referralOneBonusPerReferee}
+      {referralProgramEnabled}
+      {referralWelcomeBonusDays}
+      {regularTrafficTopupBarClickable}
+      {regularTrafficTopupUnlocked}
+      {screen}
+      {serverStatusInternal}
+      {serverStatusShowOnHome}
+      {compactHomeEnabled}
+      {serverStatusUrl}
+      statusStore={serverStatusStore}
+      {setLanguageMenuOpen}
+      {setPromoCode}
+      {subscription}
+      {supportEnabled}
+      {supportStore}
+      {supportUnreadCount}
+      {supportUnreadLoaded}
+      {supportUnreadLoading}
+      {supportUrl}
+      {t}
+      {telegramMiniAppContext}
+      {telegramNotificationsNeedPrompt}
+      {telegramNotificationsStartLink}
+      {telegramNotificationsStatus}
+      {telegramPlatform}
+      {telegramProfileName}
+      {termUnitLabel}
+      {toggleAutoRenew}
+      {trafficMode}
+      {trialActivationError}
+      {trialActivationResult}
+      {trialBusy}
+      {user}
+      {userAgreementUrl}
+      {userLanguage}
+    />
+
+    <TrialCaptchaDialog store={actionsStore.trialCaptcha} {t} />
+    <AuthenticatedDialogs
+      api={stores.api}
+      loadData={() => stores.dataClient.loadData({ fresh: true })}
+      {accountStore}
+      {actionsStore}
+      {activationSuccessDialogOpen}
+      {activationSuccessUseInstallGuides}
+      {backToTariffList}
+      {billingStore}
+      {closeActivationSuccessDialog}
+      {closeDeviceTopupModal}
+      {continueWithSelectedTariff}
+      {devicesStore}
+      {disconnectDevice}
+      {emailAuthEnabled}
+      {subscriptionReissueDialogOpen}
+      {creatorCancelStep}
+      {autoRenewBusy}
+      closeCreatorCancelDialog={appActions.closeCreatorCancelDialog}
+      openCreatorCancellationLink={appActions.openCreatorCancellationLink}
+      openCreatorCancelConfirmation={appActions.openCreatorCancelConfirmation}
+      confirmCreatorCancellation={appActions.confirmCreatorCancellation}
+      backToCreatorCancelOptions={appActions.backToCreatorCancelOptions}
+      {subscriptionReissueBusy}
+      {confirmSubscriptionReissue}
+      {closeSubscriptionReissueDialog}
+      {hasMultipleTariffs}
+      {methods}
+      {paymentMethodsDisplayMode}
+      {pendingPayment}
+      {plans}
+      {selectTariff}
+      {selectedTariff}
+      {selectedTariffPlans}
+      {singleTariffMode}
+      {subscription}
+      {subscriptionPurchaseDescription}
+      {t}
+      {tariffCatalog}
+      {tariffMode}
+      {termUnitLabel}
+      {trafficMode}
+      {checkoutAddonValueAnimationEnabled}
+      {checkoutAddonEditorExpandedByDefault}
+      {user}
+    />
+  {/if}
+</div>

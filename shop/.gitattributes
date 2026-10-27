@@ -1,0 +1,17 @@
+# Normalize every text file to LF in the index and on checkout. Binary files are
+# auto-detected and left untouched. Prevents CRLF churn on Windows working copies.
+* text=auto eol=lf
+
+# Explicit overrides below (redundant with the catch-all, kept for clarity).
+.gitattributes text eol=lf
+*.sh text eol=lf
+.github/workflows/*.yml text eol=lf
+deploy/docker/frontend/*.sh text eol=lf
+frontend/src/*.js text eol=lf
+frontend/src/**/*.js text eol=lf
+frontend/src/lib/webapp/demoDataset.js linguist-generated=true
+graphify-out/** linguist-generated=true
+graphify-out/graph.json -diff linguist-generated=true
+frontend/src/**/*.svelte text eol=lf
+frontend/scripts/*.mjs text eol=lf
+frontend/scripts/**/*.mjs text eol=lf

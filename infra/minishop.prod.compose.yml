@@ -1,0 +1,26 @@
+# ============================================================
+# Minishop PROD-оверлей: снимает dev-флаги из minishop.compose.yml.
+# Запуск (из /opt/proliv):
+#   docker compose -f shop/docker-compose.yml -f infra/minishop.compose.yml \
+#     -f infra/minishop.prod.compose.yml --env-file shop/.env up -d
+#
+# Роутинг edge (caddy :8090 в devproxy):
+#   /tg/webhook -> bot:8080, остальное -> backend:8080
+# ============================================================
+services:
+  backend:
+    environment:
+      # Прод-режим: никаких dev-флагов. auto -> live при production.
+      APP_RUNTIME_MODE: 'production'
+      QA_AUTH_ENABLED: 'False'
+      EMAIL_LOGIN_ENABLED: 'False'
+      WEBAPP_SESSION_SECRET: ${WEBAPP_SESSION_SECRET:?set in shop/.env}
+      MY_DEVICES_SECTION_ENABLED: 'True'
+      SUBSCRIPTION_REISSUE_ENABLED: 'True'
+
+  bot:
+    environment:
+      APP_RUNTIME_MODE: 'production'
+      QA_AUTH_ENABLED: 'False'
+      EMAIL_LOGIN_ENABLED: 'False'
+      WEBAPP_SESSION_SECRET: ${WEBAPP_SESSION_SECRET:?set in shop/.env}

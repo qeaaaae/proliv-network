@@ -1,0 +1,367 @@
+import {
+  accountMergeErrorMessage,
+  readMagicLoginToken,
+  readExternalAuthStatus,
+  readTelegramAuthStatus,
+  readTelegramLoginWidgetAuthData,
+  clearAuthQuery,
+} from "./authHelpers.js";
+import { TELEGRAM_SDK_BOOT_TIMEOUT_MS } from "./constants";
+import type { LoadDataOptions } from "./dataClient";
+import { restoreInstallAuthDestination } from "./installAuthDestination.js";
+import { isMaintenanceFailure } from "./maintenance";
+import {
+  beginBootBudget,
+  finishBootBudget,
+  WEBAPP_BOOT_BUDGET_MS,
+  currentBootSignal,
+  isInvalidSession,
+  recordClientTiming,
+} from "./bootBudget";
+
+type SessionRefreshResult = {
+  authenticated?: boolean;
+  csrf_token?: string;
+};
+
+const BOOT_RETRY_WINDOW_MS = 90_000;
+const BOOT_RETRY_MAX_DELAY_MS = 4_000;
+let activeBootRun = 0;
+
+function isTemporaryServiceFailure(error: unknown): boolean {
+  if (error instanceof TypeError) return true; // Fetch rejects with TypeError while the API is offline.
+  if (!error || typeof error !== "object" || !("status" in error)) return false;
+  const status = Number(error.status);
+  return status === 429 || (status >= 500 && status < 600);
+}
+
+function isAccountMergeConflict(status: string): boolean {
+  return status === "provider_conflict" || status.startsWith("account_merge_");
+}
+
+function isAccountMergePending(status: string | null | undefined): boolean {
+  return status === "account_merge_required" || status === "account_merge_ready";
+}
+
+export type WebappBootDeps = {
+  MOCK: unknown;
+  setMode: (mode: string) => void;
+  hasTelegramLaunchParams: () => boolean;
+  loadTelegramSdk: (timeoutMs?: number) => Promise<unknown> | unknown;
+  prepareTelegramMiniApp: () => void;
+  loadData: (options?: LoadDataOptions) => Promise<unknown>;
+  showLogin: () => void;
+  clearToken: () => void;
+  refreshSession?: (() => Promise<SessionRefreshResult | null | undefined>) | null;
+  setCsrfToken?: ((csrfToken: string) => void) | null;
+  clearManualLogoutFlag: () => void;
+  isManuallyLoggedOut: () => boolean;
+  hasEmailCodeLoginDeeplink?: (() => boolean) | null;
+  finalizeMagicLogin: (token: string) => unknown;
+  finalizeTelegramAuth: (authData: unknown, source: "auth_data" | "init_data") => unknown;
+  linkTelegramAfterExternalAuth?: (() => Promise<unknown> | unknown) | null;
+  restorePendingExternalOauth: () => Promise<boolean> | boolean;
+  setAuthStatus: (message: string, isError?: boolean) => void;
+  showAccountLinkStatus?: ((message: string) => void) | null;
+  onTelegramMergeRequired?: (() => void) | null;
+  t: (key: string, params?: Record<string, unknown>, fallback?: string) => string;
+  getInitDataForBoot: () => string | null | undefined;
+  getToken: () => string | null | undefined;
+  getCsrfToken: () => string | null | undefined;
+};
+
+/**
+ * Initial auth / session bootstrap for the subscription webapp (non-preview).
+ * Keeps side effects in App (mode, tg, token) via injected callbacks.
+ */
+export async function runWebappBoot(deps: WebappBootDeps): Promise<void> {
+  const bootRun = ++activeBootRun;
+  const retryUntil = Date.now() + BOOT_RETRY_WINDOW_MS;
+  let retryDelay = 1_000;
+  while (bootRun === activeBootRun) {
+    const controller = beginBootBudget();
+    const started = performance.now();
+    let outcome = "ok";
+    const step = async <T>(call: () => T | Promise<T>): Promise<T> => {
+      if (controller.signal.aborted) throw new DOMException("boot_cancelled", "AbortError");
+      const result = await call();
+      if (controller.signal.aborted) throw new DOMException("boot_cancelled", "AbortError");
+      return result;
+    };
+    let abortListener = () => {};
+    const aborted = new Promise<never>((_resolve, reject) => {
+      abortListener = () => reject(new DOMException("boot_timeout", "AbortError"));
+      controller.signal.addEventListener("abort", abortListener, { once: true });
+    });
+    const timer = setTimeout(() => controller.abort(), WEBAPP_BOOT_BUDGET_MS);
+    let retry = false;
+    try {
+      await Promise.race([
+        runWebappBootSequence({
+          ...deps,
+          setMode: (mode) => {
+            if (!controller.signal.aborted) deps.setMode(mode);
+          },
+          clearToken: () => {
+            if (!controller.signal.aborted) deps.clearToken();
+          },
+          showLogin: () => {
+            if (!controller.signal.aborted) deps.showLogin();
+          },
+          setAuthStatus: (message, error) => {
+            if (!controller.signal.aborted) deps.setAuthStatus(message, error);
+          },
+          loadData: (options) => step(() => deps.loadData(options)),
+          loadTelegramSdk: (timeout) => step(() => deps.loadTelegramSdk(timeout)),
+          refreshSession: deps.refreshSession ? () => step(() => deps.refreshSession?.()) : null,
+          finalizeMagicLogin: (token) => step(() => deps.finalizeMagicLogin(token)),
+          finalizeTelegramAuth: (data, source) =>
+            step(() => deps.finalizeTelegramAuth(data, source)),
+          restorePendingExternalOauth: () => step(deps.restorePendingExternalOauth),
+        }),
+        aborted,
+      ]);
+    } catch (error) {
+      if (isMaintenanceFailure(error)) {
+        outcome = "maintenance";
+        deps.setMode("maintenance");
+        return;
+      }
+      outcome = controller.signal.aborted ? "timeout_or_cancel" : "unavailable";
+      retry =
+        !controller.signal.aborted &&
+        isTemporaryServiceFailure(error) &&
+        Date.now() + retryDelay < retryUntil;
+      if (!retry && currentBootSignal() === controller.signal) {
+        deps.setMode("bootError");
+        deps.setAuthStatus(deps.t("wa_boot_failed"), true);
+      }
+    } finally {
+      clearTimeout(timer);
+      controller.signal.removeEventListener("abort", abortListener);
+      finishBootBudget(controller);
+      recordClientTiming("boot", started, outcome);
+      if (outcome === "ok") recordClientTiming("interactive", 0, outcome);
+    }
+    if (!retry || bootRun !== activeBootRun) return;
+    // The frontend may become reachable before the API during a container restart.
+    // Keep the initial loader visible and retry without discarding the saved session.
+    await new Promise<void>((resolve) => setTimeout(resolve, retryDelay));
+    retryDelay = Math.min(retryDelay * 2, BOOT_RETRY_MAX_DELAY_MS);
+  }
+}
+
+async function runWebappBootSequence({
+  MOCK,
+  setMode,
+  hasTelegramLaunchParams,
+  loadTelegramSdk,
+  prepareTelegramMiniApp,
+  loadData,
+  showLogin,
+  clearToken,
+  refreshSession,
+  setCsrfToken,
+  clearManualLogoutFlag,
+  isManuallyLoggedOut,
+  hasEmailCodeLoginDeeplink,
+  finalizeMagicLogin,
+  finalizeTelegramAuth,
+  linkTelegramAfterExternalAuth,
+  restorePendingExternalOauth,
+  setAuthStatus,
+  showAccountLinkStatus,
+  onTelegramMergeRequired,
+  t,
+  getInitDataForBoot,
+  getToken,
+  getCsrfToken,
+}: WebappBootDeps): Promise<void> {
+  setMode("loading");
+  if (hasTelegramLaunchParams()) await loadTelegramSdk(TELEGRAM_SDK_BOOT_TIMEOUT_MS);
+  prepareTelegramMiniApp();
+  restoreInstallAuthDestination();
+
+  if (MOCK) {
+    const mergePending =
+      isAccountMergePending(readTelegramAuthStatus()) ||
+      isAccountMergePending(readExternalAuthStatus()?.status);
+    await loadData();
+    if (mergePending) {
+      clearAuthQuery();
+      onTelegramMergeRequired?.();
+    }
+    return;
+  }
+
+  if (hasEmailCodeLoginDeeplink?.()) {
+    clearManualLogoutFlag();
+    clearToken();
+    showLogin();
+    return;
+  }
+
+  const magicToken = readMagicLoginToken();
+  if (magicToken && (await finalizeMagicLogin(magicToken))) return;
+
+  const externalAuth = readExternalAuthStatus();
+  if (externalAuth?.status === "success") {
+    clearManualLogoutFlag();
+    clearAuthQuery();
+    try {
+      await loadData();
+      try {
+        await linkTelegramAfterExternalAuth?.();
+      } catch {
+        showAccountLinkStatus?.(t("wa_auth_telegram_not_confirmed"));
+      }
+      return;
+    } catch (error) {
+      if (!isInvalidSession(error)) throw error;
+      clearToken();
+    }
+  } else if (externalAuth?.status === "email_confirmation_required") {
+    clearManualLogoutFlag();
+    clearToken();
+    clearAuthQuery();
+    showLogin();
+    await restorePendingExternalOauth();
+    return;
+  } else if (externalAuth && isAccountMergePending(externalAuth.status)) {
+    clearAuthQuery();
+    try {
+      await loadData();
+      if (onTelegramMergeRequired) onTelegramMergeRequired();
+      else showAccountLinkStatus?.(t("wa_account_merge_required"));
+      return;
+    } catch (error) {
+      if (!isInvalidSession(error)) throw error;
+      clearToken();
+    }
+  } else if (externalAuth && isAccountMergeConflict(externalAuth.status)) {
+    clearAuthQuery();
+    try {
+      await loadData();
+      showAccountLinkStatus?.(accountMergeErrorMessage(externalAuth.status, t));
+      return;
+    } catch (error) {
+      if (!isInvalidSession(error)) throw error;
+      clearToken();
+    }
+  } else if (externalAuth) {
+    clearAuthQuery();
+    setAuthStatus(
+      externalAuth.status === "account_exists"
+        ? t("wa_auth_external_account_exists", { provider: externalAuth.provider })
+        : externalAuth.status === "invite_required"
+          ? t("wa_auth_invite_required")
+          : externalAuth.status === "cancelled"
+            ? t("wa_auth_external_cancelled")
+            : t("wa_auth_external_failed"),
+      true
+    );
+  }
+
+  const telegramAuthStatus = readTelegramAuthStatus();
+  const telegramLinkReturn = /^\/settings(?:\/security)?\/?$/.test(
+    new URL(window.location.href).pathname
+  );
+  if (telegramAuthStatus === "success") {
+    clearManualLogoutFlag();
+    clearAuthQuery();
+    try {
+      await loadData({ fresh: true });
+      if (telegramLinkReturn) showAccountLinkStatus?.(t("wa_settings_linked"));
+      return;
+    } catch (error) {
+      if (!isInvalidSession(error)) throw error;
+      clearToken();
+    }
+  } else if (isAccountMergePending(telegramAuthStatus)) {
+    clearAuthQuery();
+    try {
+      await loadData();
+      if (onTelegramMergeRequired) onTelegramMergeRequired();
+      else showAccountLinkStatus?.(t("wa_account_merge_required"));
+      return;
+    } catch (error) {
+      if (!isInvalidSession(error)) throw error;
+      clearToken();
+    }
+  } else if (telegramAuthStatus && isAccountMergeConflict(telegramAuthStatus)) {
+    clearAuthQuery();
+    try {
+      await loadData();
+      showAccountLinkStatus?.(accountMergeErrorMessage(telegramAuthStatus, t));
+      return;
+    } catch (error) {
+      if (!isInvalidSession(error)) throw error;
+      clearToken();
+    }
+  } else if (telegramAuthStatus) {
+    clearAuthQuery();
+    const messageKey =
+      telegramAuthStatus === "cancelled"
+        ? "wa_auth_telegram_cancelled"
+        : telegramAuthStatus === "not_configured"
+          ? "wa_auth_telegram_not_configured"
+          : telegramAuthStatus === "invite_required"
+            ? "wa_auth_invite_required"
+            : "wa_auth_telegram_not_confirmed";
+    if (telegramLinkReturn) {
+      try {
+        await loadData();
+        showAccountLinkStatus?.(t(messageKey));
+        return;
+      } catch (error) {
+        if (!isInvalidSession(error)) throw error;
+        clearToken();
+      }
+    }
+    setAuthStatus(t(messageKey), true);
+  }
+
+  const widgetAuthData = readTelegramLoginWidgetAuthData();
+  if (widgetAuthData && (await finalizeTelegramAuth(widgetAuthData, "auth_data"))) return;
+
+  const initData = getInitDataForBoot();
+  if (initData) {
+    try {
+      if (await finalizeTelegramAuth(initData, "init_data")) return;
+    } catch (_error) {
+      void _error;
+    }
+  }
+
+  if (isManuallyLoggedOut()) {
+    showLogin();
+    return;
+  }
+
+  if (refreshSession) {
+    try {
+      const session = await refreshSession();
+      if (session?.authenticated) {
+        if (session.csrf_token) setCsrfToken?.(session.csrf_token);
+        clearManualLogoutFlag();
+        await loadData();
+        return;
+      }
+    } catch (error) {
+      if (!isInvalidSession(error)) throw error;
+      clearToken();
+    }
+  }
+
+  if (getToken() || getCsrfToken()) {
+    try {
+      await loadData();
+      return;
+    } catch (error) {
+      if (!isInvalidSession(error)) throw error;
+      clearToken();
+    }
+  }
+
+  showLogin();
+}

@@ -1,0 +1,223 @@
+{
+  "default_tariff": "standard",
+  "referral_welcome_bonus_tariff": "standard",
+  "default_currency": "rub",
+  "tariffs": [
+    {
+      "key": "standard",
+      "names": {
+        "ru": "Стандарт",
+        "en": "Standard"
+      },
+      "descriptions": {
+        "ru": "Базовый набор серверов",
+        "en": "Base server pool"
+      },
+      "premium_names": {
+        "ru": "Premium-серверы",
+        "en": "Premium servers"
+      },
+      "squad_uuids": [
+        "uuid-1",
+        "uuid-2"
+      ],
+      "premium_squad_uuids": [
+        "premium-squad-uuid"
+      ],
+      "premium_monthly_gb": 50,
+      "premium_traffic_limit_strategy": "MONTH",
+      "premium_topup_packages": {
+        "rub": [
+          {
+            "gb": 10,
+            "price": 99
+          },
+          {
+            "gb": 50,
+            "price": 399
+          }
+        ],
+        "stars": [
+          {
+            "gb": 10,
+            "price": 2500
+          }
+        ]
+      },
+      "premium_flexible_traffic_limit": {
+        "step_gb": 25,
+        "max_total_gb": 100,
+        "price_per_step": 129,
+        "stars_price_per_step": 3200
+      },
+      "billing_model": "period",
+      "monthly_gb": 500,
+      "topup_packages": {
+        "rub": [
+          {
+            "gb": 10,
+            "price": 99
+          },
+          {
+            "gb": 50,
+            "price": 399
+          },
+          {
+            "gb": 200,
+            "price": 1299
+          }
+        ],
+        "stars": [
+          {
+            "gb": 10,
+            "price": 2500
+          }
+        ]
+      },
+      "flexible_traffic_limit": {
+        "step_gb": 50,
+        "max_total_gb": 700,
+        "price_per_step": 99,
+        "stars_price_per_step": 2500
+      },
+      "hwid_device_limit": 5,
+      "hwid_device_packages": {
+        "rub": [
+          {
+            "count": 1,
+            "price": 99,
+            "traffic_bonus_gb": 0,
+            "prices": {
+              "30": 99.0,
+              "90": 297.0,
+              "180": 594.0,
+              "365": 1188.0
+            },
+            "period_unit": "day"
+          },
+          {
+            "count": 3,
+            "price": 249,
+            "traffic_bonus_gb": 30,
+            "prices": {
+              "30": 249.0,
+              "90": 747.0,
+              "180": 1494.0,
+              "365": 2988.0
+            },
+            "period_unit": "day"
+          }
+        ],
+        "stars": [
+          {
+            "count": 1,
+            "price": 2500,
+            "traffic_bonus_gb": 0,
+            "prices": {
+              "30": 2500.0,
+              "90": 7500.0,
+              "180": 15000.0,
+              "365": 30000.0
+            },
+            "period_unit": "day"
+          }
+        ]
+      },
+      "checkout_addons": {
+        "devices": {
+          "enabled": true,
+          "max_extra_devices": 3,
+          "price_per_device": 99,
+          "stars_price_per_device": 2500
+        },
+        "traffic": {
+          "enabled": true
+        },
+        "premium_traffic": {
+          "enabled": true
+        }
+      },
+      "prices_rub": {
+        "30": 200,
+        "90": 600,
+        "180": 1200,
+        "365": 2400
+      },
+      "prices_stars": {
+        "30": 0,
+        "90": 0,
+        "180": 0,
+        "365": 0
+      },
+      "referral_bonus_days_inviter": {
+        "30": 3,
+        "90": 7,
+        "180": 15,
+        "365": 30
+      },
+      "referral_bonus_days_referee": {
+        "30": 1,
+        "90": 3,
+        "180": 7,
+        "365": 15
+      },
+      "enabled_periods": [
+        30,
+        90,
+        180,
+        365
+      ],
+      "enabled": true,
+      "period_unit": "day",
+      "addon_period_factors": {
+        "30": 1,
+        "90": 3,
+        "180": 6,
+        "365": 12
+      }
+    },
+    {
+      "key": "traffic_basic",
+      "names": {
+        "ru": "Гигабайты",
+        "en": "Gigabytes"
+      },
+      "descriptions": {
+        "ru": "Пакеты трафика без ограничения по времени",
+        "en": "Traffic packages with no time limit"
+      },
+      "squad_uuids": [
+        "uuid-1",
+        "uuid-2"
+      ],
+      "billing_model": "traffic",
+      "hwid_device_limit": 3,
+      "conversion_rate_rub_per_gb": 20,
+      "traffic_packages": {
+        "rub": [
+          {
+            "gb": 10,
+            "price": 199
+          },
+          {
+            "gb": 50,
+            "price": 799
+          },
+          {
+            "gb": 200,
+            "price": 1999
+          }
+        ],
+        "stars": [
+          {
+            "gb": 10,
+            "price": 2500
+          }
+        ]
+      },
+      "enabled": true
+    }
+  ],
+  "schema_version": 2,
+  "period_unit": "day"
+}

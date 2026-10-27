@@ -1,0 +1,133 @@
+"""Helpers for Telegram bot install-guide links."""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from bot.services.panel_api_service import PanelApiService
+from bot.utils.mini_app_url import (
+    subscription_mini_app_install_url,
+    subscription_public_install_url,
+)
+from config.settings import Settings
+from config.subscription_guides_config import subscription_guides_available
+from db.dal import subscription_dal
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class InstallGuideLinks:
+    personal_url: str | None = None
+    public_share_url: str | None = None
+
+
+def bot_install_guides_enabled(settings: Settings) -> bool:
+    return bool(
+        settings.SUBSCRIPTION_GUIDES_BOT_MENU_ENABLED
+        and subscription_guides_available(settings)
+        and subscription_mini_app_install_url(settings)
+    )
+
+
+def bot_install_guide_url(settings: Settings) -> str | None:
+    if not bot_install_guides_enabled(settings):
+        return None
+    install_url = subscription_mini_app_install_url(settings)
+    return install_url if isinstance(install_url, str) else None
+
+
+def install_guide_share_links_enabled(settings: Settings) -> bool:
+    return bool(
+        (
+            subscription_guides_available(settings)
+            or (
+                settings.SUBSCRIPTION_GATEWAY_ENABLED
+                and settings.SUBSCRIPTION_LINK_MODE == "minishop"
+            )
+        )
+        and settings.SUBSCRIPTION_MINI_APP_URL
+    )
+
+
+async def ensure_user_install_guide_share_url(
+    session: AsyncSession,
+    settings: Settings,
+    user_id: int,
+    panel_user_uuid: str | None = None,
+    local_subscription: Any | None = None,
+) -> str | None:
+    if not install_guide_share_links_enabled(settings):
+        return None
+
+    try:
+        local_sub = (
+            local_subscription
+            if local_subscription is not None
+            else await subscription_dal.get_active_subscription_by_user_id(
+                session,
+                user_id,
+                panel_user_uuid,
+            )
+        )
+        if local_sub is None:
+            return None
+        resolved_panel_user_uuid = str(getattr(local_sub, "panel_user_uuid", "") or "").strip()
+        if not resolved_panel_user_uuid:
+            return None
+        async with PanelApiService(settings) as panel:
+            lookup = await panel.get_user_by_uuid_lookup(resolved_panel_user_uuid)
+        panel_user = lookup.get("user") if lookup.get("ok") else None
+        if not isinstance(panel_user, dict) or not panel_user.get("subscriptionUrl"):
+            return None
+        panel_short_uuid = str(panel_user.get("shortUuid") or "").strip()
+        if not panel_short_uuid:
+            return None
+        share_token = await subscription_dal.ensure_install_share_token(
+            session,
+            local_sub,
+            panel_short_uuid=panel_short_uuid,
+        )
+        return subscription_public_install_url(settings, share_token)
+    except Exception:
+        logger.exception("Failed to resolve install guide share link for user %s.", user_id)
+        return None
+
+
+async def ensure_user_install_guide_links(
+    session: AsyncSession,
+    settings: Settings,
+    user_id: int,
+    panel_user_uuid: str | None = None,
+    local_subscription: Any | None = None,
+) -> InstallGuideLinks:
+    personal_url = bot_install_guide_url(settings)
+    public_share_url = await ensure_user_install_guide_share_url(
+        session,
+        settings,
+        user_id,
+        panel_user_uuid,
+        local_subscription=local_subscription,
+    )
+    return InstallGuideLinks(personal_url=personal_url, public_share_url=public_share_url)
+
+
+def append_install_share_link_text(
+    text: str,
+    translator: Any,
+    public_share_url: str | None,
+) -> str:
+    if not public_share_url:
+        return text
+    try:
+        share_line = translator(
+            "install_guide_share_link_line",
+            install_share_link=public_share_url,
+        )
+    except Exception:
+        share_line = f"\n\nInstall guide:\n<code>{public_share_url}</code>"
+    return f"{text}{share_line}"

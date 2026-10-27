@@ -1,0 +1,353 @@
+from collections.abc import Mapping
+from typing import Any
+
+from aiogram.types import InlineKeyboardMarkup
+from aiogram.utils.keyboard import InlineKeyboardBuilder, InlineKeyboardButton
+
+from bot.middlewares.i18n import JsonI18n
+from bot.utils.subscription_periods import localized_duration_days
+from config.settings import Settings
+from config.subscription_periods import legacy_months_to_days, period_to_days
+from config.tariffs_config import (
+    default_currency_key_for_settings,
+    default_payment_currency_code_for_settings,
+)
+
+from .user_keyboards_context import (
+    callback_context_from_back_callback,
+    callback_suffix_for_checkout,
+    callback_suffix_for_context,
+    promo_id_token,
+)
+
+
+def _promo_value(quote: Any, name: str, default: Any = None) -> Any:
+    if quote is None:
+        return default
+    if isinstance(quote, Mapping):
+        return quote.get(name, default)
+    return getattr(quote, name, default)
+
+
+def _promo_callback_suffix(
+    context: str | None,
+    quote: Any,
+    *,
+    promo_enabled: bool = True,
+) -> str:
+    suffix = callback_suffix_for_checkout(context, promo_enabled=promo_enabled)
+    promo_code_id = _promo_value(quote, "promo_code_id")
+    if promo_code_id:
+        suffix += f":{promo_id_token(int(promo_code_id))}"
+    return suffix
+
+
+def _add_promo_toggle(
+    builder: InlineKeyboardBuilder,
+    translate: Any,
+    *,
+    promo_available: bool,
+    promo_enabled: bool,
+    promo_toggle_callback: str | None,
+) -> None:
+    if not promo_available or not promo_toggle_callback:
+        return
+    builder.row(
+        InlineKeyboardButton(
+            text=translate(
+                key=(
+                    "checkout_promo_cancel_button"
+                    if promo_enabled
+                    else "checkout_promo_apply_button"
+                )
+            ),
+            callback_data=promo_toggle_callback,
+        )
+    )
+
+
+def get_subscription_options_keyboard(
+    subscription_options: dict[float, float | None],
+    currency_symbol_val: str,
+    lang: str,
+    i18n_instance: JsonI18n,
+    traffic_mode: bool = False,
+    back_callback: str = "main_action:back_to_main",
+    callback_context: str | None = None,
+    promo_quotes: Mapping[float, Any] | None = None,
+    promo_available: bool = False,
+    promo_enabled: bool = True,
+    promo_toggle_callback: str | None = None,
+) -> InlineKeyboardMarkup:
+    _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
+    builder = InlineKeyboardBuilder()
+    callback_context = callback_context or callback_context_from_back_callback(back_callback)
+
+    def _format_gb(val: float) -> str:
+        return str(int(val)) if float(val).is_integer() else f"{val:g}"
+
+    if subscription_options:
+        for months, price in subscription_options.items():
+            if price is not None:
+                if traffic_mode:
+                    button_text = _(
+                        "buy_traffic_package_button",
+                        traffic_gb=_format_gb(months),
+                        price=price,
+                        currency_symbol=currency_symbol_val,
+                    )
+                    callback_data = (
+                        f"subscribe_period:{_format_gb(months)}"
+                        f"{callback_suffix_for_context(callback_context)}"
+                    )
+                else:
+                    quote = (promo_quotes or {}).get(months) if promo_enabled else None
+                    effective_price = float(_promo_value(quote, "effective_amount", price))
+                    button_text = (
+                        _(
+                            "subscribe_for_period_discounted_button",
+                            period=localized_duration_days(
+                                legacy_months_to_days(months), i18n_instance, lang
+                            ),
+                            old_price=price,
+                            price=effective_price,
+                            currency_symbol=currency_symbol_val,
+                        )
+                        if quote is not None and effective_price < float(price)
+                        else _(
+                            "subscribe_for_period_button",
+                            period=localized_duration_days(
+                                legacy_months_to_days(months), i18n_instance, lang
+                            ),
+                            price=price,
+                            currency_symbol=currency_symbol_val,
+                        )
+                    )
+                    promo_suffix = _promo_callback_suffix(
+                        callback_context,
+                        quote,
+                        promo_enabled=promo_enabled,
+                    )
+                    callback_data = f"subscribe_period:{months}{promo_suffix}"
+                builder.button(text=button_text, callback_data=callback_data)
+        builder.adjust(1)
+    if not traffic_mode:
+        _add_promo_toggle(
+            builder,
+            _,
+            promo_available=promo_available,
+            promo_enabled=promo_enabled,
+            promo_toggle_callback=promo_toggle_callback,
+        )
+    builder.row(
+        InlineKeyboardButton(text=_(key="back_to_main_menu_button"), callback_data=back_callback)
+    )
+    return builder.as_markup()
+
+
+def get_tariff_catalog_keyboard(
+    tariffs: list[Any],
+    lang: str,
+    i18n_instance: JsonI18n,
+    settings: Settings | None = None,
+    back_callback: str = "main_action:back_to_main",
+    callback_context: str | None = None,
+    promo_available: bool = False,
+    promo_enabled: bool = True,
+    promo_toggle_callback: str | None = None,
+) -> InlineKeyboardMarkup:
+    _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
+    builder = InlineKeyboardBuilder()
+    callback_context = callback_context or callback_context_from_back_callback(back_callback)
+    default_currency = default_currency_key_for_settings(settings) if settings else "rub"
+    for tariff in tariffs:
+        label = tariff.name(lang)
+        if tariff.billing_model == "period":
+            if hasattr(tariff, "min_period_price"):
+                min_price = tariff.min_period_price(default_currency)
+            elif default_currency == "rub" and hasattr(tariff, "min_period_price_rub"):
+                min_price = tariff.min_period_price_rub()
+            else:
+                min_price = None
+            if min_price is not None:
+                price_label = _("wa_checkout_price_from", price=f"{min_price:g}")
+                label = f"{label} {price_label}"
+        else:
+            if hasattr(tariff, "min_traffic_package"):
+                package = tariff.min_traffic_package(default_currency)
+            elif default_currency == "rub" and hasattr(tariff, "min_traffic_package_rub"):
+                package = tariff.min_traffic_package_rub()
+            else:
+                package = None
+            if package:
+                price_label = _("wa_checkout_price_from", price=f"{package.price:g}")
+                label = f"{label} {price_label} / {package.gb:g} GB"
+        builder.row(
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"tariff:select:{tariff.key}"
+                f"{callback_suffix_for_checkout(callback_context, promo_enabled=promo_enabled)}",
+            )
+        )
+    _add_promo_toggle(
+        builder,
+        _,
+        promo_available=promo_available,
+        promo_enabled=promo_enabled,
+        promo_toggle_callback=promo_toggle_callback,
+    )
+    builder.row(
+        InlineKeyboardButton(text=_(key="back_to_main_menu_button"), callback_data=back_callback)
+    )
+    return builder.as_markup()
+
+
+def get_tariff_periods_keyboard(
+    tariff: Any,
+    lang: str,
+    i18n_instance: JsonI18n,
+    settings: Settings,
+    back_callback: str = "main_action:subscribe",
+    callback_context: str | None = None,
+    promo_quotes: Mapping[int, Any] | None = None,
+    promo_available: bool = False,
+    promo_enabled: bool = True,
+    promo_toggle_callback: str | None = None,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    callback_context = callback_context or callback_context_from_back_callback(back_callback)
+    _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
+    default_currency = default_currency_key_for_settings(settings)
+    currency_code = default_payment_currency_code_for_settings(settings)
+    for months in tariff.enabled_periods:
+        duration_days = period_to_days(
+            months, tariff.period_unit if hasattr(tariff, "period_unit") else "month"
+        )
+        rub_price = tariff.period_price(months, default_currency)
+        if rub_price and rub_price > 0:
+            quote = (promo_quotes or {}).get(int(months)) if promo_enabled else None
+            effective_price = float(_promo_value(quote, "effective_amount", rub_price))
+            promo_suffix = _promo_callback_suffix(
+                callback_context,
+                quote,
+                promo_enabled=promo_enabled,
+            )
+            builder.row(
+                InlineKeyboardButton(
+                    text=(
+                        _(
+                            "subscribe_for_period_discounted_button",
+                            period=localized_duration_days(
+                                period_to_days(
+                                    months,
+                                    tariff.period_unit
+                                    if hasattr(tariff, "period_unit")
+                                    else "month",
+                                ),
+                                i18n_instance,
+                                lang,
+                            ),
+                            old_price=rub_price,
+                            price=effective_price,
+                            currency_symbol=currency_code,
+                        )
+                        if quote is not None and effective_price < float(rub_price)
+                        else _(
+                            "subscribe_for_period_button",
+                            period=localized_duration_days(
+                                period_to_days(
+                                    months,
+                                    tariff.period_unit
+                                    if hasattr(tariff, "period_unit")
+                                    else "month",
+                                ),
+                                i18n_instance,
+                                lang,
+                            ),
+                            price=rub_price,
+                            currency_symbol=currency_code,
+                        )
+                    ),
+                    callback_data=f"tariff:period:{tariff.key}:d{duration_days}{promo_suffix}",
+                )
+            )
+    _add_promo_toggle(
+        builder,
+        _,
+        promo_available=promo_available,
+        promo_enabled=promo_enabled,
+        promo_toggle_callback=promo_toggle_callback,
+    )
+    builder.row(
+        InlineKeyboardButton(text=_(key="back_to_main_menu_button"), callback_data=back_callback)
+    )
+    return builder.as_markup()
+
+
+def get_tariff_packages_keyboard(
+    tariff: Any,
+    packages: list[Any],
+    lang: str,
+    i18n_instance: JsonI18n,
+    currency_symbol: str = "RUB",
+    back_callback: str = "main_action:subscribe",
+    callback_context: str | None = None,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    callback_context = callback_context or callback_context_from_back_callback(back_callback)
+    _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
+    for package in packages:
+        builder.row(
+            InlineKeyboardButton(
+                text=_(
+                    "buy_traffic_package_button",
+                    traffic_gb=f"{package.gb:g}",
+                    price=package.price,
+                    currency_symbol=currency_symbol,
+                ),
+                callback_data=f"tariff:package:{tariff.key}:{package.gb:g}"
+                f"{callback_suffix_for_context(callback_context)}",
+            )
+        )
+    builder.row(
+        InlineKeyboardButton(text=_(key="back_to_main_menu_button"), callback_data=back_callback)
+    )
+    return builder.as_markup()
+
+
+def get_hwid_device_packages_keyboard(
+    tariff: Any,
+    packages: list[Any],
+    lang: str,
+    i18n_instance: JsonI18n,
+    settings: Settings,
+    back_callback: str = "main_action:my_subscription",
+    renewal: bool = False,
+    stars_packages: list[Any] | None = None,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
+    currency_code = default_payment_currency_code_for_settings(settings)
+    default_by_count = {int(package.count): package for package in packages}
+    stars_by_count = {int(package.count): package for package in (stars_packages or [])}
+    for count in sorted(set(default_by_count) | set(stars_by_count)):
+        package = default_by_count.get(count) or stars_by_count[count]
+        currency_symbol = currency_code if count in default_by_count else "⭐"
+        builder.row(
+            InlineKeyboardButton(
+                text=_(
+                    "buy_hwid_devices_button",
+                    count=count,
+                    price=package.price,
+                    currency_symbol=currency_symbol,
+                ),
+                callback_data=(
+                    f"hwid_devices:{'renewal_package' if renewal else 'package'}:"
+                    f"{tariff.key}:{count}"
+                ),
+            )
+        )
+    builder.row(
+        InlineKeyboardButton(text=_(key="back_to_main_menu_button"), callback_data=back_callback)
+    )
+    return builder.as_markup()

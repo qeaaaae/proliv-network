@@ -1,0 +1,31 @@
+import { getCabinetSession } from '../../utils/session'
+import { shopFetch, type ShopMe } from '../../utils/backend'
+
+// Сессионный юзер. Если есть токен бэкенда - дотягиваем /api/me, чтобы имя и
+// аватар были настоящими. telegram_photo_url приходит относительным путём
+// (/api/account/avatar) - он же у нас проксируется, отдаём как есть.
+// apiToken/apiCsrf из ответа не отдаём: httpOnly-кука хранит их на сервере.
+export default defineEventHandler(async (event) => {
+  const user = getCabinetSession(event)
+  if (!user) throw createError({ statusCode: 401, statusMessage: 'Unauthorized' })
+
+  const safe = { id: user.id, name: user.name, username: user.username, photoUrl: user.photoUrl }
+  if (!user.apiToken) return safe
+
+  try {
+    const me = await shopFetch<ShopMe>(event, '/api/me')
+    const photo = me.user?.telegram_photo_url
+    return {
+      id: safe.id,
+      name: me.user?.first_name || safe.name,
+      username: me.user?.username ?? safe.username,
+      photoUrl: photo
+        ? photo.startsWith('/api/')
+          ? photo
+          : '/api/account/avatar'
+        : safe.photoUrl,
+    }
+  } catch {
+    return safe
+  }
+})

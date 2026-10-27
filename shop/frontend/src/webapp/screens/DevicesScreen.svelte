@@ -1,0 +1,261 @@
+<script lang="ts">
+  import {
+    ArrowRight,
+    CircleX,
+    Pencil,
+    Plus,
+    RefreshCw,
+    Smartphone,
+  } from "$components/ui/icons.js";
+
+  import Button from "$components/ui/button.svelte";
+  import Card from "$components/ui/card.svelte";
+  import {
+    DeviceGlyph,
+    EmptyCard,
+    LinearProgress,
+    StatusMessage,
+  } from "$components/patterns/webapp/index.js";
+  import {
+    deviceLimitReached,
+    devicesCountLabel,
+    devicesLimitLabel,
+    devicesPercent,
+    devicesProgressState,
+    hasFiniteDeviceLimit,
+  } from "../../lib/webapp/devicesLabels.js";
+  import { deviceClientLabel } from "../../lib/webapp/deviceClient.js";
+  import type {
+    DeviceView,
+    DevicesData,
+    SubscriptionView,
+    Translate,
+    VoidAction,
+  } from "$lib/webapp/types.js";
+
+  type Props = {
+    devicesBusy?: boolean;
+    devicesData?: DevicesData;
+    devicesErrorCode?: string;
+    devicesIsError?: boolean;
+    devicesLoaded?: boolean;
+    devicesStatus?: string;
+    subscription?: SubscriptionView;
+    loadDevices?: (force?: boolean) => void;
+    openDeviceDisconnectDialog?: (device: DeviceView) => void;
+    openDeviceRenameDialog?: (device: DeviceView) => void;
+    openDeviceTopupModal?: VoidAction;
+    openPaymentModal?: VoidAction;
+    t?: Translate;
+  };
+
+  let {
+    devicesBusy = false,
+    devicesData = {},
+    devicesErrorCode = "",
+    devicesIsError = false,
+    devicesLoaded = false,
+    devicesStatus = "",
+    subscription = {},
+    loadDevices = () => {},
+    openDeviceDisconnectDialog = () => {},
+    openDeviceRenameDialog = () => {},
+    openDeviceTopupModal = () => {},
+    openPaymentModal = () => {},
+    t = (key: string) => key,
+  }: Props = $props();
+
+  const deviceList = $derived(Array.isArray(devicesData?.devices) ? devicesData.devices : []);
+  const hasDevices = $derived(deviceList.length > 0);
+  const subscriptionNotActiveError = $derived(
+    devicesErrorCode === "subscription_not_active" || devicesStatus === "Subscription is not active"
+  );
+  const hideDevicesSummary = $derived(!subscription?.active && !hasDevices);
+  const showInactiveDevicesNotice = $derived(
+    hideDevicesSummary &&
+      !(devicesBusy && !devicesLoaded) &&
+      (!devicesStatus || subscriptionNotActiveError)
+  );
+  const effectiveMaxDevices = $derived(devicesData?.max_devices ?? subscription?.max_devices);
+  const hasFiniteDevices = $derived(hasFiniteDeviceLimit(devicesData, effectiveMaxDevices));
+  const progressState = $derived(
+    devicesProgressState(devicesData, devicesLoaded, effectiveMaxDevices)
+  );
+  const progressStatusText = $derived(t(`wa_devices_progress_${progressState}`));
+  const hasReachedDeviceLimit = $derived(
+    devicesLoaded && deviceLimitReached(devicesData, effectiveMaxDevices)
+  );
+  const deviceTopupUnavailableReason = $derived(
+    String(subscription?.device_topup_unavailable_reason || "").trim()
+  );
+  const showDeviceTopupAction = $derived(
+    Boolean(subscription?.active && hasFiniteDevices && subscription?.can_topup_devices)
+  );
+  const showDeviceTopupUnavailable = $derived(
+    Boolean(subscription?.active && hasReachedDeviceLimit && deviceTopupUnavailableReason) &&
+      !showDeviceTopupAction
+  );
+  const showTrialTariffAction = $derived(
+    showDeviceTopupUnavailable && deviceTopupUnavailableReason === "trial_subscription"
+  );
+
+  // A renamed device keeps its model visible next to the platform.
+  function deviceSubtitle(device: DeviceView): string {
+    const platform = String(device.platform_label || "");
+    if (device.custom_name) return [device.default_name, platform].filter(Boolean).join(" · ");
+    return platform || t("wa_devices_platform_unknown");
+  }
+</script>
+
+<main class="content with-nav">
+  {#if !hideDevicesSummary}
+    <Card class="devices-summary-card">
+      <div class="devices-summary-head">
+        <Smartphone size={28} />
+        <span>
+          <strong>{t("wa_devices_title")}</strong>
+          <small>{devicesCountLabel(devicesData, t, effectiveMaxDevices)}</small>
+        </span>
+        <Button
+          variant="icon"
+          size="icon"
+          onclick={() => loadDevices(true)}
+          disabled={devicesBusy}
+          aria-label={t("wa_devices_refresh")}
+        >
+          <RefreshCw size={18} />
+        </Button>
+      </div>
+      <LinearProgress
+        class="devices-progress"
+        value={progressState === "pending" ? 0 : devicesPercent(devicesData, effectiveMaxDevices)}
+        label={t("wa_devices_title")}
+        state={progressState}
+        aria-valuetext={progressStatusText}
+      />
+      <StatusMessage class="devices-progress-status" data-state={progressState} role="status">
+        {progressStatusText}
+      </StatusMessage>
+      {#if Number(subscription?.extra_hwid_devices || 0) > 0 && subscription?.extra_hwid_devices_valid_until_text}
+        <p class="devices-topup-validity">
+          {t("wa_hwid_devices_valid_until", {
+            count: Number(subscription.extra_hwid_devices || 0),
+            date: subscription.extra_hwid_devices_valid_until_text,
+          })}
+        </p>
+      {/if}
+      {#if showDeviceTopupUnavailable}
+        <StatusMessage>
+          {t(`wa_device_topup_unavailable_${deviceTopupUnavailableReason}`)}
+        </StatusMessage>
+      {/if}
+      {#if showDeviceTopupAction || showTrialTariffAction}
+        <div class="devices-summary-actions">
+          {#if showDeviceTopupAction}
+            <Button
+              data-webapp-action="open-device-topup"
+              variant="secondary"
+              class="wide"
+              onclick={openDeviceTopupModal}
+            >
+              <Plus size={17} />
+              {t("wa_buy_hwid_devices")}
+            </Button>
+          {:else if showTrialTariffAction}
+            <Button
+              data-webapp-action="open-trial-tariff-purchase"
+              variant="secondary"
+              class="wide"
+              onclick={openPaymentModal}
+            >
+              {t("wa_trial_device_limit_choose_tariff")}
+              <ArrowRight size={17} />
+            </Button>
+          {/if}
+        </div>
+      {/if}
+    </Card>
+  {/if}
+
+  {#if devicesBusy && !devicesLoaded}
+    <EmptyCard>{t("wa_devices_loading")}</EmptyCard>
+  {:else if showInactiveDevicesNotice}
+    <EmptyCard class="devices-empty-card devices-inactive-card">
+      <CircleX size={28} />
+      <span>{t("wa_home_subscription_inactive")}</span>
+    </EmptyCard>
+  {:else if devicesStatus}
+    <EmptyCard>
+      <StatusMessage error={devicesIsError}>{devicesStatus}</StatusMessage>
+    </EmptyCard>
+  {:else if !hasDevices}
+    <EmptyCard class="devices-empty-card">
+      <Smartphone size={28} />
+      <span>{t("wa_devices_empty")}</span>
+      <small>
+        {t("wa_devices_empty_hint", {
+          max: devicesLimitLabel(devicesData, t, effectiveMaxDevices),
+        })}
+      </small>
+    </EmptyCard>
+  {:else}
+    <div class="devices-list">
+      {#each deviceList as device (device.token || device.index)}
+        {@const clientLabel = deviceClientLabel(device.user_agent)}
+        <Card class="device-card">
+          <div class="device-card-head">
+            <div class="device-icon"><DeviceGlyph {device} size={24} /></div>
+            <span>
+              <span class="device-name-row">
+                <strong
+                  >{device.display_name ||
+                    t("wa_device_fallback_name", { index: device.index })}{#if clientLabel}<span
+                      class="device-client-label">{clientLabel}</span
+                    >{/if}</strong
+                >
+                {#if device.token}
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    data-webapp-action="open-device-rename"
+                    onclick={() => openDeviceRenameDialog(device)}
+                    aria-label={t("wa_devices_rename")}
+                    title={t("wa_devices_rename")}
+                  >
+                    <Pencil size={15} />
+                  </Button>
+                {/if}
+              </span>
+              <small>{deviceSubtitle(device)}</small>
+            </span>
+          </div>
+          <div class="device-meta">
+            {#if device.last_connected_at_text || device.created_at_text}
+              <div>
+                <span>{t("wa_devices_last_connected_at")}</span>
+                <strong>{device.last_connected_at_text || device.created_at_text}</strong>
+              </div>
+            {/if}
+            {#if device.hwid_short}
+              <div>
+                <span>HWID</span>
+                <code>{device.hwid_short}</code>
+              </div>
+            {/if}
+          </div>
+          {#if device.can_disconnect}
+            <Button
+              data-webapp-action="open-device-disconnect"
+              variant="outline"
+              class="wide device-disconnect-button"
+              onclick={() => openDeviceDisconnectDialog(device)}
+            >
+              <CircleX size={17} />
+              {t("wa_devices_disconnect")}
+            </Button>
+          {/if}
+        </Card>
+      {/each}
+    </div>
+  {/if}
+</main>

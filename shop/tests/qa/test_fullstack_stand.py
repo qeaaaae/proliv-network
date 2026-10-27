@@ -1,0 +1,508 @@
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import hmac
+import json
+import os
+import time
+import uuid
+from collections.abc import Iterator
+from dataclasses import dataclass
+from http.cookies import SimpleCookie
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from asyncpg import Record
+
+import httpx
+import pytest
+
+asyncpg = pytest.importorskip(
+    "asyncpg",
+    reason="full-stack QA database checks require asyncpg",
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+FRONTEND_URL = os.getenv("QA_FRONTEND_URL", "http://127.0.0.1:18082").rstrip("/")
+API_BASE_URL = os.getenv("QA_API_BASE_URL", FRONTEND_URL).rstrip("/")
+WEBHOOK_BASE_URL = os.getenv(
+    "QA_WEBHOOK_BASE_URL",
+    os.getenv("QA_BASE_URL", "http://127.0.0.1:18080"),
+).rstrip("/")
+REMNAWAVE_HEALTH_URL = os.getenv(
+    "QA_REMNAWAVE_HEALTH_URL",
+    "http://127.0.0.1:3001/health",
+)
+DB_DSN = os.getenv(
+    "QA_DB_DSN",
+    "postgresql://remnawave_minishop:remnawave_minishop@127.0.0.1:6768/remnawave_minishop",
+)
+QA_PAYMENT_SECRET = os.getenv("QA_PAYMENT_SECRET", "dev_qa_payment_secret_change_me")
+
+
+@dataclass(frozen=True)
+class WebAuthSession:
+    user_id: int
+    csrf_token: str
+    cookie_header: str
+
+    def headers(self) -> dict[str, str]:
+        return {
+            "Accept": "application/json",
+            "Cookie": self.cookie_header,
+            "X-CSRF-Token": self.csrf_token,
+        }
+
+
+@pytest.fixture(scope="session")
+def client() -> Iterator[httpx.Client]:
+    with httpx.Client(
+        base_url=API_BASE_URL,
+        timeout=httpx.Timeout(25.0, connect=5.0),
+        follow_redirects=False,
+    ) as http_client:
+        _wait_for_http(http_client, "/api/bootstrap")
+        yield http_client
+
+
+def _wait_for_http(client: httpx.Client, path: str, *, timeout_seconds: int = 90) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    last_error: BaseException | None = None
+    while time.monotonic() < deadline:
+        try:
+            response = client.get(path)
+            if response.status_code == 200:
+                return
+            last_error = AssertionError(response.text)
+        except (httpx.HTTPError, OSError) as exc:
+            last_error = exc
+        time.sleep(1)
+    raise AssertionError(f"{path} did not become ready: {last_error}")
+
+
+def _ok(response: httpx.Response) -> dict[str, Any]:
+    assert response.status_code < 400, response.text
+    data: dict[str, Any] = response.json()
+    assert data.get("ok") is True, data
+    return data
+
+
+def _cookie_header_from(response: httpx.Response) -> str:
+    cookie = SimpleCookie()
+    for header in response.headers.get_list("set-cookie"):
+        cookie.load(header)
+    values = {
+        name: morsel.value
+        for name, morsel in cookie.items()
+        if name in {"rw_webapp_session", "rw_webapp_csrf"}
+    }
+    assert "rw_webapp_session" in values, response.headers
+    assert "rw_webapp_csrf" in values, response.headers
+    return "; ".join(f"{name}={value}" for name, value in values.items())
+
+
+def login_email(client: httpx.Client, email: str) -> WebAuthSession:
+    request_data = _ok(
+        client.post(
+            "/api/auth/email/request",
+            json={"email": email, "language": "en"},
+        )
+    )
+    code = str(request_data.get("email_code") or request_data.get("code") or "").strip()
+    assert code and len(code) == 6, request_data
+
+    verify_response = client.post(
+        "/api/auth/email/verify",
+        json={"email": email, "code": code},
+    )
+    verify_data = _ok(verify_response)
+    csrf_token = str(verify_data.get("csrf_token") or "").strip()
+    assert csrf_token, verify_data
+    return WebAuthSession(
+        user_id=int(verify_data["user_id"]),
+        csrf_token=csrf_token,
+        cookie_header=_cookie_header_from(verify_response),
+    )
+
+
+def _signed_json(payload: dict[str, Any]) -> tuple[bytes, str]:
+    body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    signature = hmac.new(
+        QA_PAYMENT_SECRET.encode("utf-8"),
+        body,
+        hashlib.sha256,
+    ).hexdigest()
+    return body, signature
+
+
+async def _fetch_payment_amount_and_currency(payment_id: int) -> Record:
+    connection = await asyncpg.connect(DB_DSN)
+    try:
+        payment = await connection.fetchrow(
+            """
+            select amount, currency
+            from payments
+            where payment_id = $1
+            """,
+            payment_id,
+        )
+        assert payment is not None
+        return payment
+    finally:
+        await connection.close()
+
+
+async def _fetch_gift_for_payment(payment_id: int) -> Record | None:
+    connection = await asyncpg.connect(DB_DSN)
+    try:
+        return await connection.fetchrow(
+            "select payment_id, purchaser_id, status from subscription_gifts where payment_id = $1",
+            payment_id,
+        )
+    finally:
+        await connection.close()
+
+
+async def _fetch_payment_and_latest_subscription(
+    payment_id: int,
+    user_id: int,
+) -> tuple[Record | None, Record | None]:
+    connection = await asyncpg.connect(DB_DSN)
+    try:
+        payment = await connection.fetchrow(
+            """
+            select payment_id, user_id, provider, provider_payment_id, status, amount, currency
+            from payments
+            where payment_id = $1
+            """,
+            payment_id,
+        )
+        subscription = await connection.fetchrow(
+            """
+            select subscription_id, user_id, provider, duration_months, is_active, tariff_key,
+                   panel_user_uuid, end_date
+            from subscriptions
+            where user_id = $1
+            order by end_date desc nulls last, subscription_id desc
+            limit 1
+            """,
+            user_id,
+        )
+        assert payment is not None
+        assert subscription is not None
+        return payment, subscription
+    finally:
+        await connection.close()
+
+
+async def _fetch_user_and_latest_subscription(
+    user_id: int,
+) -> tuple[Record, Record]:
+    connection = await asyncpg.connect(DB_DSN)
+    try:
+        user = await connection.fetchrow(
+            "select user_id, panel_user_uuid from users where user_id = $1",
+            user_id,
+        )
+        subscription = await connection.fetchrow(
+            """
+            select subscription_id, user_id, provider, duration_months, is_active, tariff_key,
+                   panel_user_uuid, end_date
+            from subscriptions
+            where user_id = $1
+            order by end_date desc nulls last, subscription_id desc
+            limit 1
+            """,
+            user_id,
+        )
+        assert user is not None
+        assert subscription is not None
+        return user, subscription
+    finally:
+        await connection.close()
+
+
+def _find_admin_field(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    sections: list[dict[str, Any]] = payload.get("sections", [])
+    for section in sections:
+        fields: list[dict[str, Any]] = section.get("fields", [])
+        for field in fields:
+            if field.get("key") == key:
+                return field
+    raise AssertionError(f"admin settings field {key!r} was not found")
+
+
+def test_email_auth_session_and_csrf(client: httpx.Client) -> None:
+    email = f"qa-auth-{uuid.uuid4().hex}@example.com"
+    session = login_email(client, email)
+
+    me = _ok(client.get("/api/me", headers=session.headers()))
+    assert me["user"]["id"] == session.user_id
+    assert me["user"]["email"] == email
+
+    language = _ok(
+        client.post(
+            "/api/account/language",
+            headers=session.headers(),
+            json={"language": "en"},
+        )
+    )
+    assert language["language"] == "en"
+
+
+def test_trial_activation_creates_missing_panel_user(client: httpx.Client) -> None:
+    session = login_email(client, f"qa-trial-{uuid.uuid4().hex}@example.com")
+
+    activation = _ok(client.post("/api/trial/activate", headers=session.headers()))
+
+    assert activation["activated"] is True
+    assert activation["days"] > 0
+    user, subscription = asyncio.run(_fetch_user_and_latest_subscription(session.user_id))
+    assert user["panel_user_uuid"]
+    assert subscription["panel_user_uuid"] == user["panel_user_uuid"]
+    assert subscription["provider"] == "trial"
+    assert subscription["is_active"] is True
+
+
+def test_qa_payment_webhook_activates_subscription(client: httpx.Client) -> None:
+    session = login_email(client, f"qa-paid-{uuid.uuid4().hex}@example.com")
+
+    payment_data = _ok(
+        client.post(
+            "/api/payments",
+            headers=session.headers(),
+            json={
+                "method": "qa",
+                "months": 1,
+                "tariff_key": "standard",
+                "sale_mode": "subscription",
+            },
+        )
+    )
+    payment_id = int(payment_data["payment_id"])
+    assert payment_data["payment_url"]
+    payment_record = asyncio.run(_fetch_payment_amount_and_currency(payment_id))
+
+    body, signature = _signed_json(
+        {
+            "payment_id": payment_id,
+            "provider_payment_id": f"qa:{payment_id}:webhook",
+            "status": "succeeded",
+            "amount": float(payment_record["amount"]),
+            "currency": str(payment_record["currency"]),
+        }
+    )
+    webhook_data = _ok(
+        httpx.post(
+            f"{WEBHOOK_BASE_URL}/webhook/qa-payment",
+            content=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-QA-Payment-Signature": signature,
+            },
+        )
+    )
+    assert webhook_data["status"] == "succeeded"
+
+    status = _ok(client.get(f"/api/payments/{payment_id}", headers=session.headers()))
+    assert status["paid"] is True
+    assert status["status"] == "succeeded"
+
+    payment, subscription = asyncio.run(
+        _fetch_payment_and_latest_subscription(payment_id, session.user_id)
+    )
+    assert payment is not None
+    assert subscription is not None
+    assert payment["provider"] == "qa"
+    assert payment["status"] == "succeeded"
+    assert subscription["provider"] == "qa"
+    assert subscription["duration_months"] == 1
+    assert subscription["is_active"] is True
+    assert subscription["panel_user_uuid"]
+
+
+def test_qa_payment_endpoint_issues_gift_once(client: httpx.Client) -> None:
+    session = login_email(client, f"qa-gift-{uuid.uuid4().hex}@example.com")
+    payment_data = _ok(
+        client.post(
+            "/api/payments",
+            headers=session.headers(),
+            json={
+                "method": "qa",
+                "months": 1,
+                "tariff_key": "standard",
+                "sale_mode": "subscription",
+                "gift": True,
+            },
+        )
+    )
+    payment_id = int(payment_data["payment_id"])
+
+    completed = _ok(
+        client.post(f"/api/payments/{payment_id}/qa/complete", headers=session.headers())
+    )
+    duplicate = _ok(
+        client.post(f"/api/payments/{payment_id}/qa/complete", headers=session.headers())
+    )
+
+    assert completed["status"] == "succeeded"
+    assert duplicate["duplicate"] is True
+    gift = asyncio.run(_fetch_gift_for_payment(payment_id))
+    assert gift is not None
+    assert gift["purchaser_id"] == session.user_id
+    assert gift["status"] == "ready"
+
+
+def test_admin_settings_save_roundtrip(client: httpx.Client) -> None:
+    session = login_email(client, "runes.admin@example.com")
+    admin = _ok(client.get("/api/admin/me", headers=session.headers()))
+    assert session.user_id in admin["admin_ids"]
+
+    value = f"https://status.qa.example.test/{uuid.uuid4().hex}"
+    try:
+        saved = _ok(
+            client.patch(
+                "/api/admin/settings",
+                headers=session.headers(),
+                json={"updates": {"SERVER_STATUS_URL": value}, "deletes": []},
+            )
+        )
+        assert saved["applied"] >= 1
+
+        settings_payload = _ok(client.get("/api/admin/settings", headers=session.headers()))
+        field = _find_admin_field(settings_payload, "SERVER_STATUS_URL")
+        assert field["value"] == value
+        assert field["overridden"] is True
+        assert field["value_source"] == "database_override"
+    finally:
+        client.patch(
+            "/api/admin/settings",
+            headers=session.headers(),
+            json={"updates": {}, "deletes": ["SERVER_STATUS_URL"]},
+        )
+
+
+def test_remnawave_versions_are_pinned_and_healthy(client: httpx.Client) -> None:
+    preset = os.getenv("QA_REMNAWAVE_PRESET", "3.0.0")
+    lock_path = REPO_ROOT / "deploy" / "dev" / "remnawave-stands" / preset / "versions.lock.json"
+    selected_env = Path(os.getenv("QA_ENV_FILE", str(REPO_ROOT / ".env.remnawave-dev"))).read_text(
+        encoding="utf-8"
+    )
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    support = json.loads(
+        (REPO_ROOT / "backend" / "bot" / "services" / "remnawave_support.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    certified = {
+        version
+        for generation in support["generations"]
+        for version in generation["certified_versions"]
+    }
+
+    assert preset in certified
+    assert lock["remnawave_panel"] == preset
+    assert f"REMNAWAVE_DEV_VERSION={lock['remnawave_panel']}" in selected_env
+    assert f"REMNAWAVE_NODE_VERSION={lock['remnawave_node']}" in selected_env
+    assert f"REMNAWAVE_SUBSCRIPTION_PAGE_VERSION={lock['subscription_page']}" in selected_env
+
+    frontend = httpx.get(FRONTEND_URL, timeout=10.0)
+    assert frontend.status_code < 500, frontend.text[:500]
+
+    remnawave = httpx.get(REMNAWAVE_HEALTH_URL, timeout=10.0)
+    assert remnawave.status_code == 200, remnawave.text
+
+
+def test_advertising_guest_auth_import_revision_export_and_archive(client: httpx.Client) -> None:
+    admin = login_email(client, "runes.admin@example.com")
+    headers = admin.headers()
+    created = _ok(
+        client.post(
+            "/api/admin/ads",
+            headers=headers,
+            json={
+                "source": "QA HTTP advertising",
+                "start_param": "qa_" + uuid.uuid4().hex,
+                "cost": 0,
+            },
+        )
+    )
+    campaign_id = created["campaign"]["id"]
+    path = f"/api/admin/ads/{campaign_id}"
+    _ok(
+        client.post(
+            path + "/links",
+            headers=headers,
+            json={
+                "label": "QA guest",
+                "destination": "web",
+                "landing_path": "/",
+                "utm": {"utm_source": "qa_http", "utm_medium": "paid"},
+            },
+        )
+    )
+    code = _ok(client.get(path + "/detail", headers=headers))["links"][0]["code"]
+    with httpx.Client(base_url=API_BASE_URL, timeout=25) as guest:
+        captured = _ok(
+            guest.post(
+                "/api/advertising/capture",
+                json={
+                    "code": code,
+                    "event_id": uuid.uuid4().hex,
+                    "user_id": admin.user_id,
+                },
+            )
+        )
+        assert captured["captured"] and captured["context"]["code"] == code
+        assert guest.get(path + "/detail").status_code in {401, 403}
+        signed_in = login_email(guest, f"qa-ads-{uuid.uuid4().hex}@example.com")
+        detail = _ok(client.get(path + "/detail", headers=headers))
+        assert detail["report"]["contacts"] == 1 and detail["report"]["registrations"] == 1
+        assert detail["touches"][0]["user_id"] == signed_in.user_id
+        assert detail["touches"][0]["user_id"] != admin.user_id
+        assert detail["report"]["platform"]["clicks"] is None
+    mapping = {
+        "start": "date",
+        "advertisement": "ad",
+        "impressions": "views",
+        "clicks": "clicks",
+        "starts": "starts",
+        "cost": "cost",
+    }
+    preview = _ok(
+        client.post(
+            path + "/imports/preview",
+            headers=headers,
+            json={
+                "csv": "date,ad,views,clicks,starts,cost\n2026-09-01T00:00:00Z,qa,100,5,1,10\n",
+                "mapping": mapping,
+                "timezone": "UTC",
+                "account": "QA " + uuid.uuid4().hex,
+                "granularity": "daily",
+                "currency": "RUB",
+            },
+        )
+    )
+    batch = preview["batch"]["id"]
+    _ok(client.post(path + f"/imports/{batch}/confirm", headers=headers, json={"replace": False}))
+    _ok(
+        client.post(
+            path + "/edit",
+            headers=headers,
+            json={"name": "QA HTTP advertising", "spend_source": "import"},
+        )
+    )
+    detail = _ok(client.get(path + "/detail", headers=headers))
+    assert detail["report"]["platform"]["clicks"] == 5
+    assert detail["report"]["currencies"][0]["spend_minor"] == "1000"
+    exported = client.get(path + "/export?kind=contacts", headers=headers)
+    assert exported.status_code == 200 and "text/csv" in exported.headers["content-type"]
+    assert str(signed_in.user_id) in exported.text and "rw_ad_visit" not in exported.text
+    _ok(client.post(path + f"/imports/{batch}/revert", headers=headers, json={}))
+    detail = _ok(client.get(path + "/detail", headers=headers))
+    assert detail["report"]["platform"]["clicks"] is None
+    _ok(client.post(path + "/archive", headers=headers, json={}))
+    detail = _ok(client.get(path + "/detail", headers=headers))
+    assert detail["archived_at"] and detail["report"]["contacts"] == 1

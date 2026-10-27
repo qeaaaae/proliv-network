@@ -1,0 +1,329 @@
+import contextlib
+import logging
+
+from aiogram import Bot, F, types
+from aiogram.filters import Command
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from bot.infra.auto_renew import (
+    auto_renew_toggle_allowed,
+    auto_renew_user_lock_name,
+    stop_provider_managed_recurrence,
+)
+from bot.infra.redis import redis_lock
+from bot.keyboards.inline.user_keyboards import (
+    get_autorenew_confirm_keyboard,
+)
+from bot.middlewares.i18n import JsonI18n
+from bot.payment_providers import provider_supports_recurring
+from bot.payment_providers.shared import service_supports_recurring
+from bot.payment_providers.shared.recurring import has_recurring_payment_method
+from bot.services.panel_api_service import PanelApiService
+from bot.services.subscription_service_impl.core import SubscriptionService
+from bot.services.telegram_account import require_telegram_account_id
+from bot.utils.callback_answer import (
+    callback_data,
+    message_from_user,
+)
+from config.settings import Settings
+from db.dal import subscription_dal
+from db.models import Subscription
+
+from ..menu_card import render_card
+from .core_common import (
+    _hwid_callback_token,
+    _recurring_service_for_subscription,
+    router,
+)
+from .core_status import (
+    _devices_list_from_panel_response,
+    my_devices_command_handler,
+    my_subscription_command_handler,
+)
+
+logger = logging.getLogger(__name__)
+
+
+@router.callback_query(F.data.startswith("disconnect_device:"))
+async def disconnect_device_handler(
+    callback: types.CallbackQuery,
+    settings: Settings,
+    i18n_data: dict,
+    session: AsyncSession,
+    subscription_service: SubscriptionService,
+    panel_service: PanelApiService,
+    bot: Bot,
+) -> None:
+    account_user_id = await require_telegram_account_id(session, callback.from_user.id)
+    current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
+    i18n: JsonI18n | None = i18n_data.get("i18n_instance")
+    get_text = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
+
+    if not settings.MY_DEVICES_SECTION_ENABLED:
+        with contextlib.suppress(Exception):
+            await callback.answer(get_text("my_devices_feature_disabled"), show_alert=True)
+        return
+
+    try:
+        _, hwid_token = callback_data(callback).split(":", 1)
+    except Exception:
+        with contextlib.suppress(Exception):
+            await callback.answer(get_text("error_try_again"), show_alert=True)
+        return
+
+    active = await subscription_service.get_active_subscription_details(session, account_user_id)
+    if not active or not active.get("user_id"):
+        await callback.answer(get_text("subscription_not_active"), show_alert=True)
+        return
+
+    devices = await panel_service.get_user_devices(active.get("user_id"))
+    if devices is None:
+        await callback.answer(get_text("no_devices_found"), show_alert=True)
+        return
+
+    devices_list_raw = _devices_list_from_panel_response(devices)
+
+    hwid = None
+    for device in devices_list_raw:
+        hwid_candidate = device.get("hwid")
+        if hwid_candidate and _hwid_callback_token(hwid_candidate) == hwid_token:
+            hwid = hwid_candidate
+            break
+
+    if not hwid:
+        await callback.answer(get_text("error_try_again"), show_alert=True)
+        return
+
+    success = await panel_service.disconnect_device(active.get("user_id"), hwid)
+    if not success:
+        await callback.answer(get_text("error_try_again"), show_alert=True)
+        return
+    await session.commit()
+    with contextlib.suppress(Exception):
+        await callback.answer(get_text("device_disconnected"))
+    await my_devices_command_handler(
+        callback, i18n_data, settings, panel_service, subscription_service, session, bot
+    )
+
+
+@router.callback_query(F.data.startswith("toggle_autorenew:"))
+async def toggle_autorenew_handler(
+    callback: types.CallbackQuery,
+    settings: Settings,
+    i18n_data: dict,
+    session: AsyncSession,
+    subscription_service: SubscriptionService,
+    panel_service: PanelApiService,
+    bot: Bot,
+) -> None:
+    account_user_id = await require_telegram_account_id(session, callback.from_user.id)
+    current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
+    i18n: JsonI18n | None = i18n_data.get("i18n_instance")
+    get_text = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
+
+    try:
+        _, payload = callback_data(callback).split(":", 1)
+        sub_id_str, enable_str = payload.split(":")
+        sub_id = int(sub_id_str)
+        enable = bool(int(enable_str))
+    except Exception:
+        with contextlib.suppress(Exception):
+            await callback.answer(get_text("error_try_again"), show_alert=True)
+        return
+
+    sub = await session.get(Subscription, sub_id)
+    if not sub or sub.user_id != account_user_id:
+        await callback.answer(get_text("error_try_again"), show_alert=True)
+        return
+    provider = str(getattr(sub, "provider", "") or "").strip().lower()
+    if not auto_renew_toggle_allowed(provider, enable=enable):
+        await callback.answer(get_text("error_try_again"), show_alert=True)
+        return
+    if enable and provider_supports_recurring(provider):
+        service = _recurring_service_for_subscription(subscription_service, sub)
+        if not service_supports_recurring(service):
+            await callback.answer(get_text("autorenew_unavailable"), show_alert=True)
+            return
+        has_saved_card = await has_recurring_payment_method(
+            session,
+            account_user_id,
+            provider=provider,
+        )
+        if not has_saved_card:
+            with contextlib.suppress(Exception):
+                await callback.answer(get_text("autorenew_enable_requires_card"), show_alert=True)
+            return
+
+    # Show confirmation popup and inline buttons
+    confirm_text = (
+        get_text("autorenew_confirm_enable") if enable else get_text("autorenew_confirm_disable")
+    )
+    kb = get_autorenew_confirm_keyboard(enable, sub.subscription_id, current_lang, i18n)
+    await render_card(callback, confirm_text, kb)
+    with contextlib.suppress(Exception):
+        await callback.answer()
+    return
+
+
+@router.callback_query(F.data.startswith("autorenew:confirm:"))
+async def confirm_autorenew_handler(
+    callback: types.CallbackQuery,
+    settings: Settings,
+    i18n_data: dict,
+    session: AsyncSession,
+    subscription_service: SubscriptionService,
+    panel_service: PanelApiService,
+    bot: Bot,
+) -> None:
+    account_user_id = await require_telegram_account_id(session, callback.from_user.id)
+    current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
+    i18n: JsonI18n | None = i18n_data.get("i18n_instance")
+    get_text = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
+
+    try:
+        _, _, sub_id_str, enable_str = callback_data(callback).split(":", 3)
+        sub_id = int(sub_id_str)
+        enable = bool(int(enable_str))
+    except Exception:
+        with contextlib.suppress(Exception):
+            await callback.answer(get_text("error_try_again"), show_alert=True)
+        return
+
+    sub = await session.get(Subscription, sub_id)
+    if not sub or sub.user_id != account_user_id:
+        await callback.answer(get_text("error_try_again"), show_alert=True)
+        return
+    provider = str(getattr(sub, "provider", "") or "").strip().lower()
+    if not auto_renew_toggle_allowed(provider, enable=enable):
+        await callback.answer(get_text("error_try_again"), show_alert=True)
+        return
+    if enable and provider_supports_recurring(provider):
+        service = _recurring_service_for_subscription(subscription_service, sub)
+        if not service_supports_recurring(service):
+            await callback.answer(get_text("autorenew_unavailable"), show_alert=True)
+            with contextlib.suppress(Exception):
+                await my_subscription_command_handler(
+                    callback, i18n_data, settings, panel_service, subscription_service, session, bot
+                )
+            return
+        has_saved_card = await has_recurring_payment_method(
+            session,
+            account_user_id,
+            provider=provider,
+        )
+        if not has_saved_card:
+            with contextlib.suppress(Exception):
+                await callback.answer(get_text("autorenew_enable_requires_card"), show_alert=True)
+            with contextlib.suppress(Exception):
+                await my_subscription_command_handler(
+                    callback, i18n_data, settings, panel_service, subscription_service, session, bot
+                )
+            return
+
+    async with redis_lock(
+        settings,
+        auto_renew_user_lock_name(account_user_id),
+        ttl_seconds=60,
+    ) as acquired:
+        if not acquired:
+            await callback.answer(get_text("error_try_again"), show_alert=True)
+            return
+        if not enable and not await stop_provider_managed_recurrence(
+            subscription_service,
+            session,
+            user_id=account_user_id,
+            provider=provider,
+        ):
+            await session.rollback()
+            await callback.answer(get_text("autorenew_provider_cancel_failed"), show_alert=True)
+            return
+        await subscription_dal.set_auto_renew(
+            session,
+            sub.subscription_id,
+            enable,
+        )
+        await session.commit()
+    with contextlib.suppress(Exception):
+        await callback.answer(get_text("subscription_autorenew_updated"))
+    await my_subscription_command_handler(
+        callback, i18n_data, settings, panel_service, subscription_service, session, bot
+    )
+
+
+@router.callback_query(F.data == "autorenew:cancel")
+async def autorenew_cancel_from_webhook_button(
+    callback: types.CallbackQuery,
+    settings: Settings,
+    i18n_data: dict,
+    session: AsyncSession,
+    subscription_service: SubscriptionService,
+    panel_service: PanelApiService,
+    bot: Bot,
+) -> None:
+    account_user_id = await require_telegram_account_id(session, callback.from_user.id)
+    current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
+    i18n: JsonI18n | None = i18n_data.get("i18n_instance")
+    get_text = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs) if i18n else key
+
+    # Disable auto-renew on the active subscription
+    from db.dal import subscription_dal
+
+    sub = await subscription_dal.get_active_subscription_by_user_id(session, account_user_id)
+    if not sub:
+        with contextlib.suppress(Exception):
+            await callback.answer(get_text("subscription_not_active"), show_alert=True)
+        return
+    provider = str(getattr(sub, "provider", "") or "").strip().lower()
+    if not auto_renew_toggle_allowed(provider, enable=False):
+        with contextlib.suppress(Exception):
+            await callback.answer(get_text("error_try_again"), show_alert=True)
+        return
+    async with redis_lock(
+        settings,
+        auto_renew_user_lock_name(account_user_id),
+        ttl_seconds=60,
+    ) as acquired:
+        if not acquired:
+            await callback.answer(get_text("error_try_again"), show_alert=True)
+            return
+        if not await stop_provider_managed_recurrence(
+            subscription_service,
+            session,
+            user_id=account_user_id,
+            provider=provider,
+        ):
+            await session.rollback()
+            with contextlib.suppress(Exception):
+                await callback.answer(
+                    get_text("autorenew_provider_cancel_failed"),
+                    show_alert=True,
+                )
+            return
+        await subscription_dal.set_auto_renew(
+            session,
+            sub.subscription_id,
+            False,
+            stop_reason="customer_disabled",
+        )
+        await session.commit()
+    with contextlib.suppress(Exception):
+        await callback.answer(get_text("subscription_autorenew_updated"))
+    await my_subscription_command_handler(
+        callback, i18n_data, settings, panel_service, subscription_service, session, bot
+    )
+
+
+@router.message(Command("connect"))
+async def connect_command_handler(
+    message: types.Message,
+    i18n_data: dict,
+    settings: Settings,
+    panel_service: PanelApiService,
+    subscription_service: SubscriptionService,
+    session: AsyncSession,
+    bot: Bot,
+) -> None:
+    logger.info("User %s used /connect command.", message_from_user(message).id)
+    await my_subscription_command_handler(
+        message, i18n_data, settings, panel_service, subscription_service, session, bot
+    )

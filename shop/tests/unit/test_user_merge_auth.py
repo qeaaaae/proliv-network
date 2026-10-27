@@ -1,0 +1,471 @@
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Iterator
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import cast
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
+from sqlalchemy import Table
+from sqlalchemy.sql.dml import Update
+from sqlalchemy.sql.selectable import Select
+
+from bot.app.web.webapp.auth_panel import _link_telegram_to_user
+from db.dal import user_merge_dal
+from db.dal.user_dal import UserMergeConflictError
+from db.dal.user_merge_entitlements import RecurringMergeState
+
+
+class _Result:
+    def __init__(self, values: list[object] | None = None) -> None:
+        self._values = values or []
+
+    def __iter__(self) -> Iterator[object]:
+        return iter(self._values)
+
+    def scalars(self) -> _Result:
+        return self
+
+    def all(self) -> list[object]:
+        return self._values
+
+    def scalar_one_or_none(self) -> object | None:
+        return self._values[0] if self._values else None
+
+
+def _user(user_id: int, **overrides: object) -> SimpleNamespace:
+    values: dict[str, object] = {
+        "user_id": user_id,
+        "email": None,
+        "email_verified_at": None,
+        "notification_email": None,
+        "marketing_notifications_email_enabled": True,
+        "marketing_notifications_telegram_enabled": True,
+        "system_notifications_email_enabled": True,
+        "system_notifications_telegram_enabled": True,
+        "password_hash": None,
+        "password_set_at": None,
+        "telegram_id": None,
+        "panel_user_uuid": None,
+        "referral_code": None,
+        "referred_by_id": None,
+        "username": None,
+        "first_name": None,
+        "last_name": None,
+        "language_code": "ru",
+        "telegram_photo_url": None,
+        "telegram_notifications_status": "unknown",
+        "telegram_notifications_checked_at": None,
+        "telegram_notifications_enabled_at": None,
+        "telegram_notifications_blocked_at": None,
+        "channel_subscription_verified": None,
+        "channel_subscription_checked_at": None,
+        "channel_subscription_verified_for": None,
+        "lifetime_used_traffic_bytes": None,
+        "lifetime_used_traffic_synced_at": None,
+        "referral_welcome_bonus_claimed_at": None,
+        "is_banned": False,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+async def _merge(
+    source: SimpleNamespace, target: SimpleNamespace, *, privileged_target: bool = False
+) -> tuple[object, SimpleNamespace]:
+    async def execute(statement: object) -> _Result:
+        if privileged_target and isinstance(statement, Select):
+            tables = {
+                table.name for table in statement.get_final_froms() if isinstance(table, Table)
+            }
+            if tables & {"account_roles", "account_role_events"} and (
+                statement.whereclause is None
+                or target.user_id in statement.compile().params.values()
+            ):
+                return _Result([target.user_id])
+        return _Result()
+
+    session = SimpleNamespace(
+        get=AsyncMock(return_value=None),
+        execute=AsyncMock(side_effect=execute),
+        scalar=AsyncMock(return_value=None),
+        add=Mock(),
+        delete=AsyncMock(),
+        flush=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+    with (
+        patch.object(
+            user_merge_dal,
+            "_lock_users_for_merge",
+            AsyncMock(return_value=(source, target)),
+        ),
+        patch.object(
+            user_merge_dal,
+            "_get_active_subscription_for_user",
+            AsyncMock(return_value=None),
+        ),
+        patch.object(
+            user_merge_dal,
+            "_get_latest_subscription_for_user",
+            AsyncMock(return_value=None),
+        ),
+        patch.object(user_merge_dal, "defer_event_until_commit", Mock()),
+    ):
+        merged = await user_merge_dal.merge_users(
+            session,
+            source_user_id=int(source.user_id),
+            target_user_id=int(target.user_id),
+            reason="telegram_link",
+        )
+    return merged, session
+
+
+async def _merge_keeps_established_email_and_notification_and_moves_auth_methods() -> None:
+    verified_at = datetime.now(UTC)
+    source = _user(
+        -10,
+        email="new-yandex@example.test",
+        email_verified_at=verified_at,
+        notification_email="new-yandex@example.test",
+        password_hash="source-password",
+    )
+    target = _user(
+        42,
+        email="original@example.test",
+        email_verified_at=verified_at,
+        notification_email="original@example.test",
+        telegram_id=42,
+    )
+
+    merged, session = await _merge(source, target)
+
+    assert merged is target
+    assert target.email == "original@example.test"
+    assert target.notification_email == "original@example.test"
+    assert target.password_hash == "source-password"
+    updated_tables = {
+        cast(Table, call.args[0].table).name
+        for call in session.execute.await_args_list
+        if isinstance(call.args[0], Update)
+    }
+    assert {
+        "auto_renew_cycles",
+        "platega_subscriptions",
+        "promo_codes",
+        "rollypay_subscriptions",
+        "tribute_entitlements",
+        "tribute_product_purchases",
+        "user_balance_ledger_entries",
+        "user_email_addresses",
+        "user_external_identities",
+        "user_panel_squad_overrides",
+        "user_passkey_credentials",
+        "wata_subscriptions",
+    } <= updated_tables
+
+
+def test_merge_keeps_established_email_and_notification_and_moves_auth_methods() -> None:
+    asyncio.run(_merge_keeps_established_email_and_notification_and_moves_auth_methods())
+
+
+def test_merge_keeps_privileged_target_and_its_administrative_history() -> None:
+    async def scenario() -> None:
+        source = _user(-10, email="google@example.test", email_verified_at=datetime.now(UTC))
+        target = _user(42, telegram_id=42)
+
+        merged, session = await _merge(source, target, privileged_target=True)
+
+        assert merged is target
+        assert target.user_id == 42
+        assert target.telegram_id == 42
+        assert target.email == "google@example.test"
+        session.delete.assert_awaited_once_with(source)
+        for call in session.execute.await_args_list:
+            statement = call.args[0]
+            if isinstance(statement, Update) and isinstance(statement.table, Table):
+                assert statement.table.name not in {"account_roles", "account_role_events"}
+
+    asyncio.run(scenario())
+
+
+async def _merge_promotes_verified_source_over_unverified_target_email() -> None:
+    verified_at = datetime.now(UTC)
+    source = _user(
+        -10,
+        email="verified@example.test",
+        email_verified_at=verified_at,
+        notification_email="verified@example.test",
+    )
+    target = _user(42, email="unverified@example.test", telegram_id=42)
+
+    await _merge(source, target)
+
+    assert target.email == "verified@example.test"
+    assert target.email_verified_at is verified_at
+    assert target.notification_email == "verified@example.test"
+
+
+def test_merge_promotes_verified_source_over_unverified_target_email() -> None:
+    asyncio.run(_merge_promotes_verified_source_over_unverified_target_email())
+
+
+async def _merge_preserves_every_opt_out_from_either_account() -> None:
+    source = _user(
+        -10,
+        marketing_notifications_email_enabled=False,
+        system_notifications_telegram_enabled=False,
+    )
+    target = _user(
+        42,
+        telegram_id=42,
+        marketing_notifications_telegram_enabled=False,
+        system_notifications_email_enabled=False,
+    )
+
+    await _merge(source, target)
+
+    assert target.marketing_notifications_email_enabled is False
+    assert target.marketing_notifications_telegram_enabled is False
+    assert target.system_notifications_email_enabled is False
+    assert target.system_notifications_telegram_enabled is False
+
+
+def test_merge_preserves_every_opt_out_from_either_account() -> None:
+    asyncio.run(_merge_preserves_every_opt_out_from_either_account())
+
+
+async def _merge_keeps_established_password_when_both_accounts_have_one() -> None:
+    source = _user(-10, password_hash="source-password")
+    target = _user(42, password_hash="target-password", telegram_id=42)
+
+    await _merge(source, target)
+
+    assert target.password_hash == "target-password"
+
+
+def test_merge_keeps_established_password_when_both_accounts_have_one() -> None:
+    asyncio.run(_merge_keeps_established_password_when_both_accounts_have_one())
+
+
+async def _merge_reports_the_conflicting_external_provider(provider: str) -> None:
+    source = _user(-10)
+    target = _user(42, telegram_id=42)
+    session = SimpleNamespace(
+        get=AsyncMock(return_value=None),
+        execute=AsyncMock(
+            side_effect=[_Result(), _Result(), _Result([provider]), _Result([provider])]
+        ),
+    )
+    with (
+        patch.object(
+            user_merge_dal,
+            "_lock_users_for_merge",
+            AsyncMock(return_value=(source, target)),
+        ),
+        pytest.raises(user_merge_dal.UserMergeConflictError) as raised,
+    ):
+        await user_merge_dal.merge_users(
+            session,
+            source_user_id=-10,
+            target_user_id=42,
+        )
+
+    expected = (
+        f"account_merge_{provider}_conflict"
+        if provider in {"google", "yandex"}
+        else "account_merge_provider_conflict"
+    )
+    assert raised.value.code == expected
+    assert raised.value.message_key == expected
+
+
+@pytest.mark.parametrize("provider", ["google", "yandex", "discord", "future_provider"])
+def test_merge_reports_the_conflicting_external_provider(provider: str) -> None:
+    asyncio.run(_merge_reports_the_conflicting_external_provider(provider))
+
+
+async def _merge_cancels_source_recurrence_and_keeps_target_recurrence() -> None:
+    now = datetime.now(UTC)
+    source = _user(-10)
+    target = _user(42, telegram_id=42)
+    source_sub = SimpleNamespace(
+        subscription_id=10,
+        start_date=now,
+        end_date=now,
+        duration_months=1,
+        provider="platega",
+        status_from_panel="ACTIVE",
+        auto_renew_enabled=True,
+    )
+    target_sub = SimpleNamespace(
+        subscription_id=20,
+        start_date=now,
+        end_date=now,
+        duration_months=1,
+        provider="yookassa",
+        status_from_panel="ACTIVE",
+        auto_renew_enabled=True,
+    )
+    session = SimpleNamespace(
+        get=AsyncMock(return_value=None),
+        execute=AsyncMock(return_value=_Result()),
+        add=Mock(),
+        delete=AsyncMock(),
+        flush=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+    session.scalar = AsyncMock(return_value=None)
+    cancel_source_recurring = AsyncMock(return_value=True)
+
+    with (
+        patch.object(
+            user_merge_dal,
+            "_lock_users_for_merge",
+            AsyncMock(return_value=(source, target)),
+        ),
+        patch.object(
+            user_merge_dal,
+            "_get_active_subscription_for_user",
+            AsyncMock(side_effect=[source_sub, target_sub]),
+        ),
+        patch.object(
+            user_merge_dal,
+            "inspect_recurring_merge",
+            AsyncMock(
+                return_value=RecurringMergeState(
+                    source_has_recurring=True,
+                    target_has_recurring=True,
+                    source_managed_providers=("platega",),
+                )
+            ),
+        ),
+        patch.object(user_merge_dal, "defer_event_until_commit", Mock()),
+    ):
+        merged = await user_merge_dal.merge_users(
+            session,
+            source_user_id=-10,
+            target_user_id=42,
+            cancel_source_recurring=cancel_source_recurring,
+        )
+
+    assert merged is target
+    cancel_source_recurring.assert_awaited_once_with(
+        session,
+        -10,
+        source_sub,
+        ("platega",),
+    )
+    assert target_sub.auto_renew_enabled is True
+    assert source_sub.auto_renew_enabled is False
+
+
+def test_merge_cancels_source_recurrence_and_keeps_target_recurrence() -> None:
+    asyncio.run(_merge_cancels_source_recurrence_and_keeps_target_recurrence())
+
+
+async def _merge_stops_when_secondary_recurrence_cannot_be_cancelled() -> None:
+    source = _user(-10)
+    target = _user(42, telegram_id=42)
+    session = SimpleNamespace(execute=AsyncMock(return_value=_Result()))
+    source_sub = SimpleNamespace(subscription_id=10)
+    target_sub = SimpleNamespace(subscription_id=20)
+    cancel_source_recurring = AsyncMock(return_value=False)
+
+    with (
+        patch.object(
+            user_merge_dal,
+            "_lock_users_for_merge",
+            AsyncMock(return_value=(source, target)),
+        ),
+        patch.object(
+            user_merge_dal,
+            "_get_active_subscription_for_user",
+            AsyncMock(side_effect=[source_sub, target_sub]),
+        ),
+        patch.object(
+            user_merge_dal,
+            "inspect_recurring_merge",
+            AsyncMock(
+                return_value=RecurringMergeState(
+                    source_has_recurring=True,
+                    target_has_recurring=True,
+                    source_managed_providers=("platega",),
+                )
+            ),
+        ),
+        pytest.raises(user_merge_dal.UserMergeConflictError) as raised,
+    ):
+        await user_merge_dal.merge_users(
+            session,
+            source_user_id=-10,
+            target_user_id=42,
+            cancel_source_recurring=cancel_source_recurring,
+        )
+
+    assert raised.value.message_key == "account_merge_recurring_cancel_failed"
+    cancel_source_recurring.assert_awaited_once()
+
+
+def test_merge_stops_when_secondary_recurrence_cannot_be_cancelled() -> None:
+    asyncio.run(_merge_stops_when_secondary_recurrence_cannot_be_cancelled())
+
+
+async def _telegram_link_rejects_existing_identity_without_merging() -> None:
+    current = _user(-10, email="new-yandex@example.test")
+    existing = _user(42, email="original@example.test", telegram_id=42)
+    session = SimpleNamespace(flush=AsyncMock())
+    telegram_profile = {
+        "id": 42,
+        "username": "alice",
+        "first_name": "Alice",
+        "last_name": "",
+        "language_code": "ru",
+    }
+    merge_users = AsyncMock()
+    with (
+        patch(
+            "bot.app.web.webapp.auth_panel.user_dal.lock_user_by_id",
+            AsyncMock(return_value=current),
+        ),
+        patch(
+            "bot.app.web.webapp.auth_panel.user_dal.get_user_by_telegram_id",
+            AsyncMock(return_value=existing),
+        ),
+        patch("bot.app.web.webapp.auth_panel.user_dal.merge_users", merge_users),
+        pytest.raises(UserMergeConflictError) as raised,
+    ):
+        await _link_telegram_to_user(
+            SimpleNamespace(app={}),
+            session,
+            current_user_id=-10,
+            telegram_user=telegram_profile,
+            settings=SimpleNamespace(DEFAULT_LANGUAGE="ru"),
+        )
+
+    merge_users.assert_not_awaited()
+    assert raised.value.code == "account_merge_required"
+
+
+def test_telegram_link_rejects_existing_identity_without_merging() -> None:
+    asyncio.run(_telegram_link_rejects_existing_identity_without_merging())
+
+
+def test_merge_preserves_both_native_invitation_codes():
+    from db.models import LegacyReferralCode
+
+    source = _user(-10, referral_code="SOURCE7")
+    target = _user(42, referral_code="TARGET42")
+    merged, session = asyncio.run(_merge(source, target))
+    assert merged.referral_code == "TARGET42"
+    aliases = [
+        call.args[0]
+        for call in session.add.call_args_list
+        if isinstance(call.args[0], LegacyReferralCode)
+    ]
+    assert len(aliases) == 1
+    assert aliases[0].source == "core-account-merge"
+    assert aliases[0].code == "SOURCE7"
+    assert aliases[0].user_id == 42

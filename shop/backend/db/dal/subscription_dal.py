@@ -1,0 +1,812 @@
+import logging
+import re
+import secrets
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from sqlalchemy import String, and_, cast, delete, func, literal_column, or_, update
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import set_committed_value
+
+from db.models import (
+    Subscription,
+    SubscriptionLifecycleNotification,
+    SubscriptionNotification,
+    User,
+)
+
+from ._sqlalchemy import rowcount
+
+logger = logging.getLogger(__name__)
+
+INSTALL_SHARE_TOKEN_BYTES = 16
+
+
+def _subscription_model_payload(sub_payload: dict[str, Any]) -> dict[str, Any]:
+    model_columns = Subscription.__mapper__.columns.keys()
+    filtered_payload = {key: value for key, value in sub_payload.items() if key in model_columns}
+    ignored_keys = sorted(set(sub_payload) - set(filtered_payload))
+    if ignored_keys:
+        logger.warning("Ignoring unsupported subscription payload keys: %s", ignored_keys)
+    return filtered_payload
+
+
+def _with_tariff_binding_metadata(
+    payload: dict[str, Any],
+    *,
+    previous_tariff_key: str | None = None,
+    existing_source: str | None = None,
+) -> dict[str, Any]:
+    normalized = dict(payload)
+    if "tariff_key" not in normalized:
+        return normalized
+    tariff_key = str(normalized.get("tariff_key") or "").strip()
+    if not tariff_key:
+        normalized["tariff_key"] = None
+        normalized["tariff_binding_source"] = None
+        normalized["tariff_bound_at"] = None
+        normalized["tariff_binding_note"] = None
+        return normalized
+    normalized["tariff_key"] = tariff_key
+    changed = tariff_key != str(previous_tariff_key or "").strip()
+    if changed or not existing_source:
+        normalized.setdefault("tariff_binding_source", "application")
+        normalized.setdefault("tariff_bound_at", datetime.now(UTC))
+        normalized.setdefault("tariff_binding_note", None)
+    return normalized
+
+
+async def get_active_subscription_by_user_id(
+    session: AsyncSession, user_id: int, panel_user_uuid: str | None = None
+) -> Subscription | None:
+    stmt = select(Subscription).where(
+        Subscription.user_id == user_id,
+        Subscription.is_active == True,
+        Subscription.end_date > datetime.now(UTC),
+    )
+    if panel_user_uuid:
+        stmt = stmt.where(Subscription.panel_user_uuid == panel_user_uuid)
+    stmt = stmt.order_by(Subscription.end_date.desc()).limit(1)
+    result = await session.execute(stmt)
+    return result.scalars().first()
+
+
+async def get_latest_subscription_by_user_id(
+    session: AsyncSession, user_id: int, panel_user_uuid: str | None = None
+) -> Subscription | None:
+    """Return the most recently ended subscription, including inactive rows."""
+
+    stmt = select(Subscription).where(Subscription.user_id == user_id)
+    if panel_user_uuid:
+        stmt = stmt.where(Subscription.panel_user_uuid == panel_user_uuid)
+    stmt = stmt.order_by(Subscription.end_date.desc(), Subscription.subscription_id.desc()).limit(1)
+    result = await session.execute(stmt)
+    return result.scalars().first()
+
+
+async def get_active_subscription_by_user_id_for_update(
+    session: AsyncSession,
+    user_id: int,
+) -> Subscription | None:
+    """Lock the current entitlement row before a payment mutates it."""
+
+    stmt = (
+        select(Subscription)
+        .where(
+            Subscription.user_id == user_id,
+            Subscription.is_active == True,
+            Subscription.end_date > datetime.now(UTC),
+        )
+        .order_by(Subscription.end_date.desc())
+        .limit(1)
+        .with_for_update()
+    )
+    result = await session.execute(stmt)
+    return result.scalars().first()
+
+
+async def get_subscription_by_id_for_update(
+    session: AsyncSession,
+    subscription_id: int,
+) -> Subscription | None:
+    """Lock an exact renewal target, including just-expired subscriptions."""
+
+    stmt = (
+        select(Subscription)
+        .where(Subscription.subscription_id == int(subscription_id))
+        .limit(1)
+        .with_for_update()
+    )
+    result = await session.execute(stmt)
+    return result.scalars().first()
+
+
+async def user_has_active_subscription_after(
+    session: AsyncSession,
+    user_id: int,
+    after: datetime,
+    *,
+    exclude_subscription_id: int | None = None,
+) -> bool:
+    """Return True when the user has an active subscription ending after ``after``.
+
+    Used to suppress expiry/expiring notifications for a stale subscription row
+    once the user is already covered by a newer (e.g. renewed) subscription.
+    """
+    if after.tzinfo is None:
+        after = after.replace(tzinfo=UTC)
+    stmt = select(Subscription.subscription_id).where(
+        Subscription.user_id == user_id,
+        Subscription.is_active == True,
+        Subscription.end_date > after,
+    )
+    if exclude_subscription_id is not None:
+        stmt = stmt.where(Subscription.subscription_id != exclude_subscription_id)
+    stmt = stmt.limit(1)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none() is not None
+
+
+async def get_latest_active_end_dates(
+    session: AsyncSession,
+    user_ids: Any,
+    *,
+    now: datetime | None = None,
+) -> dict[int, datetime]:
+    """Map each user id to the latest end_date among their active live subscriptions.
+
+    Only subscriptions that are still active (``is_active`` and ``end_date`` in the
+    future) are considered, so callers can detect when a subscription row has been
+    superseded by a renewal and avoid sending stale expiry notifications.
+    """
+    unique_ids = [uid for uid in set(user_ids or []) if uid is not None]
+    if not unique_ids:
+        return {}
+    if now is None:
+        now = datetime.now(UTC)
+    stmt = (
+        select(Subscription.user_id, func.max(Subscription.end_date))
+        .where(
+            Subscription.user_id.in_(unique_ids),
+            Subscription.is_active == True,
+            Subscription.end_date > now,
+        )
+        .group_by(Subscription.user_id)
+    )
+    result = await session.execute(stmt)
+    return {row[0]: row[1] for row in result.all()}
+
+
+async def get_subscription_by_panel_subscription_uuid(
+    session: AsyncSession, panel_sub_uuid: str
+) -> Subscription | None:
+    stmt = select(Subscription).where(Subscription.panel_subscription_uuid == panel_sub_uuid)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+def normalize_install_share_token(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if not re.fullmatch(r"[a-f0-9]{32}", token):
+        return ""
+    return token
+
+
+async def get_subscription_by_install_share_token(
+    session: AsyncSession,
+    token: str,
+) -> Subscription | None:
+    normalized = normalize_install_share_token(token)
+    if not normalized:
+        return None
+    stmt = select(Subscription).where(Subscription.install_share_token == normalized)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def ensure_install_share_token(
+    session: AsyncSession,
+    subscription: Subscription,
+    *,
+    panel_short_uuid: str | None = None,
+) -> str:
+    verified_short_uuid = str(panel_short_uuid or "").strip()
+    raw_existing = str(getattr(subscription, "install_share_token", "") or "").strip()
+    existing = normalize_install_share_token(raw_existing)
+    binding = str(getattr(subscription, "install_share_panel_short_uuid", "") or "").strip()
+    if existing and (not verified_short_uuid or binding == verified_short_uuid):
+        if existing != getattr(subscription, "install_share_token", None):
+            subscription.install_share_token = existing
+            await session.flush()
+        return existing
+
+    subscription_id = getattr(subscription, "subscription_id", None)
+    for _attempt in range(10):
+        token = secrets.token_hex(INSTALL_SHARE_TOKEN_BYTES)
+        if await get_subscription_by_install_share_token(session, token):
+            continue
+        if subscription_id:
+            old_binding = getattr(subscription, "install_share_panel_short_uuid", None)
+            result = await session.execute(
+                update(Subscription)
+                .where(
+                    Subscription.subscription_id == subscription_id,
+                    or_(
+                        Subscription.install_share_token.is_(None),
+                        Subscription.install_share_token == "",
+                        Subscription.install_share_token == raw_existing,
+                    ),
+                    Subscription.install_share_panel_short_uuid.is_not_distinct_from(old_binding),
+                )
+                .values(
+                    install_share_token=token,
+                    install_share_panel_short_uuid=verified_short_uuid or None,
+                )
+            )
+            await session.flush()
+            if rowcount(result):
+                await session.refresh(subscription)
+                return (
+                    normalize_install_share_token(
+                        getattr(subscription, "install_share_token", None)
+                    )
+                    or token
+                )
+
+            await session.refresh(subscription)
+            raw_existing = str(getattr(subscription, "install_share_token", "") or "").strip()
+            existing = normalize_install_share_token(raw_existing)
+            binding = str(getattr(subscription, "install_share_panel_short_uuid", "") or "").strip()
+            if existing and (not verified_short_uuid or binding == verified_short_uuid):
+                return existing
+            continue
+
+        subscription.install_share_token = token
+        subscription.install_share_panel_short_uuid = verified_short_uuid or None
+        await session.flush()
+        await session.refresh(subscription)
+        return token
+
+    raise RuntimeError("Failed to generate a unique install share token")
+
+
+async def revoke_install_share_tokens_for_panel_user(
+    session: AsyncSession, panel_user_uuid: str
+) -> None:
+    """Remove every public grant before a non-transactional panel reissue."""
+    await session.execute(
+        update(Subscription)
+        .where(Subscription.panel_user_uuid == panel_user_uuid)
+        .values(install_share_token=None, install_share_panel_short_uuid=None)
+    )
+    await session.flush()
+
+
+async def get_active_subscriptions_for_user(
+    session: AsyncSession, user_id: int
+) -> list[Subscription]:
+    """Get all active subscriptions for a user."""
+    stmt = (
+        select(Subscription)
+        .where(Subscription.user_id == user_id, Subscription.is_active == True)
+        .order_by(Subscription.end_date.desc())
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def update_subscription(
+    session: AsyncSession,
+    subscription_id: int,
+    update_data: dict[str, Any],
+    *,
+    refresh: bool = True,
+    expected_version: str | None = None,
+) -> Subscription | None:
+    sub = await session.get(Subscription, subscription_id)
+    if sub:
+        normalized_update = _with_tariff_binding_metadata(
+            update_data,
+            previous_tariff_key=sub.tariff_key,
+            existing_source=sub.tariff_binding_source,
+        )
+        if expected_version is not None:
+            result = await session.execute(
+                update(Subscription)
+                .where(
+                    Subscription.subscription_id == subscription_id,
+                    cast(literal_column("xmin"), String) == expected_version,
+                )
+                .values(**normalized_update)
+                .execution_options(synchronize_session=False)
+            )
+            if not rowcount(result):
+                logger.info("Subscription snapshot update skipped after concurrent change")
+                return None
+            for key, value in normalized_update.items():
+                set_committed_value(sub, key, value)
+            return sub
+        for key, value in normalized_update.items():
+            setattr(sub, key, value)
+        await session.flush()
+        if refresh:
+            await session.refresh(sub)
+    return sub
+
+
+async def set_auto_renew(
+    session: AsyncSession,
+    subscription_id: int,
+    enabled: bool,
+    *,
+    stop_reason: str = "consent_changed",
+) -> Subscription | None:
+    """Toggle auto-renew and invalidate every pending charge for the old consent."""
+
+    from db.dal import auto_renew_dal
+
+    sub = await get_subscription_by_id_for_update(session, subscription_id)
+    if sub is None:
+        return None
+    if bool(sub.auto_renew_enabled) == bool(enabled) and enabled:
+        return sub
+    sub.auto_renew_enabled = bool(enabled)
+    sub.auto_renew_consent_version = int(sub.auto_renew_consent_version or 0) + 1
+    await auto_renew_dal.stop_open_cycles_for_subscription(
+        session,
+        subscription_id,
+        stop_reason,
+    )
+    await session.flush()
+    await session.refresh(sub)
+    return sub
+
+
+async def invalidate_user_auto_renew_consent(
+    session: AsyncSession,
+    user_id: int,
+    *,
+    reason: str,
+    disable: bool = False,
+    provider: str | None = None,
+) -> None:
+    """Invalidate queued charges after a payment-method or provider consent change."""
+
+    from db.dal import auto_renew_dal
+
+    filters = [
+        Subscription.user_id == user_id,
+        Subscription.is_active.is_(True),
+    ]
+    if provider:
+        filters.append(func.lower(Subscription.provider) == provider.strip().lower())
+    values: dict[str, Any] = {
+        "auto_renew_consent_version": Subscription.auto_renew_consent_version + 1,
+    }
+    if disable:
+        values["auto_renew_enabled"] = False
+    await session.execute(update(Subscription).where(*filters).values(**values))
+    await auto_renew_dal.stop_open_cycles_for_user(
+        session,
+        user_id,
+        reason,
+        provider=provider,
+    )
+
+
+async def set_user_subscriptions_cancelled_with_grace(
+    session: AsyncSession, user_id: int, grace_days: int = 1
+) -> int:
+    """Mark all active user subscriptions as cancelled with a short grace period.
+
+    Sets end_date to now + grace_days, status_from_panel to 'CANCELLED', and
+    skip future notifications to reduce noise after cancellation.
+    Returns number of updated rows.
+    """
+    from datetime import datetime, timedelta
+
+    grace_end = datetime.now(UTC) + timedelta(days=grace_days)
+    stmt = (
+        update(Subscription)
+        .where(Subscription.user_id == user_id, Subscription.is_active == True)
+        .values(
+            end_date=grace_end,
+            status_from_panel="CANCELLED",
+            skip_notifications=True,
+        )
+    )
+    result = await session.execute(stmt)
+    return rowcount(result)
+
+
+async def upsert_subscription(session: AsyncSession, sub_payload: dict[str, Any]) -> Subscription:
+    panel_sub_uuid = sub_payload.get("panel_subscription_uuid")
+    if not panel_sub_uuid:
+        raise ValueError("panel_subscription_uuid is required for upsert.")
+
+    existing_sub = await get_subscription_by_panel_subscription_uuid(session, panel_sub_uuid)
+
+    if existing_sub:
+        logger.info(
+            "Updating existing subscription %s by panel_sub_uuid %s",
+            existing_sub.subscription_id,
+            panel_sub_uuid,
+        )
+        normalized_payload = _with_tariff_binding_metadata(
+            _subscription_model_payload(sub_payload),
+            previous_tariff_key=existing_sub.tariff_key,
+            existing_source=existing_sub.tariff_binding_source,
+        )
+        for key, value in normalized_payload.items():
+            setattr(existing_sub, key, value)
+        await session.flush()
+        await session.refresh(existing_sub)
+        return existing_sub
+    else:
+        logger.info("Creating new subscription with panel_sub_uuid %s", panel_sub_uuid)
+
+        if sub_payload.get("user_id") is None and "panel_user_uuid" not in sub_payload:
+            raise ValueError("For a new subscription without user_id, panel_user_uuid is required.")
+        if "end_date" not in sub_payload:
+            raise ValueError("Missing 'end_date' for new subscription.")
+        if sub_payload.get("user_id") is not None:
+            from .user_dal import get_user_by_id
+
+            user = await get_user_by_id(session, sub_payload["user_id"])
+            if not user:
+                raise ValueError(
+                    f"User {sub_payload['user_id']} not found for new subscription with panel_uuid {panel_sub_uuid}."  # noqa: E501
+                )
+
+        new_sub = Subscription(
+            **_with_tariff_binding_metadata(_subscription_model_payload(sub_payload))
+        )
+        session.add(new_sub)
+        await session.flush()
+        await session.refresh(new_sub)
+        return new_sub
+
+
+async def deactivate_other_active_subscriptions(
+    session: AsyncSession,
+    panel_user_uuid: str,
+    current_panel_subscription_uuid: str | None,
+    *,
+    user_id: int | None = None,
+) -> None:
+    stmt = (
+        update(Subscription)
+        .where(
+            Subscription.panel_user_uuid == panel_user_uuid,
+            Subscription.is_active == True,
+        )
+        .values(is_active=False, status_from_panel="INACTIVE_BY_BOT_SYNC")
+    )
+    if current_panel_subscription_uuid:
+        stmt = stmt.where(Subscription.panel_subscription_uuid != current_panel_subscription_uuid)
+    if user_id is not None:
+        stmt = stmt.where(Subscription.user_id == user_id)
+
+    result = await session.execute(stmt)
+    affected = rowcount(result)
+    if affected > 0:
+        logger.info(
+            "Deactivated %s other active subscriptions for panel_user_uuid %s.",
+            affected,
+            panel_user_uuid,
+        )
+
+
+async def deactivate_all_user_subscriptions(session: AsyncSession, user_id: int) -> int:
+    stmt = (
+        update(Subscription)
+        .where(Subscription.user_id == user_id, Subscription.is_active == True)
+        .values(is_active=False, status_from_panel="INACTIVE_USER_NOT_FOUND")
+    )
+    result = await session.execute(stmt)
+    affected = rowcount(result)
+    if affected > 0:
+        logger.info(
+            "Deactivated %s subscriptions for user %s due to missing panel user.", affected, user_id
+        )
+    return affected
+
+
+async def delete_all_user_subscriptions(session: AsyncSession, user_id: int) -> int:
+    """Completely delete all user subscriptions."""
+    stmt = delete(Subscription).where(Subscription.user_id == user_id)
+    result = await session.execute(stmt)
+    affected = rowcount(result)
+    if affected > 0:
+        logger.info(
+            "Deleted %s subscription records for user %s for trial reset.", affected, user_id
+        )
+    return affected
+
+
+async def update_subscription_end_date(
+    session: AsyncSession, subscription_id: int, new_end_date: datetime
+) -> Subscription | None:
+
+    return await update_subscription(
+        session,
+        subscription_id,
+        {
+            "end_date": new_end_date,
+            "last_notification_sent": None,
+            "is_active": True,
+            "status_from_panel": "ACTIVE_EXTENDED_BY_BOT",
+        },
+    )
+
+
+async def has_any_subscription_for_user(session: AsyncSession, user_id: int) -> bool:
+    stmt = select(Subscription.subscription_id).where(Subscription.user_id == user_id).limit(1)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none() is not None
+
+
+async def has_trial_blocking_subscription_for_user(session: AsyncSession, user_id: int) -> bool:
+    now_utc = datetime.now(UTC)
+    reset_at = (
+        select(User.trial_eligibility_reset_at).where(User.user_id == user_id).scalar_subquery()
+    )
+    welcome_claimed_at = (
+        select(User.referral_welcome_bonus_claimed_at)
+        .where(User.user_id == user_id)
+        .scalar_subquery()
+    )
+    subscription_anchor = func.coalesce(Subscription.start_date, Subscription.end_date)
+    # The referral welcome bonus is a gift for joining by invite, not the trial.
+    # Once the subscription it created has ended, it no longer blocks the trial.
+    # A purchase on that subscription replaces the "referral" provider, and any
+    # later subscription starts after the claim, so both keep blocking.
+    ended_welcome_bonus = and_(
+        welcome_claimed_at.is_not(None),
+        func.coalesce(Subscription.provider, "") == "referral",
+        subscription_anchor <= welcome_claimed_at,
+        or_(Subscription.is_active.is_not(True), Subscription.end_date <= now_utc),
+    )
+    stmt = (
+        select(Subscription.subscription_id)
+        .where(
+            Subscription.user_id == user_id,
+            or_(
+                Subscription.status_from_panel.is_(None),
+                Subscription.status_from_panel != "PANEL_UPDATE_FAILED",
+            ),
+            or_(
+                reset_at.is_(None),
+                and_(Subscription.is_active == True, Subscription.end_date > now_utc),
+                subscription_anchor > reset_at,
+            ),
+            ~ended_welcome_bonus,
+        )
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    if result.scalar_one_or_none() is not None:
+        return True
+
+    from .account_cleanup_dal import has_cleaned_trial
+
+    identity = (
+        await session.execute(
+            select(User.telegram_id, User.trial_eligibility_reset_at).where(User.user_id == user_id)
+        )
+    ).one_or_none()
+    return bool(
+        identity is not None
+        and identity[0] is not None
+        and identity[1] is None
+        and await has_cleaned_trial(session, int(identity[0]))
+    )
+
+
+async def get_subscriptions_near_expiration(
+    session: AsyncSession, days_threshold: int
+) -> list[Subscription]:
+    now_utc = datetime.now(UTC)
+    threshold_date = now_utc + timedelta(days=days_threshold)
+
+    stmt = (
+        select(Subscription)
+        .join(Subscription.user)
+        .where(
+            Subscription.is_active == True,
+            Subscription.skip_notifications == False,
+            Subscription.end_date > now_utc,
+            Subscription.end_date <= threshold_date,
+            or_(
+                Subscription.last_notification_sent == None,
+                func.date(Subscription.last_notification_sent) < func.date(now_utc),
+            ),
+        )
+        .order_by(Subscription.end_date.asc())
+        .options(selectinload(Subscription.user))
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def update_subscription_notification_time(
+    session: AsyncSession, subscription_id: int, notification_time: datetime
+) -> Subscription | None:
+    return await update_subscription(
+        session, subscription_id, {"last_notification_sent": notification_time}
+    )
+
+
+async def update_subscription_last_connected_at(
+    session: AsyncSession,
+    subscription_id: int,
+    last_connected_at: datetime,
+) -> Subscription | None:
+    existing = await session.get(Subscription, subscription_id)
+    if existing is None:
+        return None
+    value = last_connected_at
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    current = existing.last_connected_at
+    if current is not None:
+        current = current.replace(tzinfo=UTC) if current.tzinfo is None else current.astimezone(UTC)
+        if current >= value:
+            return existing
+    existing.last_connected_at = value
+    return existing
+
+
+def _lifecycle_notification_offset(notification_key: str) -> int | None:
+    stage = notification_key.split(":", 1)[0]
+    before = re.fullmatch(r"before_(\d+)([dh])(?:_autorenew)?", stage)
+    if before:
+        return -int(before[1]) * (24 if before[2] == "d" else 1)
+    if stage == "expired":
+        return 0
+    after = re.fullmatch(r"expired_(\d+)h_after", stage)
+    return int(after[1]) if after else None
+
+
+def _notification_utc(value: object) -> datetime | None:
+    if not isinstance(value, datetime):
+        return None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+async def _record_lifecycle_notification(
+    session: AsyncSession,
+    subscription_id: int,
+    notification_key: str,
+    period_end_date: datetime,
+    sent_at: datetime,
+) -> None:
+    await session.execute(
+        insert(SubscriptionLifecycleNotification)
+        .values(
+            subscription_id=subscription_id,
+            notification_key=notification_key,
+            period_end_date=period_end_date,
+            sent_at=sent_at,
+        )
+        .on_conflict_do_nothing(
+            index_elements=["subscription_id", "notification_key", "period_end_date"]
+        )
+    )
+
+
+async def has_subscription_notification(
+    session: AsyncSession,
+    subscription_id: int,
+    notification_key: str,
+) -> bool:
+    offset = _lifecycle_notification_offset(notification_key)
+    if offset is not None:
+        sub = await session.get(Subscription, subscription_id)
+        end = _notification_utc(sub.end_date) if sub else None
+        if end is None:
+            return False
+        current = await session.execute(
+            select(SubscriptionLifecycleNotification.notification_id)
+            .where(
+                SubscriptionLifecycleNotification.subscription_id == subscription_id,
+                SubscriptionLifecycleNotification.notification_key == notification_key,
+                SubscriptionLifecycleNotification.period_end_date == end,
+            )
+            .limit(1)
+        )
+        if current.scalar_one_or_none() is not None:
+            return True
+        # Legacy markers have no expiry snapshot. Only a marker inside this
+        # period's stage window can belong to its current delivery. Allow one
+        # hour of legacy timestamp tolerance, then freeze this attribution so a
+        # traffic counter reset cannot invalidate an already delivered notice.
+        try:
+            lower = end + timedelta(hours=offset - 1)
+        except OverflowError:
+            return False
+        start = _notification_utc(sub.start_date) if sub else None
+        if start is not None:
+            lower = max(lower, start)
+        legacy = await session.execute(
+            select(SubscriptionNotification.sent_at)
+            .where(
+                SubscriptionNotification.subscription_id == subscription_id,
+                SubscriptionNotification.notification_key == notification_key,
+                SubscriptionNotification.sent_at >= lower,
+            )
+            .limit(1)
+        )
+        legacy_sent_at = _notification_utc(legacy.scalar_one_or_none())
+        if legacy_sent_at is None:
+            return False
+        await _record_lifecycle_notification(
+            session, subscription_id, notification_key, end, legacy_sent_at
+        )
+        return True
+    stmt = (
+        select(SubscriptionNotification.notification_id)
+        .where(
+            SubscriptionNotification.subscription_id == subscription_id,
+            SubscriptionNotification.notification_key == notification_key,
+        )
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none() is not None
+
+
+async def record_subscription_notification(
+    session: AsyncSession,
+    subscription_id: int,
+    notification_key: str,
+    *,
+    sent_at: datetime | None = None,
+) -> None:
+    if sent_at is None:
+        sent_at = datetime.now(UTC)
+    existing = await has_subscription_notification(session, subscription_id, notification_key)
+    if existing:
+        return
+    if _lifecycle_notification_offset(notification_key) is not None:
+        sub = await session.get(Subscription, subscription_id)
+        end = _notification_utc(sub.end_date) if sub else None
+        if end is None:
+            return
+        await _record_lifecycle_notification(
+            session, subscription_id, notification_key, end, sent_at
+        )
+        await update_subscription_notification_time(session, subscription_id, sent_at)
+        return
+    session.add(
+        SubscriptionNotification(
+            subscription_id=subscription_id,
+            notification_key=notification_key,
+            sent_at=sent_at,
+        )
+    )
+    await update_subscription_notification_time(session, subscription_id, sent_at)
+
+
+async def find_subscription_for_notification_update(
+    session: AsyncSession, user_id: int, subscription_end_date_to_match: datetime
+) -> Subscription | None:
+
+    if subscription_end_date_to_match.tzinfo is None:
+        subscription_end_date_to_match = subscription_end_date_to_match.replace(tzinfo=UTC)
+
+    stmt = (
+        select(Subscription)
+        .where(
+            Subscription.user_id == user_id,
+            Subscription.is_active == True,
+            Subscription.end_date >= subscription_end_date_to_match - timedelta(seconds=1),
+            Subscription.end_date <= subscription_end_date_to_match + timedelta(seconds=1),
+        )
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()

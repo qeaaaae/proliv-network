@@ -1,0 +1,649 @@
+import contextlib
+import html
+import logging
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from typing import Any
+
+from aiogram import Bot, F, types
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from bot.keyboards.inline.user_keyboards import (
+    get_back_to_main_menu_markup,
+)
+from bot.middlewares.i18n import JsonI18n
+from bot.services.device_topup_availability import (
+    device_topup_reason_locale_key,
+    resolve_device_topup_availability,
+)
+from bot.services.panel_api_service import PanelApiService
+from bot.services.subscription_service_impl.core import SubscriptionService
+from bot.services.traffic_topup_availability import resolve_traffic_topup_availability
+from bot.utils.install_links import (
+    append_install_share_link_text,
+    ensure_user_install_guide_links,
+)
+from config.settings import Settings
+from db.dal import device_name_dal, subscription_dal
+
+from ..menu_card import render_card
+from .core_common import (
+    _auto_renew_control_visible,
+    _event_user_id,
+    _format_premium_usage_limit,
+    _hwid_callback_token,
+    _shorten_hwid_for_display,
+    router,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _device_title(device_names: Mapping[str, str], hwid: Any, device_model: Any) -> str:
+    """HTML-safe title: the user's name first, the panel model after it."""
+    model = html.escape(str(device_model))
+    name = device_names.get(_hwid_callback_token(str(hwid).strip())) if hwid else None
+    if not name:
+        return model
+    return f"{html.escape(name)} · {model}" if device_model else html.escape(name)
+
+
+def _devices_list_from_panel_response(devices: Any) -> list[dict[str, Any]]:
+    if isinstance(devices, dict):
+        response = devices.get("response")
+        if isinstance(response, dict):
+            raw_devices = response.get("devices")
+        elif isinstance(response, list):
+            raw_devices = response
+        else:
+            raw_devices = devices.get("devices")
+            if raw_devices is None:
+                raw_devices = devices.get("data")
+    else:
+        raw_devices = devices
+
+    if not isinstance(raw_devices, list):
+        return []
+    return [device for device in raw_devices if isinstance(device, dict)]
+
+
+def _devices_count_from_panel_response(devices: Any) -> int | None:
+    if devices is None:
+        return None
+    if isinstance(devices, dict):
+        response = devices.get("response")
+        response_dict = response if isinstance(response, dict) else devices
+        total_value = response_dict.get("total")
+        if isinstance(total_value, int):
+            return total_value
+        devices_value = response_dict.get("devices")
+        if isinstance(devices_value, int):
+            return devices_value
+        if isinstance(devices_value, list):
+            return len(devices_value)
+    return len(_devices_list_from_panel_response(devices))
+
+
+async def my_subscription_command_handler(
+    event: types.Message | types.CallbackQuery,
+    i18n_data: dict,
+    settings: Settings,
+    panel_service: PanelApiService,
+    subscription_service: SubscriptionService,
+    session: AsyncSession,
+    bot: Bot,
+    back_callback: str = "main_action:back_to_main",
+) -> None:
+    target = event.message if isinstance(event, types.CallbackQuery) else event
+    current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
+    i18n: JsonI18n = i18n_data.get("i18n_instance")
+    get_text = lambda key, **kw: i18n.gettext(current_lang, key, **kw)
+
+    if not i18n or not target:
+        if isinstance(event, types.Message):
+            await event.answer(get_text("error_occurred_try_again"))
+        return
+
+    if not panel_service or not subscription_service:
+        await target.answer(get_text("error_service_unavailable"))
+        return
+
+    active = await subscription_service.get_active_subscription_details(
+        session, await _event_user_id(session, event)
+    )
+
+    if not active:
+        text = get_text("subscription_not_active")
+
+        buy_button = InlineKeyboardButton(
+            text=get_text("menu_subscribe_inline"), callback_data="main_action:subscribe"
+        )
+        back_markup = get_back_to_main_menu_markup(
+            current_lang,
+            i18n,
+            callback_data=back_callback,
+        )
+
+        kb = InlineKeyboardMarkup(inline_keyboard=[[buy_button], *back_markup.inline_keyboard])
+
+        if isinstance(event, types.CallbackQuery):
+            with contextlib.suppress(Exception):
+                await event.answer()
+            await render_card(event, text, kb)
+        else:
+            await event.answer(text, reply_markup=kb)
+        return
+
+    tariffs_config = settings.tariffs_config
+    available_for_user = getattr(tariffs_config, "available_tariffs_for_user", None)
+    available_tariffs = (
+        available_for_user(active.get("tariff_key"))
+        if callable(available_for_user)
+        else list(getattr(tariffs_config, "enabled_tariffs", []) or [])
+    )
+    has_multiple_available_tariffs = len(available_tariffs) > 1
+
+    end_date = active.get("end_date")
+    days_left = (end_date.date() - datetime.now(UTC).date()).days if end_date else 0
+    traffic_mode = bool(settings.traffic_sale_mode)
+    config_link_display = active.get("config_link")
+    connect_button_url = active.get("connect_button_url")
+    config_link_value = config_link_display or get_text("config_link_not_available")
+
+    def _fmt_gb(val: float | None) -> str:
+        if val is None:
+            return str(get_text("traffic_na"))
+        try:
+            if isinstance(val, (int, float)):
+                val_gb = float(val) / (2**30)
+                return f"{val_gb:.2f} GB"
+        except Exception:
+            pass
+        return str(val)
+
+    def _format_traffic_period(strategy: str | None) -> str | None:
+        if not strategy:
+            return None
+        strategy_upper = str(strategy).upper()
+        key_map = {
+            "MONTH": "traffic_period_month",
+            "MONTH_ROLLING": "traffic_period_month",
+            "WEEK": "traffic_period_week",
+            "DAY": "traffic_period_day",
+            "NO_RESET": "traffic_period_no_reset",
+        }
+        label_key = key_map.get(strategy_upper)
+        return get_text(label_key) if label_key else strategy_upper
+
+    def _format_used_with_period(used_display: str, period_label: str | None) -> str:
+        if not period_label:
+            return used_display
+        return str(
+            get_text(
+                "traffic_used_with_period", traffic_used=used_display, traffic_period=period_label
+            )
+        )
+
+    period_label = _format_traffic_period(active.get("traffic_limit_strategy"))
+    period_label = period_label or get_text("traffic_period_unknown")
+
+    if traffic_mode:
+        limit_display = _fmt_gb(active.get("traffic_limit_bytes"))
+        used_display = _format_used_with_period(
+            _fmt_gb(active.get("traffic_used_bytes")), period_label
+        )
+        remaining_display = get_text("traffic_na")
+        try:
+            limit_val = active.get("traffic_limit_bytes") or 0
+            used_val = active.get("traffic_used_bytes") or 0
+            remaining_val = max(0, float(limit_val) - float(used_val))
+            remaining_display = _fmt_gb(remaining_val)
+        except Exception:
+            pass
+        text = get_text(
+            "my_traffic_details",
+            status=active.get("status_from_panel", get_text("status_active")).capitalize(),
+            end_date=end_date.strftime("%Y-%m-%d") if end_date else get_text("traffic_no_expiry"),
+            traffic_limit=limit_display,
+            traffic_used=used_display,
+            traffic_left=remaining_display,
+            traffic_period=period_label,
+            config_link=config_link_value,
+        )
+    else:
+        tariff_prefix = ""
+        if has_multiple_available_tariffs and active.get("tariff_name"):
+            tariff_prefix = f"🎟 {active.get('tariff_name')}\n"
+            if active.get("tariff_description"):
+                tariff_prefix += f"{active.get('tariff_description')}\n"
+        text = get_text(
+            "my_subscription_details",
+            end_date=end_date.strftime("%Y-%m-%d") if end_date else "N/A",
+            days_left=max(0, days_left),
+            status=active.get("status_from_panel", get_text("status_active")).capitalize(),
+            config_link=config_link_value,
+            traffic_limit=(
+                f"{active['traffic_limit_bytes'] / 2**30:.2f} GB"
+                if active.get("traffic_limit_bytes")
+                else get_text("traffic_unlimited")
+            ),
+            traffic_used=(
+                _format_used_with_period(
+                    f"{active['traffic_used_bytes'] / 2**30:.2f} GB"
+                    if active.get("traffic_used_bytes") is not None
+                    else get_text("traffic_na"),
+                    period_label,
+                )
+            ),
+            traffic_period=period_label,
+        )
+        if tariff_prefix:
+            text = tariff_prefix + "\n" + text
+
+    if int(active.get("premium_limit_bytes") or 0) > 0:
+        premium_limit = int(active.get("premium_limit_bytes") or 0)
+        premium_used = int(active.get("premium_used_bytes") or 0)
+        premium_left = max(0, premium_limit - premium_used)
+        premium_balance = int(active.get("premium_topup_balance_bytes") or 0)
+        premium_status = get_text(
+            "premium_status_limited"
+            if active.get("premium_is_limited")
+            else "premium_status_active"
+        )
+        labels = active.get("premium_node_labels") or active.get("premium_squad_labels") or []
+        if labels:
+            visible = [html.escape(str(label)) for label in labels[:8]]
+            label_block = "\n".join(f"• {label}" for label in visible)
+            if len(labels) > len(visible):
+                label_block += "\n" + get_text(
+                    "premium_servers_more", count=len(labels) - len(visible)
+                )
+        else:
+            label_block = get_text("premium_servers_generic")
+        premium_period_label = _format_traffic_period(
+            active.get("premium_traffic_limit_strategy")
+        ) or get_text("traffic_period_unknown")
+        text += "\n\n" + get_text(
+            "subscription_premium_details",
+            status=premium_status,
+            usage=_format_premium_usage_limit(active, get_text),
+            remaining=f"{premium_left / 2**30:.2f} GB",
+            balance=f"{premium_balance / 2**30:.2f} GB",
+            servers=label_block,
+            traffic_period=premium_period_label,
+        )
+
+    base_markup = get_back_to_main_menu_markup(
+        current_lang,
+        i18n,
+        callback_data=back_callback,
+    )
+    kb = base_markup.inline_keyboard
+    try:
+        local_sub = await subscription_dal.get_active_subscription_by_user_id(
+            session, await _event_user_id(session, event)
+        )
+        install_links = await ensure_user_install_guide_links(
+            session,
+            settings,
+            await _event_user_id(session, event),
+            local_subscription=local_sub,
+        )
+        install_url = install_links.personal_url
+        install_share_url = install_links.public_share_url
+        if install_share_url:
+            try:
+                await session.commit()
+                text = append_install_share_link_text(text, get_text, install_share_url)
+            except Exception:
+                await session.rollback()
+                logger.exception(
+                    "Failed to persist install guide share token for user %s.",
+                    await _event_user_id(session, event),
+                )
+                install_share_url = None
+
+        # Build rows to prepend above the base "back" markup
+        prepend_rows = []
+
+        # 1) Connect button: prefer the actual subscription URL; fall back to mini-app
+        cfg_link_val = connect_button_url or config_link_display
+        if install_url:
+            prepend_rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=get_text("connect_button"),
+                        web_app=WebAppInfo(url=install_url),
+                    )
+                ]
+            )
+            if install_share_url:
+                prepend_rows.append(
+                    [
+                        InlineKeyboardButton(
+                            text=get_text("install_guide_share_button"),
+                            url=install_share_url,
+                        )
+                    ]
+                )
+        elif cfg_link_val:
+            prepend_rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=get_text("connect_button"),
+                        url=cfg_link_val,
+                    )
+                ]
+            )
+        elif settings.SUBSCRIPTION_MINI_APP_URL:
+            prepend_rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=get_text("connect_button"),
+                        web_app=WebAppInfo(url=settings.SUBSCRIPTION_MINI_APP_URL),
+                    )
+                ]
+            )
+
+        if settings.MY_DEVICES_SECTION_ENABLED:
+            max_devices_value = active.get("max_devices")
+            max_devices_display = get_text("devices_unlimited_label")
+            if max_devices_value not in (None, 0):
+                try:
+                    max_devices_int = int(max_devices_value)
+                    if max_devices_int >= 0:
+                        max_devices_display = str(max_devices_int)
+                except (TypeError, ValueError):
+                    max_devices_display = str(max_devices_value)
+            current_devices_display = "?"
+            user_uuid = active.get("user_id")
+            devices_response = None
+            if user_uuid:
+                try:
+                    devices_response = await panel_service.get_user_devices(user_uuid)
+                except Exception:
+                    logger.exception("Failed to load devices for user %s", user_uuid)
+            if devices_response is not None:
+                devices_count = _devices_count_from_panel_response(devices_response)
+                if devices_count is not None:
+                    current_devices_display = str(devices_count)
+            devices_button_text = get_text(
+                "devices_button",
+                current_devices=current_devices_display,
+                max_devices=max_devices_display,
+            )
+            prepend_rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=devices_button_text,
+                        callback_data="main_action:my_devices",
+                    )
+                ]
+            )
+            # Skip the buy-devices button entirely when the user has unlimited
+            # devices (max_devices == 0). Otherwise the button leads to an
+            # alert "hwid_devices_unlimited_no_topup" — confusing dead end.
+            device_topup_availability = resolve_device_topup_availability(
+                settings,
+                subscription_active=local_sub is not None,
+                tariff_key=local_sub.tariff_key if local_sub else None,
+                max_devices=max_devices_value,
+            )
+            if device_topup_availability.allowed:
+                prepend_rows.append(
+                    [
+                        InlineKeyboardButton(
+                            text=get_text("buy_hwid_devices_menu_button"),
+                            callback_data="hwid_devices:list",
+                        )
+                    ]
+                )
+            elif max_devices_value not in (None, 0):
+                prepend_rows.append(
+                    [
+                        InlineKeyboardButton(
+                            text=get_text("device_topup_unavailable_menu_button"),
+                            callback_data="hwid_devices:list",
+                        )
+                    ]
+                )
+
+        # 2) Auto-renew toggle
+        if (
+            not traffic_mode
+            and local_sub
+            and _auto_renew_control_visible(subscription_service, local_sub)
+        ):
+            toggle_text = (
+                get_text("autorenew_disable_button")
+                if local_sub.auto_renew_enabled
+                else get_text("autorenew_enable_button")
+            )
+            prepend_rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=toggle_text,
+                        callback_data=f"toggle_autorenew:{local_sub.subscription_id}:{1 if not local_sub.auto_renew_enabled else 0}",  # noqa: E501
+                    )
+                ]
+            )
+
+        # 3) Payment methods management (when autopayments enabled)
+        if not traffic_mode and settings.yookassa_autopayments_active:
+            prepend_rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=get_text("payment_methods_manage_button"), callback_data="pm:manage"
+                    )
+                ]
+            )
+
+        if settings.tariffs_config and local_sub and local_sub.tariff_key:
+            tariff_actions = []
+            if has_multiple_available_tariffs:
+                tariff_actions.append(
+                    InlineKeyboardButton(
+                        text=get_text("tariff_change_button"),
+                        callback_data="tariff_change:list",
+                    )
+                )
+            # Mirror the web app: the top-up offer stays hidden until usage
+            # crosses the unlock threshold (unless the tariff allows it always).
+            topup_availability = resolve_traffic_topup_availability(settings, active)
+            if topup_availability.unlocked:
+                tariff_actions.append(
+                    InlineKeyboardButton(
+                        text=get_text("traffic_topup_button"),
+                        callback_data="tariff_topup:list",
+                    )
+                )
+            if tariff_actions:
+                prepend_rows.append(tariff_actions)
+
+        if prepend_rows:
+            kb = prepend_rows + kb
+    except Exception:
+        pass
+    markup = InlineKeyboardMarkup(inline_keyboard=kb)
+
+    if isinstance(event, types.CallbackQuery):
+        with contextlib.suppress(Exception):
+            await event.answer()
+        await render_card(event, text, markup, parse_mode="HTML", disable_web_page_preview=True)
+    else:
+        await target.answer(
+            text, reply_markup=markup, parse_mode="HTML", disable_web_page_preview=True
+        )
+
+
+@router.callback_query(F.data == "main_action:my_devices")
+async def my_devices_command_handler(
+    event: types.Message | types.CallbackQuery,
+    i18n_data: dict,
+    settings: Settings,
+    panel_service: PanelApiService,
+    subscription_service: SubscriptionService,
+    session: AsyncSession,
+    bot: Bot,
+) -> None:
+    target = event.message if isinstance(event, types.CallbackQuery) else event
+    current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
+    i18n: JsonI18n = i18n_data.get("i18n_instance")
+    get_text = lambda key, **kw: i18n.gettext(current_lang, key, **kw)
+
+    if not i18n or not target:
+        if isinstance(event, types.Message):
+            await event.answer(get_text("error_occurred_try_again"))
+        return
+
+    if not settings.MY_DEVICES_SECTION_ENABLED:
+        if isinstance(event, types.CallbackQuery):
+            with contextlib.suppress(Exception):
+                await event.answer(get_text("my_devices_feature_disabled"), show_alert=True)
+        else:
+            await target.answer(get_text("my_devices_feature_disabled"))
+        return
+
+    account_user_id = await _event_user_id(session, event)
+    active = await subscription_service.get_active_subscription_details(session, account_user_id)
+    if not active or not active.get("user_id"):
+        message = get_text("subscription_not_active")
+        if isinstance(event, types.CallbackQuery):
+            with contextlib.suppress(Exception):
+                await event.answer(message, show_alert=True)
+        else:
+            await target.answer(message)
+        return
+
+    devices = await panel_service.get_user_devices(active.get("user_id")) if active else None
+    if devices is None:
+        if isinstance(event, types.CallbackQuery):
+            with contextlib.suppress(Exception):
+                await event.answer(get_text("no_devices_found"), show_alert=True)
+        else:
+            await target.answer(get_text("no_devices_found"))
+        return
+
+    devices_list_raw = _devices_list_from_panel_response(devices)
+    device_names = await device_name_dal.get_device_names(session, account_user_id)
+
+    max_devices_value = active.get("max_devices")
+    max_devices_display = get_text("devices_unlimited_label")
+    if max_devices_value not in (None, 0):
+        try:
+            max_devices_int = int(max_devices_value)
+            if max_devices_int >= 0:
+                max_devices_display = str(max_devices_int)
+        except (TypeError, ValueError):
+            max_devices_display = str(max_devices_value)
+
+    if not devices_list_raw:
+        text = get_text("no_devices_details_found_message", max_devices=max_devices_display)
+    else:
+        devices_list = []
+        current_devices = len(devices_list_raw)
+        for index, device in enumerate(devices_list_raw, start=1):
+            device_model = device.get("deviceModel") or None
+            platform = device.get("platform") or None
+            user_agent = device.get("userAgent") or None
+            os_version = device.get("osVersion") or None
+            created_at = device.get("createdAt")
+            hwid = device.get("hwid")
+            try:
+                created_at_str = (
+                    datetime.fromisoformat(created_at).strftime("%d.%m.%Y %H:%M")
+                    if created_at
+                    else "-"
+                )
+            except Exception:
+                created_at_str = str(created_at)
+
+            # Panel fields come from client headers and names from users: escape both.
+            device_details = get_text(
+                "device_details",
+                index=index,
+                device_model=_device_title(device_names, hwid, device_model),
+                platform=html.escape(str(platform)),
+                os_version=html.escape(str(os_version)),
+                created_at_str=html.escape(created_at_str),
+                user_agent=html.escape(str(user_agent)),
+                hwid=html.escape(str(hwid)),
+            )
+            devices_list.append(device_details)
+
+        text = get_text(
+            "my_devices_details",
+            devices="\n\n".join(devices_list),
+            current_devices=current_devices,
+            max_devices=max_devices_display,
+        )
+
+    base_markup = get_back_to_main_menu_markup(
+        current_lang, i18n, callback_data="main_action:my_subscription"
+    )
+    kb = base_markup.inline_keyboard
+
+    devices_kb = []
+    device_topup_availability = resolve_device_topup_availability(
+        settings,
+        subscription_active=True,
+        tariff_key=active.get("tariff_key"),
+        max_devices=max_devices_value,
+    )
+    if device_topup_availability.allowed:
+        devices_kb.append(
+            [
+                InlineKeyboardButton(
+                    text=get_text("buy_hwid_devices_menu_button"),
+                    callback_data="hwid_devices:list",
+                )
+            ]
+        )
+    elif max_devices_value not in (None, 0):
+        text = (
+            f"{text}\n\n"
+            f"{get_text(device_topup_reason_locale_key(device_topup_availability.reason))}"
+        )
+        devices_kb.append(
+            [
+                InlineKeyboardButton(
+                    text=get_text("device_topup_unavailable_menu_button"),
+                    callback_data="hwid_devices:list",
+                )
+            ]
+        )
+    if any(device.get("hwid") for device in devices_list_raw):
+        devices_kb.append(
+            [
+                InlineKeyboardButton(
+                    text=get_text("rename_device_menu_button"),
+                    callback_data="rename_device:list",
+                )
+            ]
+        )
+    for index, device in enumerate(devices_list_raw, start=1):
+        hwid = device.get("hwid")
+        if not hwid:
+            continue
+        device_button_text = get_text(
+            "disconnect_device_button", hwid=_shorten_hwid_for_display(hwid), index=index
+        )
+        hwid_token = _hwid_callback_token(hwid)
+
+        devices_kb.append(
+            [
+                InlineKeyboardButton(
+                    text=device_button_text, callback_data=f"disconnect_device:{hwid_token}"
+                )
+            ]
+        )
+    kb = devices_kb + kb
+    markup = InlineKeyboardMarkup(inline_keyboard=kb)
+
+    if isinstance(event, types.CallbackQuery):
+        with contextlib.suppress(Exception):
+            await event.answer()
+        await render_card(event, text, markup)
+    else:
+        await target.answer(text, reply_markup=markup)

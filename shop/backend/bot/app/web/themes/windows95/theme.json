@@ -1,0 +1,26 @@
+{
+  "key": "windows95",
+  "names": {
+    "ru": "Windows 95",
+    "en": "Windows 95"
+  },
+  "enabled": true,
+  "default": false,
+  "use_primary_accent": false,
+  "use_in_admin": true,
+  "css_file": "style.css",
+  "assets_version": 16,
+  "active_variant": "light",
+  "variants": {
+    "light": {
+      "color_scheme": "light"
+    },
+    "dark": {
+      "color_scheme": "dark"
+    }
+  },
+  "tokens": {
+    "color_scheme": "light",
+    "style_preset": "win95"
+  }
+}

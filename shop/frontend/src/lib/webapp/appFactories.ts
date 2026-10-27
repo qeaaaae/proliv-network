@@ -1,0 +1,782 @@
+import { createAuthStore } from "./stores/authStore";
+import { createBillingStore } from "./stores/billingStore";
+import { createAccountStore } from "./stores/accountStore";
+import { createActionsStore } from "./stores/actionsStore";
+import { createServerStatusStore } from "./stores/serverStatusStore.svelte";
+import { createPublicDocumentsStore } from "./stores/publicDocumentsStore.svelte";
+import { createWebappDataClient } from "./dataClient";
+import { buildApiUrl } from "./publicApi";
+import { createWebappActivationContext } from "./webappActivationContext";
+import { createAuthRuntime } from "./authRuntime.js";
+import { createResumeLifecycle } from "./resumeLifecycle.js";
+import { createAppBootRuntime } from "./appBootRuntime.js";
+import { createDemoAuth } from "./demoAuth";
+import { createUiChrome } from "./uiChrome";
+import { createEmailAvatarSync } from "./emailAvatarSync.js";
+import {
+  setAccountStore,
+  setActionsStore,
+  setAuthStore,
+  setBillingStore,
+  setDevicesStore,
+  setInstallGuidesStore,
+  setPublicDocumentsStore,
+  setSupportStore,
+} from "./context";
+import { createBillingDeeplinkEffects } from "./billingDeeplinkEffects.js";
+import { createWebappSectionContext } from "./webappSectionContext";
+import { createWebappSessionActions } from "./webappSessionActions.js";
+import { createAdminRuntime } from "./adminRuntime.js";
+import { createLanguageScopeLoader, rememberWebappLanguage } from "./languageScopeLoader.js";
+import { createBillingActions } from "./billingActions";
+import { giftState } from "./gifts.svelte.js";
+import { invalidateWebappTariffOptionCaches } from "./billingOptionCache.js";
+import { buildAdminPanelProps } from "./adminPanelProps.js";
+import { shellState } from "./shellState.svelte";
+import { structuredCloneSafe } from "./browser.js";
+import {
+  createAppActionRuntime,
+  type AppActionRuntime,
+  type AppActionRuntimeDeps,
+} from "./appActionRuntime.js";
+import type { AppLoadDataOptions } from "./appLoadExecutor.js";
+import type { AppShellView } from "./appShellView.js";
+import type { CheckoutDeeplink } from "./deeplinks.js";
+import type { TelegramRuntime, TelegramWebApp } from "./telegramRuntime.js";
+import {
+  asWebappRecord,
+  asWebappRecordOrNull,
+  type AdminPanelProps,
+  type PaymentMethod,
+  type PlanView,
+  type SubscriptionView,
+  type TariffView,
+  type TermUnitLabel,
+  type UserProfile,
+  type WebappConfig,
+  type WebappData,
+  type WebappMockRuntime,
+  type WebappMockSource,
+  type WebappRecord,
+} from "./types.js";
+
+type Tick = typeof import("svelte").tick;
+type TelegramSdk = TelegramRuntime<TelegramWebApp | null>["telegramSdk"];
+type LoadTelegramSdk = Parameters<typeof createAppBootRuntime>[0]["loadTelegramSdk"];
+type SyncAppSectionPath = (section: string, replace?: boolean) => void;
+type LoadData = (options?: AppLoadDataOptions) => Promise<WebappData>;
+type RuntimeMockApi = NonNullable<WebappMockRuntime["mockApi"]>;
+
+export type AppFactoriesDeps = {
+  CFG: WebappConfig;
+  MOCK: WebappMockSource | null;
+  MOCK_SOURCE: WebappMockSource;
+  adminBundleApi: () => WebappRecord | null;
+  adminBundleError: () => string;
+  canUseInstallGuides: () => boolean;
+  cleanDocsDemoRouteQuery: () => void;
+  currentSearchParams: () => URLSearchParams;
+  csrfCookieName: string;
+  docsDemoParentSearchParams: () => URLSearchParams | null;
+  getAppActions: () => AppActionRuntime;
+  getChangeConfirmOpen: () => boolean;
+  getChangeModalOpen: () => boolean;
+  getCurrentLang: () => string;
+  getData: () => WebappData | null;
+  getDemoAuthLogin: () => boolean;
+  getDeviceTopupModalOpen: () => boolean;
+  getIsAdmin: () => boolean;
+  getMethods: () => PaymentMethod[];
+  getPaymentModalOpen: () => boolean;
+  getPlans: () => PlanView[];
+  getRuntimeMockApi: () => RuntimeMockApi | null;
+  getScreen: () => string;
+  getSingleTariffMode: () => boolean;
+  getSubscription: () => SubscriptionView;
+  getTariffCatalog: () => TariffView[];
+  getTariffMode: () => boolean;
+  getTelegramMiniAppInitData: () => string;
+  getTelegramNotificationsNeedPrompt: () => boolean;
+  getTelegramOAuthClientId: () => number;
+  getTg: () => TelegramWebApp | null;
+  getTopupModalOpen: () => boolean;
+  getUser: () => UserProfile;
+  hasEmailCodeLoginDeeplink: () => boolean;
+  hasTelegramLaunchParams: () => boolean;
+  initialTg: TelegramWebApp | null;
+  initialI18nLanguages: string[];
+  isDocsDemo: boolean;
+  loadData: LoadData;
+  loadTelegramSdk: LoadTelegramSdk;
+  prepareTelegramMiniApp: () => void;
+  manualLogoutFlagKey: string;
+  normalizeLangCode: (language: string) => string;
+  openExternalLink: (url: string) => void;
+  readCheckoutPromoDeeplink: () => string;
+  readCheckoutDeeplink: () => CheckoutDeeplink | null;
+  readRenewalDeeplink: () => { tariffKey: string } | null;
+  readTelegramMiniAppInitDataFromLocation: () => string;
+  /** The app was opened on the checkout route, captured before boot sync. */
+  plansRouteRequested: boolean;
+  routePathnameFromLocation: () => string;
+  routePrefix: string;
+  showToast: (message: unknown) => void;
+  stripCheckoutPromoQueryFromUrl: () => void;
+  stripCheckoutDeeplinkFromUrl: () => void;
+  stripRenewalLoginQueryFromUrl: () => void;
+  stripTopupQueryFromUrl: () => void;
+  syncAppSectionPath: SyncAppSectionPath;
+  t: (key: string, params?: Record<string, unknown>, fallback?: string) => string;
+  termUnitLabel: TermUnitLabel;
+  tariffAccessCode: string;
+  telegramNotificationsResumeCooldownMs: number;
+  telegramSdk: TelegramSdk;
+  tick: Tick;
+  updateI18nMessages: (messages: WebappRecord) => void;
+};
+
+export function createAppFactories({
+  CFG,
+  MOCK,
+  MOCK_SOURCE,
+  adminBundleApi,
+  adminBundleError,
+  canUseInstallGuides,
+  cleanDocsDemoRouteQuery,
+  currentSearchParams,
+  csrfCookieName,
+  docsDemoParentSearchParams,
+  getAppActions,
+  getChangeConfirmOpen,
+  getChangeModalOpen,
+  getCurrentLang,
+  getData,
+  getDemoAuthLogin,
+  getDeviceTopupModalOpen,
+  getIsAdmin,
+  getMethods,
+  getPaymentModalOpen,
+  getPlans,
+  getRuntimeMockApi,
+  getScreen,
+  getSingleTariffMode,
+  getSubscription,
+  getTariffCatalog,
+  getTariffMode,
+  getTelegramMiniAppInitData,
+  getTelegramNotificationsNeedPrompt,
+  getTelegramOAuthClientId,
+  getTg,
+  getTopupModalOpen,
+  getUser,
+  hasEmailCodeLoginDeeplink,
+  hasTelegramLaunchParams,
+  initialTg,
+  initialI18nLanguages,
+  isDocsDemo,
+  loadData,
+  loadTelegramSdk,
+  prepareTelegramMiniApp,
+  manualLogoutFlagKey,
+  normalizeLangCode,
+  openExternalLink,
+  readCheckoutPromoDeeplink,
+  readCheckoutDeeplink,
+  readRenewalDeeplink,
+  readTelegramMiniAppInitDataFromLocation,
+  plansRouteRequested,
+  routePathnameFromLocation,
+  routePrefix,
+  showToast,
+  stripCheckoutPromoQueryFromUrl,
+  stripCheckoutDeeplinkFromUrl,
+  stripRenewalLoginQueryFromUrl,
+  stripTopupQueryFromUrl,
+  syncAppSectionPath,
+  t,
+  termUnitLabel,
+  tariffAccessCode,
+  telegramNotificationsResumeCooldownMs,
+  telegramSdk,
+  tick,
+  updateI18nMessages,
+}: AppFactoriesDeps) {
+  let billingStore!: ReturnType<typeof createBillingStore>;
+  let installGuidesStore!: ReturnType<typeof createWebappSectionContext>["installGuidesStore"];
+  let authStore!: ReturnType<typeof createAuthStore>;
+  let actionsStore!: ReturnType<typeof createActionsStore>;
+  let accountStore!: ReturnType<typeof createAccountStore>;
+  let bootRuntime!: ReturnType<typeof createAppBootRuntime>;
+  let showLogin!: ReturnType<typeof createAuthRuntime>["showLogin"];
+
+  const languageScopeLoader = createLanguageScopeLoader({
+    initialLanguages: initialI18nLanguages,
+    normalizeLanguage: normalizeLangCode,
+    fetchScope: async (scope, language) => {
+      const response = await fetch(
+        buildApiUrl(
+          `/i18n?scope=${encodeURIComponent(scope)}&lang=${encodeURIComponent(language)}`
+        ),
+        { credentials: "same-origin", headers: { Accept: "application/json" } }
+      );
+      return response.ok ? response.json() : null;
+    },
+    mergeMessages: (messages) => updateI18nMessages(messages),
+  });
+  const ensureWebappLanguage = (language: string) =>
+    MOCK ? Promise.resolve() : languageScopeLoader.load("webapp", language);
+  const ensureScreenLanguage = async (language: string) => {
+    await ensureWebappLanguage(language);
+    if (!MOCK && getScreen() === "admin") {
+      await languageScopeLoader.load("admin", language);
+    }
+  };
+  const adminRuntime = createAdminRuntime({
+    prepareRuntimeExtensions: async () => {
+      if (!getIsAdmin() || MOCK) return null;
+      const payload = await dataClient.apiClient.apiUnchecked("/admin/plugins/runtime");
+      if (payload.ok && Array.isArray(payload.plugins)) {
+        const plugins = payload.plugins;
+        return (bundle: { registerRuntimeExtensions?: (plugins: unknown[]) => void }) => {
+          (window as unknown as Record<string, unknown>)["__MINISHOP_PLUGIN_GENERATION__"] =
+            payload.generation;
+          bundle.registerRuntimeExtensions?.(plugins);
+          const generation = Number(payload.generation);
+          return Number.isSafeInteger(generation) ? generation : null;
+        };
+      }
+      return null;
+    },
+    getCurrentLang,
+    loadI18nScope: (scope, language, fresh) => languageScopeLoader.load(scope, language, fresh),
+    getAdminAssets: () => ({
+      adminCssAsset: CFG.adminCssAsset,
+      adminJsAsset: CFG.adminJsAsset,
+    }),
+    getIsMock: () => Boolean(MOCK),
+    getShouldPrefetch: () => getIsAdmin() && getScreen() !== "admin",
+    invalidateTariffOptionCaches: () => {
+      invalidateWebappTariffOptionCaches(billingStore);
+    },
+    loadData: (options) => loadData(options as AppLoadDataOptions),
+    resetInstallGuides: () => {
+      installGuidesStore.reset();
+    },
+    setBundleState: (api, error) => {
+      const nextApi = asWebappRecordOrNull(api);
+      if (adminBundleApi() !== nextApi) shellState.adminBundleApi = nextApi;
+      if (adminBundleError() !== error) shellState.adminBundleError = error;
+    },
+  });
+  shellState.guestLanguage = normalizeLangCode(CFG.language || "ru");
+  const { clearLanguageClickGuard, setLanguageMenuOpen, syncBodyScrollLock, updateGuestLanguage } =
+    createUiChrome({
+      normalizeLangCode,
+      getCurrentLang,
+      ensureGuestLanguage: ensureWebappLanguage,
+      onLanguageLoadError: () => showToast(t("wa_settings_language_update_failed")),
+      rememberLanguage: rememberWebappLanguage,
+    });
+  const { clearManualLogoutFlag, clearToken, isManuallyLoggedOut, markManualLogout, setToken } =
+    createWebappSessionActions({
+      csrfCookieName,
+      isMock: () => Boolean(MOCK),
+      manualLogoutFlagKey,
+    });
+  const dataClient = createWebappDataClient({
+    csrfCookieName,
+    getAuthToken: () => shellState.token,
+    getCsrfToken: () => shellState.csrfToken,
+    getEmojiCacheScope: () => (getIsAdmin() ? String(getUser()?.id || "") : ""),
+    getTariffAccessCode: () => tariffAccessCode,
+    onUnauthorized: () => {
+      clearToken();
+      showLogin();
+    },
+    onMaintenance: () => {
+      shellState.mode = "maintenance";
+    },
+    mockApi:
+      MOCK && getRuntimeMockApi()
+        ? (path, options, context) => getRuntimeMockApi()?.(path, options, context) ?? null
+        : null,
+    getMockContext: () => ({
+      currentLang: getCurrentLang(),
+      normalizeLangCode,
+      clone: structuredCloneSafe,
+    }),
+  });
+  const api = dataClient.api;
+  const apiBlob = dataClient.apiClient.apiBlob;
+  const publicApi = dataClient.publicApi;
+  const serverStatusStore = createServerStatusStore(api);
+  const billing = createBillingActions({
+    api,
+    ensureTrialCaptcha: () => actionsStore.trialCaptcha.ensure(),
+  });
+  const emailAvatarSync = createEmailAvatarSync();
+  const activation = createWebappActivationContext({
+    billing,
+    onPaymentReview: () => showToast(t("wa_payment_pending_review")),
+    loadData,
+    getPaymentModalOpen,
+    getTopupModalOpen,
+    getDeviceTopupModalOpen,
+    getChangeModalOpen,
+    getChangeConfirmOpen,
+    canUseInstallGuides,
+    closePaymentModal: () => billingStore.closePaymentModal(),
+    loadInstallGuides: (force) => installGuidesStore.load(force),
+    openActivationConnectLink: () => getAppActions().openActivationConnectLink(),
+    syncAppSectionPath,
+  });
+  const linkTelegramAfterExternalAuth = async () => {
+    const initData =
+      getTelegramMiniAppInitData() ||
+      getTg()?.initData ||
+      readTelegramMiniAppInitDataFromLocation();
+    if (!initData) return;
+    await accountStore.linkTelegramAccount(() => initData);
+  };
+  authStore = createAuthStore({
+    publicApi,
+    setToken,
+    loadData,
+    telegramSdk,
+    getTg,
+    linkTelegramAfterExternalAuth,
+    t,
+    currentLang: getCurrentLang,
+  });
+  const demoAuth = createDemoAuth({
+    authStore,
+    getCurrentSearchParams: currentSearchParams,
+    getMockSource: () => MOCK_SOURCE,
+    getParentSearchParams: docsDemoParentSearchParams,
+    isMockEnabled: () => Boolean(MOCK),
+  });
+  billingStore = createBillingStore({
+    billing,
+    getMethods,
+    loadData,
+    t,
+    termUnitLabel,
+    showToast,
+    openExternalLink,
+    onSubscriptionActivationPending: activation.rememberActivationPending,
+    onPaymentReview: activation.handlePaymentReview,
+    onSubscriptionActivated: activation.handleSubscriptionActivated,
+    tg: initialTg,
+    getTg: () => getTg() || telegramSdk.refresh(),
+    telegramSdk,
+  });
+  const giftBillingStore = createBillingStore({
+    getMethods,
+    billing: {
+      ...billing,
+      planPaymentBody: (plan, method, options) => ({
+        ...billing.planPaymentBody(plan, method, options),
+        gift: true,
+      }),
+      postPayment: async (body) => {
+        const response = await billing.postPayment({
+          ...body,
+          gift: true,
+          renew_hwid_devices: false,
+          gift_recipient_email: giftState.recipientEmail.trim() || null,
+        });
+        if (response.ok) {
+          giftState.receiptId = Number(response.payment_id || 0);
+          giftState.incoming = false;
+          giftState.open = true;
+        }
+        return response;
+      },
+    },
+    loadData: async () => {
+      giftState.revision += 1;
+      await loadData({ fresh: true, preserveView: true });
+    },
+    t,
+    termUnitLabel,
+    showToast,
+    openExternalLink,
+    tg: initialTg,
+    getTg: () => getTg() || telegramSdk.refresh(),
+    telegramSdk,
+  });
+  const { applyPostLoadBillingDeeplinks } = createBillingDeeplinkEffects({
+    billingStore,
+    // actionsStore is created below; the deeplink fires post-load, so the
+    // lazy closure always sees the initialized store.
+    handleCheckoutPromoDeeplink: (code, context) => {
+      void actionsStore.handlePromoDeeplink(code, context);
+    },
+    readCheckoutPromoDeeplink,
+    readCheckoutDeeplink,
+    readPlansDeeplink: () => plansRouteRequested,
+    readRenewalDeeplink,
+    setHomeRoute: () => {
+      shellState.activeTab = "home";
+      shellState.screen = "home";
+      syncAppSectionPath("home", true);
+    },
+    showTariffAccessError: () =>
+      showToast(
+        t("wa_tariff_access_invalid", {}, "This private tariff link is invalid or expired")
+      ),
+    stripCheckoutPromoQueryFromUrl,
+    stripCheckoutDeeplinkFromUrl,
+    stripRenewalLoginQueryFromUrl,
+    stripTopupQueryFromUrl,
+  });
+  const sectionContext = createWebappSectionContext({
+    api,
+    apiBlob,
+    t,
+    showToast,
+    routePrefix,
+    cleanDocsDemoRouteQuery,
+    syncAppSectionPath,
+  });
+  const { devicesStore, supportStore, loadSectionData, hydrateSupportUnread, syncLoadedRoute } =
+    sectionContext;
+  installGuidesStore = sectionContext.installGuidesStore;
+  actionsStore = createActionsStore({
+    api,
+    t,
+    showToast,
+    loadData,
+    maybeShowActivationSuccessDialog: activation.maybeShowActivationSuccessDialog,
+    termUnitLabel,
+    startCheckoutPromo: (code) => {
+      shellState.activeTab = "home";
+      shellState.screen = "home";
+      syncAppSectionPath("home", true);
+      billingStore.setCheckoutPromoInput(code);
+      billingStore.openPaymentModal(
+        getTariffMode(),
+        getSingleTariffMode(),
+        getTariffCatalog(),
+        getSubscription(),
+        getPlans(),
+        String(getMethods()?.[0]?.id || ""),
+        {
+          preferCheckout: true,
+          selectDefaultTariff: true,
+        }
+      );
+      void billingStore.applyCheckoutPromo();
+    },
+    prefillCheckoutPromo: (code) => {
+      billingStore.setCheckoutPromoInput(code);
+      void billingStore.applyCheckoutPromo();
+    },
+  });
+  const authRuntime = createAuthRuntime({
+    authStore,
+    cleanDocsDemoRouteQuery,
+    isDocsDemo,
+    routePathnameFromLocation,
+    routePrefix,
+    tick,
+  });
+  const authRuntimeActions = authRuntime;
+  showLogin = authRuntimeActions.showLogin;
+  bootRuntime = createAppBootRuntime({
+    loadPublicInstall: (shareToken) => getAppActions().loadPublicInstall(shareToken),
+    isDemoAuthMock: () => Boolean(MOCK) && demoAuth.isDemoAuthMock(),
+    prepareDemoAuthState: () => demoAuth.prepareAuthState(),
+    mock: MOCK,
+    hasTelegramLaunchParams,
+    loadTelegramSdk,
+    prepareTelegramMiniApp,
+    loadData,
+    showLogin,
+    clearToken,
+    refreshSession: () => api("/auth/session"),
+    clearManualLogoutFlag,
+    isManuallyLoggedOut,
+    hasEmailCodeLoginDeeplink,
+    finalizeMagicLogin: (loginToken) => authStore.finalizeMagicLogin(loginToken),
+    finalizeTelegramAuth: (authData, source) =>
+      CFG.authProviders?.includes("telegram")
+        ? authStore.finalizeTelegramAuth(authData, source)
+        : false,
+    linkTelegramAfterExternalAuth: () =>
+      CFG.authProviders?.includes("telegram") ? linkTelegramAfterExternalAuth() : false,
+    restorePendingExternalOauth: () =>
+      authStore.restorePendingExternalOauth((nextScreen) => {
+        shellState.screen = nextScreen;
+      }),
+    setAuthStatus: (message, isError = false) => authStore.setAuthStatus(message, isError),
+    showToast,
+    onTelegramMergeRequired: () => accountStore.openTelegramMergeDialog(),
+    t,
+    readTelegramMiniAppInitDataFromLocation,
+    continueTelegramLinkPendingAction: () => getAppActions().continueTelegramLinkPendingAction(),
+    hasPendingActivationHandoff: activation.hasPendingActivationHandoff,
+    maybeShowActivationSuccessDialog: activation.maybeShowActivationSuccessDialog,
+    startPendingActivationWatch: activation.startPendingActivationWatch,
+    telegramNotificationsResumeCooldownMs,
+    getTelegramNotificationsNeedPrompt,
+  });
+  const resumeLifecycle = createResumeLifecycle({
+    clearLoginTooltip: () => {
+      authStore.update((state) => ({ ...state, loginEmailTooltipOpen: false }));
+    },
+    refreshAccountDataOnResume: () => {
+      void loadData({ fresh: true, preserveView: true });
+    },
+    refreshPendingActivationOnResume: () => {
+      void activation.refreshPendingActivationOnResume();
+    },
+    refreshTelegramNotificationsOnResume: () => {
+      void bootRuntime.refreshTelegramNotificationsOnResume();
+    },
+    suspendBackgroundWork: activation.stopPendingActivationWatch,
+  });
+  accountStore = createAccountStore({
+    api,
+    publicApi,
+    setToken,
+    loadData,
+    t,
+    showToast,
+    clearToken,
+    markManualLogout,
+    showLogin,
+    telegramSdk,
+    getTg,
+    getCurrentUser: () => getData()?.user || getUser() || {},
+    getTelegramMiniAppInitData: () =>
+      getTelegramMiniAppInitData() ||
+      getTg()?.initData ||
+      readTelegramMiniAppInitDataFromLocation(),
+    isDemoAuthLogin: getDemoAuthLogin,
+    getDemoTelegramAuthPayload: () => demoAuth.telegramAuthPayload(),
+    telegramOAuthClientId: getTelegramOAuthClientId,
+    currentLang: getCurrentLang,
+    normalizeLangCode,
+    ensureLanguage: ensureScreenLanguage,
+    rememberLanguage: rememberWebappLanguage,
+    updateLocalData: (updatedLanguage) => {
+      const data = getData();
+      if (!data?.user) return;
+      shellState.data = { ...data, user: { ...data.user, language_code: updatedLanguage } };
+    },
+    activateTrial: async () => getAppActions().activateTrial(),
+    claimReferralWelcomeBonus: () => actionsStore.claimReferralWelcomeBonus(),
+  });
+
+  setAuthStore(authStore);
+  setBillingStore(billingStore);
+  setDevicesStore(devicesStore);
+  setSupportStore(supportStore);
+  setInstallGuidesStore(installGuidesStore);
+  setPublicDocumentsStore(createPublicDocumentsStore(api));
+  setActionsStore(actionsStore);
+  setAccountStore(accountStore);
+
+  return {
+    accountStore,
+    actionsStore,
+    adminRuntime,
+    ensureWebappLanguage,
+    rememberLanguage: rememberWebappLanguage,
+    api,
+    applyPostLoadBillingDeeplinks,
+    authStore,
+    billing,
+    billingStore,
+    giftBillingStore,
+    bootRuntime,
+    clearLanguageClickGuard,
+    closeActivationSuccessDialog: activation.closeActivationSuccessDialog,
+    dataClient,
+    demoAuth,
+    devicesStore,
+    emailAvatarSync,
+    hydrateSupportUnread,
+    installGuidesStore,
+    loadSectionData,
+    resumeLifecycle,
+    setLanguageMenuOpen,
+    setPasswordLoginMode: authRuntimeActions.setPasswordLoginMode,
+    serverStatusStore,
+    showLogin,
+    stopPendingActivationWatch: activation.stopPendingActivationWatch,
+    submitEmailOnEnter: authRuntimeActions.submitEmailOnEnter,
+    supportStore,
+    syncBodyScrollLock,
+    syncLoadedRoute,
+    updateGuestLanguage,
+  };
+}
+
+export type ShellAppActionsDeps = {
+  accountStore: AppActionRuntimeDeps["accountStore"];
+  actionsStore: AppActionRuntimeDeps["actionsStore"];
+  adminRuntime: AppActionRuntimeDeps["adminRuntime"];
+  authStore: AppActionRuntimeDeps["authStore"];
+  billing: AppActionRuntimeDeps["billing"];
+  billingStore: AppActionRuntimeDeps["billingStore"];
+  canUseInstallGuides: AppActionRuntimeDeps["canUseInstallGuides"];
+  clearLanguageClickGuard: AppActionRuntimeDeps["clearLanguageClickGuard"];
+  demoAuth: ReturnType<typeof createDemoAuth>;
+  devicesStore: AppActionRuntimeDeps["devicesStore"];
+  externalLinkActions: AppActionRuntimeDeps["externalLinkActions"];
+  getRoutePathname: AppActionRuntimeDeps["getRoutePathname"];
+  getSelectedPlan: AppActionRuntimeDeps["getSelectedPlan"];
+  getShellView: () => AppShellView;
+  getTrialActivationResult: AppActionRuntimeDeps["getTrialActivationResult"];
+  installGuidesStore: AppActionRuntimeDeps["installGuidesStore"];
+  loadData: AppActionRuntimeDeps["loadData"];
+  refreshTelegram: AppActionRuntimeDeps["refreshTelegram"];
+  routePrefix: string;
+  showToast: AppActionRuntimeDeps["showToast"];
+  supportStore: AppActionRuntimeDeps["supportStore"];
+  syncAppSectionPath: AppActionRuntimeDeps["syncAppSectionPath"];
+  t: AppActionRuntimeDeps["t"];
+};
+
+export function createShellAppActions({
+  accountStore,
+  actionsStore,
+  adminRuntime,
+  authStore,
+  billing,
+  billingStore,
+  canUseInstallGuides,
+  clearLanguageClickGuard,
+  demoAuth,
+  devicesStore,
+  externalLinkActions,
+  getRoutePathname,
+  getSelectedPlan,
+  getShellView,
+  getTrialActivationResult,
+  installGuidesStore,
+  loadData,
+  refreshTelegram,
+  routePrefix,
+  showToast,
+  supportStore,
+  syncAppSectionPath,
+  t,
+}: ShellAppActionsDeps): AppActionRuntime {
+  return createAppActionRuntime({
+    accountStore,
+    actionsStore,
+    adminRuntime,
+    authStore,
+    billing,
+    billingStore,
+    canUseInstallGuides,
+    clearLanguageClickGuard,
+    demoEmail: () => demoAuth.demoEmail(),
+    devicesStore,
+    externalLinkActions,
+    getAppSettings: () => getShellView().appDataView.appSettings,
+    getDevicesEnabled: () => getShellView().appDataView.devicesEnabled,
+    getDemoTelegramAuthPayload: () => demoAuth.telegramAuthPayload(),
+    getEmailAuthEnabled: () => getShellView().appDataView.emailAuthEnabled,
+    getIsAdmin: () => getShellView().isAdmin,
+    getIsFileProtocol: () => window.location.protocol === "file:",
+    getMethods: () => getShellView().appDataView.methods,
+    getOrigin: () => (typeof window !== "undefined" ? window.location.origin : ""),
+    getPartnerProgramEnabled: () => getShellView().appDataView.partnerProgramEnabled,
+    getReferralProgramEnabled: () => getShellView().appDataView.referralProgramEnabled,
+    getPlans: () => getShellView().appDataView.plans,
+    getSuggestedPromoCode: () =>
+      advertisingCheckoutCode() || getShellView().appDataView.suggestedPromoCode,
+    getPreloadHost: () => (typeof window !== "undefined" ? asWebappRecord(window) : null),
+    getRoutePathname,
+    getSelectedPlan,
+    getSelectedTariffPlans: () => getShellView().billingView.selectedTariffPlans,
+    getSingleTariffMode: () => getShellView().billingView.singleTariffMode,
+    getSubscription: () => getShellView().appDataView.subscription,
+    getSupportEnabled: () => getShellView().appDataView.supportEnabled,
+    getTariffCatalog: () => getShellView().billingView.tariffCatalog,
+    getTariffMode: () => getShellView().billingView.tariffMode,
+    getTelegramNotificationsStartLink: () =>
+      getShellView().accountView.telegramNotificationsStartLink,
+    getTelegramOAuthClientId: () => getShellView().telegramOAuthClientId,
+    getTrafficMode: () => getShellView().billingView.trafficMode,
+    getTrialActivationResult,
+    installGuidesStore,
+    loadData,
+    refreshTelegram,
+    routePrefix,
+    showToast,
+    supportStore,
+    syncAppSectionPath,
+    t,
+  });
+}
+
+export type AppAdminPanelPropsDeps = {
+  adminActiveSection: string;
+  adminRuntime: ReturnType<typeof createAdminRuntime>;
+  api: ReturnType<typeof createWebappDataClient>["api"];
+  apiBlob: ReturnType<typeof createWebappDataClient>["apiClient"]["apiBlob"];
+  appActions: AppActionRuntime;
+  cfg: WebappConfig;
+  getShellView: () => AppShellView;
+  initialAdminSectionFromLocation: () => string;
+  languageBusy: boolean;
+  onLanguageChange: ReturnType<typeof createAccountStore>["updateAccountLanguage"];
+  routePathnameFromLocation: () => string;
+  routePrefix: string;
+  screen: string;
+  showToast: (message: unknown) => void;
+  t: AppActionRuntimeDeps["t"];
+};
+
+export function buildAppAdminPanelProps({
+  adminActiveSection,
+  adminRuntime,
+  api,
+  apiBlob,
+  appActions,
+  cfg,
+  getShellView,
+  initialAdminSectionFromLocation,
+  languageBusy,
+  onLanguageChange,
+  routePathnameFromLocation,
+  routePrefix,
+  screen,
+  showToast,
+  t,
+}: AppAdminPanelPropsDeps): AdminPanelProps {
+  const shellView = getShellView();
+  return buildAdminPanelProps({
+    adminActiveSection,
+    api,
+    apiBlob,
+    appFaviconUrl: cfg.faviconUrl,
+    appFaviconUseCustom: cfg.faviconUseCustom,
+    appRepositoryUrl: cfg.appRepositoryUrl,
+    appVersion: cfg.appVersion,
+    brand: shellView.appDataView.brand,
+    brandTitle: shellView.appDataView.brandTitle,
+    currentLang: shellView.currentLang,
+    fallbackAdminSection: initialAdminSectionFromLocation(),
+    languageBusy,
+    languageOptions: shellView.languageView.languageOptions,
+    onClose: appActions.closeAdminPanel,
+    onLanguageChange,
+    onSectionChange: appActions.handleAdminSectionChange,
+    onSettingsSaved: adminRuntime.handleAdminPersistedSaved,
+    onTariffsSaved: adminRuntime.handleAdminPersistedSaved,
+    onThemesSaved: adminRuntime.handleAdminPersistedSaved,
+    onToast: showToast,
+    onTranslationsSaved: adminRuntime.handleAdminTranslationsSaved,
+    pathname: routePathnameFromLocation(),
+    routePrefix,
+    screen,
+    t,
+  });
+}
+import { advertisingCheckoutCode } from "./advertising";
