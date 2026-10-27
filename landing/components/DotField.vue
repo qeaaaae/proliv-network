@@ -1,98 +1,155 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, useTemplateRef } from 'vue'
+import { onBeforeUnmount, onMounted, ref, useTemplateRef } from 'vue'
 
 const props = withDefaults(defineProps<{ side?: 'left' | 'right' }>(), { side: 'left' })
 
 const canvas = useTemplateRef<HTMLCanvasElement>('canvas')
+const ready = ref(false)
 let raf = 0
-let observer: ResizeObserver | null = null
+let last = 0
+let running = false
+let visible = false
+let resizeObserver: ResizeObserver | null = null
+let intersectionObserver: IntersectionObserver | null = null
+let ctx: CanvasRenderingContext2D | null = null
+let w = 0
+let h = 0
+let reduced = false
 
-const GAP = 21
-const R = 1.5
+const GAP = 14
+const FEATHER = 200
 
-// sonar ripples: concentric rings expanding from a point off the viewport edge
-function draw(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, right: boolean) {
+// concentric rings expanding from off-viewport edge, like a sonar sweep
+function draw(t: number) {
+  if (!ctx || !w || !h) return
+  const right = props.side === 'right'
   ctx.clearRect(0, 0, w, h)
-  const time = t / 1000
-  const ex = right ? w + 30 : -30
-  const ey = h * 0.42
 
-  for (let y = GAP / 2; y < h; y += GAP) {
-    for (let x = GAP / 2; x < w; x += GAP) {
-      const d = Math.hypot(x - ex, y - ey)
-      const r1 = Math.sin(d * 0.05 - time * 1.3) * 0.5 + 0.5
-      const r2 = Math.sin(d * 0.019 - time * 0.55 + 1.7) * 0.5 + 0.5
-      const wave = r1 * 0.68 + r2 * 0.32
-      // soft fade only at extreme distance so arcs stay readable in narrow margins
-      const fade = 0.35 + 0.65 * Math.min(1, 420 / Math.max(d, 60))
-      const alpha = (0.12 + wave * 0.5) * fade
+  const cols = Math.floor(w / GAP)
+  const rows = Math.floor(h / GAP)
+  if (cols < 4) return
+
+  const feather = Math.min(FEATHER, h * 0.35)
+  const midY = h / 2
+
+  for (let i = 0; i < cols; i++) {
+    const falloff = Math.pow(1 - i / cols, 1.5)
+    const x = right ? w - GAP / 2 - i * GAP : GAP / 2 + i * GAP
+    for (let j = 0; j < rows; j++) {
+      const y = GAP / 2 + j * GAP
+      const s = Math.min(1, y / feather, (h - y) / feather)
+      const vfade = s * s * (3 - 2 * s)
+      const ring = Math.max(0, Math.sin(Math.hypot(i * GAP, y - midY) * 0.03 - t * 1.3)) ** 10
+      const alpha = falloff * vfade * (0.18 + 0.7 * ring)
       if (alpha < 0.02) continue
-      const rad = R + wave * 1.0
-      ctx.fillStyle = `rgba(203, 214, 228, ${alpha.toFixed(3)})`
+      ctx.fillStyle = `rgba(125, 211, 252, ${alpha.toFixed(3)})`
       ctx.beginPath()
-      ctx.arc(x, y, rad, 0, Math.PI * 2)
+      ctx.arc(x, y, 1.1 + ring * 0.7, 0, Math.PI * 2)
       ctx.fill()
     }
   }
 }
 
+function resize() {
+  const el = canvas.value
+  if (!el || !ctx) return
+  const rect = el.getBoundingClientRect()
+  const dpr = Math.min(devicePixelRatio || 1, 2)
+  el.width = Math.max(1, Math.round(rect.width * dpr))
+  el.height = Math.max(1, Math.round(rect.height * dpr))
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  w = rect.width
+  h = rect.height
+  draw(Date.now() / 1000)
+}
+
+// ~30fps cap, wall-clock time keeps ring phase continuous between mounts
+function loop(now: number) {
+  raf = requestAnimationFrame(loop)
+  if (now - last < 33) return
+  last = now
+  draw(Date.now() / 1000)
+}
+
+function start() {
+  if (running || reduced) return
+  running = true
+  raf = requestAnimationFrame(loop)
+}
+
+function stop() {
+  running = false
+  cancelAnimationFrame(raf)
+  raf = 0
+}
+
 onMounted(() => {
   const el = canvas.value
   if (!el) return
-  const ctx = el.getContext('2d')
+  ctx = el.getContext('2d')
   if (!ctx) return
+  reduced = matchMedia('(prefers-reduced-motion: reduce)').matches
 
-  const right = props.side === 'right'
-  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches
-
-  const resize = () => {
-    const rect = el.getBoundingClientRect()
-    const dpr = Math.min(devicePixelRatio || 1, 2)
-    el.width = Math.max(1, Math.round(rect.width * dpr))
-    el.height = Math.max(1, Math.round(rect.height * dpr))
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    if (reduced) draw(ctx, rect.width, rect.height, 0, right)
-  }
-
-  observer = new ResizeObserver(resize)
-  observer.observe(el)
+  resizeObserver = new ResizeObserver(() => {
+    resize()
+    if (reduced) draw(2)
+    if (!ready.value) ready.value = true
+  })
+  resizeObserver.observe(el)
   resize()
 
   if (!reduced) {
-    const loop = (t: number) => {
-      const rect = el.getBoundingClientRect()
-      draw(ctx, rect.width, rect.height, t, right)
-      raf = requestAnimationFrame(loop)
-    }
-    raf = requestAnimationFrame(loop)
+    intersectionObserver = new IntersectionObserver((entries) => {
+      const next = entries[entries.length - 1]?.isIntersecting ?? false
+      if (next === visible) return
+      visible = next
+      visible ? start() : stop()
+    })
+    intersectionObserver.observe(el)
+  } else {
+    draw(2)
   }
+  ready.value = true
 })
 
 onBeforeUnmount(() => {
-  cancelAnimationFrame(raf)
-  observer?.disconnect()
+  stop()
+  resizeObserver?.disconnect()
+  intersectionObserver?.disconnect()
 })
 </script>
 
 <template>
-  <canvas ref="canvas" class="dot-field" :class="`dot-field--${props.side}`" aria-hidden="true" />
+  <canvas ref="canvas" class="dot-field" :class="[`dot-field--${props.side}`, { 'is-ready': ready }]" aria-hidden="true" />
 </template>
 
 <style scoped>
 .dot-field {
-  position: fixed;
+  position: absolute;
   top: 0;
-  bottom: 0;
-  z-index: -1;
-  width: min(30vw, 380px);
+  height: 100%;
+  z-index: 1;
+  width: calc((100vw - 100%) / 2 + 180px);
   pointer-events: none;
+  opacity: 0;
+  transition: opacity 1.2s ease;
+}
+
+.dot-field.is-ready {
+  opacity: 1;
 }
 
 .dot-field--left {
-  left: 0;
+  left: calc((100% - 100vw) / 2);
 }
 
 .dot-field--right {
-  right: 0;
+  right: calc((100% - 100vw) / 2);
+}
+
+@media (max-width: 900px) {
+  .dot-field {
+    display: none;
+  }
 }
 </style>

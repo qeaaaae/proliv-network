@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.keyboards.inline.user_keyboards import (
     get_information_links_keyboard,
     get_language_selection_keyboard,
+    get_purchases_keyboard,
     telegram_bot_menu_enabled_for_user,
 )
 from bot.middlewares.i18n import JsonI18n, normalize_locale_language_code
@@ -32,7 +33,9 @@ from .start_channel import ensure_required_channel_subscription
 from .start_common import (
     router,
 )
+from .menu_card import card_enabled, render_card
 from .start_menus import send_bot_interface_menu, send_main_menu
+from .welcome_banner import send_welcome_message
 
 logger = logging.getLogger(__name__)
 
@@ -97,14 +100,11 @@ async def verify_channel_subscription_callback(
     else:
         _ = lambda key, **kwargs: key
 
-    if not settings.DISABLE_WELCOME_MESSAGE:
+    if not settings.DISABLE_WELCOME_MESSAGE and not card_enabled():
         welcome_text = _(key="welcome", user_name=hd.quote(callback.from_user.full_name))
-        if callback.message:
-            await callback_message(callback).answer(welcome_text)
-        else:
-            fallback_bot: Bot | None = getattr(callback, "bot", None)
-            if fallback_bot:
-                await fallback_bot.send_message(callback.from_user.id, welcome_text)
+        welcome_bot = callback_message(callback).bot if callback.message else callback.bot
+        if welcome_bot:
+            await send_welcome_message(welcome_bot, callback.from_user.id, welcome_text)
 
     with contextlib.suppress(Exception):
         await safe_answer_callback(
@@ -149,10 +149,7 @@ async def language_command_handler(
 
     if isinstance(event, types.CallbackQuery):
         if event.message:
-            try:
-                await callback_message(event).edit_text(text_to_send, reply_markup=reply_markup)
-            except Exception:
-                await target_message_obj.answer(text_to_send, reply_markup=reply_markup)
+            await render_card(event, text_to_send, reply_markup)
         await safe_answer_callback(event)
     else:
         await target_message_obj.answer(text_to_send, reply_markup=reply_markup)
@@ -268,6 +265,7 @@ async def main_action_callback_handler(
         "bot_apply_promo",
         "bot_language",
         "bot_info",
+        "purchases",
     }
     if action in bot_interface_actions and not telegram_bot_menu_enabled_for_user(
         settings, user_id=await require_telegram_account_id(session, callback.from_user.id)
@@ -277,7 +275,22 @@ async def main_action_callback_handler(
         )
         return
 
-    if action == "subscribe":
+    if action == "purchases":
+        i18n: JsonI18n | None = i18n_data.get("i18n_instance")
+        current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
+        if not i18n:
+            await safe_answer_callback(
+                callback, "Language service error.", show_alert=True
+            )
+            return
+        _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs)
+        await render_card(
+            callback,
+            _(key="purchases_screen_title"),
+            get_purchases_keyboard(current_lang, i18n, settings),
+        )
+        await safe_answer_callback(callback)
+    elif action == "subscribe":
         await user_subscription_handlers.display_subscription_options(
             callback, i18n_data, settings, session
         )
@@ -386,14 +399,7 @@ async def main_action_callback_handler(
                 else "main_action:back_to_main"
             ),
         )
-        try:
-            await callback_message(callback).edit_text(
-                _(key="info_links_message"), reply_markup=reply_markup
-            )
-        except Exception:
-            await callback_message(callback).answer(
-                _(key="info_links_message"), reply_markup=reply_markup
-            )
+        await render_card(callback, _(key="info_links_message"), reply_markup)
         await safe_answer_callback(callback)
     elif action == "back_to_main":
         await send_main_menu(

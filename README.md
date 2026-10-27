@@ -10,6 +10,7 @@
 | `proliv.env` | локальные секреты (в гит не коммитить) |
 | `proliv.env.example` | шаблон env |
 | `landing/` | Nuxt 4 лендинг в стиле ranteis.eu |
+| `cabinet/` | Nuxt 4 личный кабинет (TG OAuth, подписка, покупки, рефералка, поддержка) |
 | `infra/` | скрипты и конфиги для VPS (deploy, caddy, node, bot) |
 | `SPEC.md` | спецификация проекта |
 
@@ -24,6 +25,9 @@ docker compose --env-file proliv.env --profile subpage up -d
 
 # + лендинг на http://localhost:8080 (собирается из landing/)
 docker compose --env-file proliv.env --profile site up -d --build
+
+# + личный кабинет на http://localhost:8082 (Nuxt server, нужен NUXT_BOT_TOKEN для TG OAuth)
+docker compose --env-file proliv.env --profile app up -d --build
 
 # + dev-прокси для панели (remnawave требует HTTPS через reverse proxy)
 # панель: http://localhost:3443, страница подписки: http://localhost:3444
@@ -47,7 +51,15 @@ docker compose --env-file proliv.env --profile dev --profile site up -d
 ```powershell
 cd landing
 npm install
-npm run dev   # http://localhost:3000
+npm run dev   # http://localhost:3300, вход admin/admin (заглушка до TG OAuth)
+```
+
+Кабинет локально без докера:
+
+```powershell
+cd cabinet
+npm install
+npm run dev   # http://localhost:3000, dev-вход кнопкой (без TG)
 ```
 
 ## Деплой на VPS

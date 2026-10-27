@@ -15,7 +15,7 @@ from bot.services.promo_code_service import PromoCheckoutRequired, PromoCodeServ
 from bot.services.subscription_service_impl.core import SubscriptionService
 from bot.services.telegram_account import require_telegram_account_id
 from bot.states.user_states import UserPromoStates
-from bot.utils.callback_answer import callback_message, message_from_user, safe_answer_callback
+from bot.utils.callback_answer import message_from_user, safe_answer_callback
 from bot.utils.install_links import (
     append_install_share_link_text,
     ensure_user_install_guide_links,
@@ -24,6 +24,7 @@ from bot.utils.mini_app_url import subscription_mini_app_checkout_code_url
 from config.settings import Settings
 from db.dal import user_dal
 
+from .menu_card import render_card
 from .start import send_main_menu
 
 logger = logging.getLogger(__name__)
@@ -63,25 +64,15 @@ async def prompt_promo_code_input(
         )
         return
 
-    try:
-        await callback_message(callback).edit_text(
-            text=_(key="promo_code_prompt"),
-            reply_markup=get_back_to_main_menu_markup(
-                current_lang,
-                i18n,
-                callback_data=back_callback,
-            ),
-        )
-    except Exception as e_edit:
-        logger.warning("Failed to edit message for promo prompt: %s. Sending new one.", e_edit)
-        await callback_message(callback).answer(
-            text=_(key="promo_code_prompt"),
-            reply_markup=get_back_to_main_menu_markup(
-                current_lang,
-                i18n,
-                callback_data=back_callback,
-            ),
-        )
+    await render_card(
+        callback,
+        _(key="promo_code_prompt"),
+        get_back_to_main_menu_markup(
+            current_lang,
+            i18n,
+            callback_data=back_callback,
+        ),
+    )
 
     await safe_answer_callback(callback)
     await state.set_state(UserPromoStates.waiting_for_promo_code)

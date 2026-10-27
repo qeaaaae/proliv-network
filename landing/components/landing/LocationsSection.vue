@@ -5,12 +5,13 @@ import LocationScene from './LocationScene.vue'
 <template>
   <section class="landing-block" aria-labelledby="locations-title">
     <div class="content-frame">
+      <DotField side="right" />
       <header class="block-head" data-reveal>
         <p class="block-kicker">01 — Локации</p>
         <h2 id="locations-title">
-          Две локации<br /><AccentMark>Порт 10 Гбит/с</AccentMark> на каждой
+          Три локации<br /><AccentMark>Порт 10 Гбит/с</AccentMark> на каждой
         </h2>
-        <p>Обе локации входят в тариф. Переключайтесь между ними в приложении</p>
+        <p>Все локации входят в тариф. Переключайтесь между ними в приложении</p>
       </header>
       <ul class="locations">
         <li class="location card" data-reveal style="--delay: 0s">
@@ -29,10 +30,18 @@ import LocationScene from './LocationScene.vue'
             <span class="location-city">Лондон</span>
           </div>
         </li>
+        <li class="location card" data-reveal style="--delay: 0.16s">
+          <LocationScene seed="de" />
+          <div class="location-meta">
+            <img class="location-flag" src="/images/flags/de.svg" width="26" height="18" alt="" />
+            <h3>Германия</h3>
+            <span class="location-city">Франкфурт</span>
+          </div>
+        </li>
       </ul>
       <NuxtLink to="/status" class="status-strip" data-reveal>
         <span class="strip-dot" aria-hidden="true" />
-        <span class="strip-text">онлайн 2 из 2 узлов</span>
+        <span class="strip-text">онлайн 3 из 3 узлов</span>
         <span class="strip-sep" aria-hidden="true">·</span>
         <span class="strip-muted">канал 10 Гбит/с на каждом</span>
         <span class="strip-sep" aria-hidden="true">·</span>
@@ -46,7 +55,7 @@ import LocationScene from './LocationScene.vue'
 <style scoped>
 .locations {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
 }
 
@@ -170,6 +179,12 @@ import LocationScene from './LocationScene.vue'
 .strip-more {
   margin-left: 6px;
   color: var(--accent);
+}
+
+@media (max-width: 900px) {
+  .locations {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 620px) {

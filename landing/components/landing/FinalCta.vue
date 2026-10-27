@@ -44,11 +44,10 @@ import { TELEGRAM_BOT_URL } from '../../utils/links'
 .final-mark {
   position: absolute;
   z-index: -1;
-  top: 50%;
-  left: 50%;
+  inset: 0;
+  margin: auto;
   height: 96%;
   aspect-ratio: 1;
-  transform: translate(-50%, -50%);
 }
 
 .final-mark svg {
@@ -69,11 +68,26 @@ import { TELEGRAM_BOT_URL } from '../../utils/links'
 html.motion .final-mark path {
   stroke-dasharray: 1;
   stroke-dashoffset: 1px;
-  transition: stroke-dashoffset 2.8s var(--ease-out) 0.2s;
 }
 
 html.motion .final-mark[data-shown] path {
-  stroke-dashoffset: 0;
+  animation: final-mark-draw 2.8s var(--ease-out) 0.2s forwards;
+}
+
+@keyframes final-mark-draw {
+  from {
+    stroke-dashoffset: 1px;
+  }
+
+  99% {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 0;
+  }
+
+  to {
+    stroke-dasharray: none;
+    stroke-dashoffset: 0;
+  }
 }
 
 .cta-inner {

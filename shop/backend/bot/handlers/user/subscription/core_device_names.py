@@ -20,10 +20,11 @@ from bot.services.panel_api_service import PanelApiService
 from bot.services.subscription_service_impl.core import SubscriptionService
 from bot.services.telegram_account import require_telegram_account_id
 from bot.states.user_states import UserDeviceRenameStates
-from bot.utils.callback_answer import callback_data, callback_message, message_from_user
+from bot.utils.callback_answer import callback_data, message_from_user
 from config.settings import Settings
 from db.dal import device_name_dal
 
+from ..menu_card import render_card
 from .core_common import _hwid_callback_token, router
 from .core_status import _devices_list_from_panel_response, my_devices_command_handler
 
@@ -90,10 +91,7 @@ async def _find_owned_device(
 
 
 async def _show(callback: types.CallbackQuery, text: str, markup: InlineKeyboardMarkup) -> None:
-    try:
-        await callback_message(callback).edit_text(text, reply_markup=markup, parse_mode="HTML")
-    except Exception:
-        await callback_message(callback).answer(text, reply_markup=markup, parse_mode="HTML")
+    await render_card(callback, text, markup, parse_mode="HTML")
 
 
 async def _alert(callback: types.CallbackQuery, text: str) -> None:

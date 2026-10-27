@@ -1,0 +1,96 @@
+{
+  "default_tariff": "proliv",
+  "referral_welcome_bonus_tariff": "proliv",
+  "default_currency": "rub",
+  "tariffs": [
+    {
+      "key": "proliv",
+      "names": {
+        "ru": "Proliv Network",
+        "en": "Proliv Network"
+      },
+      "descriptions": {
+        "ru": "1 ТБ/мес, 5 устройств. Локации: UK, Эстония, Германия.",
+        "en": "1 TB/mo, 5 devices. Locations: UK, Estonia, Germany."
+      },
+      "squad_uuids": [
+        "2b5f5dcd-0099-4f51-bc26-0ba04c240d63"
+      ],
+      "billing_model": "period",
+      "monthly_gb": 1024,
+      "topup_packages": {
+        "rub": [
+          {
+            "gb": 100,
+            "price": 49
+          },
+          {
+            "gb": 500,
+            "price": 149
+          }
+        ]
+      },
+      "hwid_device_limit": 5,
+      "hwid_device_packages": {
+        "rub": [
+          {
+            "count": 1,
+            "price": 29,
+            "traffic_bonus_gb": 0,
+            "prices": {
+              "30": 29.0,
+              "90": 87.0,
+              "180": 174.0,
+              "365": 348.0
+            },
+            "period_unit": "day"
+          }
+        ]
+      },
+      "checkout_addons": {
+        "devices": {
+          "enabled": true,
+          "max_extra_devices": 5,
+          "price_per_device": 29
+        },
+        "traffic": {
+          "enabled": false
+        }
+      },
+      "prices_rub": {
+        "30": 179,
+        "90": 499,
+        "180": 949,
+        "365": 1799
+      },
+      "referral_bonus_days_inviter": {
+        "30": 3,
+        "90": 7,
+        "180": 15,
+        "365": 30
+      },
+      "referral_bonus_days_referee": {
+        "30": 1,
+        "90": 3,
+        "180": 7,
+        "365": 15
+      },
+      "enabled_periods": [
+        30,
+        90,
+        180,
+        365
+      ],
+      "enabled": true,
+      "period_unit": "day",
+      "addon_period_factors": {
+        "30": 1,
+        "90": 3,
+        "180": 6,
+        "365": 12
+      }
+    }
+  ],
+  "schema_version": 2,
+  "period_unit": "day"
+}

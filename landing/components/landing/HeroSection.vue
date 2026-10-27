@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, useTemplateRef } from 'vue'
-import { CABINET_URL, TELEGRAM_BOT_URL } from '../../utils/links'
+import { TELEGRAM_BOT_URL } from '../../utils/links'
+
+const cabinetUrl = useRuntimeConfig().public.cabinetUrl
 
 const copy = useTemplateRef<HTMLElement>('copy')
 let raf = 0
@@ -32,11 +34,12 @@ onBeforeUnmount(() => {
 <template>
   <section class="hero">
     <div class="content-frame">
+      <DotField side="left" />
       <div class="hero-stage sheet">
         <LightFlare />
         <header class="hero-header">
           <ProlivLogo />
-          <BaseButton variant="primary" size="small" :href="CABINET_URL" target="_blank" rel="noopener">Кабинет</BaseButton>
+          <BaseButton variant="primary" size="small" :href="cabinetUrl">Кабинет</BaseButton>
         </header>
         <div ref="copy" class="hero-copy">
           <h1 class="hero-title" data-reveal>

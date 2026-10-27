@@ -35,7 +35,6 @@ from bot.services.subscription_service_impl.core import SubscriptionService
 from bot.services.telegram_account import require_telegram_account_id
 from bot.utils.callback_answer import (
     callback_data,
-    callback_message,
 )
 from config.settings import Settings
 from config.subscription_periods import tariff_period_key, with_period_days
@@ -45,6 +44,7 @@ from config.tariffs_config import (
     default_payment_currency_code_for_settings,
 )
 
+from ..menu_card import render_card
 from .core_common import (
     _assigned_tariff_key,
     _tariff_purchase_markup,
@@ -354,11 +354,7 @@ async def display_subscription_options(
             tariff_key=viewed_tariff_key,
         )
         if isinstance(event, types.CallbackQuery):
-            target_message_obj = callback_message(event)
-            try:
-                await target_message_obj.edit_text(text_content, reply_markup=reply_markup)
-            except Exception:
-                await target_message_obj.answer(text_content, reply_markup=reply_markup)
+            await render_card(event, text_content, reply_markup)
             await event.answer()
         else:
             await event.answer(text_content, reply_markup=reply_markup)
@@ -439,11 +435,7 @@ async def display_subscription_options(
     await _emit_subscription_options_viewed(event, settings, plans_count=len(options))
 
     if isinstance(event, types.CallbackQuery):
-        target_message_obj = callback_message(event)
-        try:
-            await target_message_obj.edit_text(text_content, reply_markup=reply_markup)
-        except Exception:
-            await target_message_obj.answer(text_content, reply_markup=reply_markup)
+        await render_card(event, text_content, reply_markup)
         with contextlib.suppress(Exception):
             await event.answer()
     else:
@@ -537,7 +529,7 @@ async def select_tariff_callback(
         promo_available=promo_available,
         promo_enabled=promo_enabled,
     )
-    await callback_message(callback).edit_text(text, reply_markup=markup)
+    await render_card(callback, text, markup)
     await callback.answer()
 
 
@@ -656,7 +648,7 @@ async def select_tariff_period_callback(
         promo_available=promo_quote is not None,
         promo_enabled=promo_quote is not None,
     )
-    await callback_message(callback).edit_text(payment_text, reply_markup=markup)
+    await render_card(callback, payment_text, markup)
     await callback.answer()
 
 
@@ -721,7 +713,5 @@ async def select_tariff_package_callback(
         back_callback=back_callback,
         user_id=account_user_id,
     )
-    await callback_message(callback).edit_text(
-        get_text("choose_payment_method_traffic"), reply_markup=markup
-    )
+    await render_card(callback, get_text("choose_payment_method_traffic"), markup)
     await callback.answer()

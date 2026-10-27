@@ -18,11 +18,7 @@ from bot.services.traffic_topup_availability import (
     TRAFFIC_TOPUP_UNLOCK_PERCENT,
     resolve_traffic_topup_availability,
 )
-from bot.utils.callback_answer import (
-    callback_bot,
-    callback_data,
-    callback_message,
-)
+from bot.utils.callback_answer import callback_bot, callback_data
 from config.settings import Settings
 from config.tariffs_config import (
     default_currency_key_for_settings,
@@ -30,6 +26,7 @@ from config.tariffs_config import (
 )
 from db.dal import subscription_dal
 
+from ..menu_card import render_card
 from .core_common import (
     _assigned_tariff_key,
     _format_premium_usage_limit,
@@ -163,7 +160,7 @@ async def tariff_topup_list_callback(
         text = text + "\n\n" + "\n".join(carryover_lines)
     if premium_lines:
         text = text + "\n\n" + "\n".join(premium_lines)
-    await callback_message(callback).edit_text(text, reply_markup=builder.as_markup())
+    await render_card(callback, text, builder.as_markup())
     await callback.answer()
 
 
@@ -210,9 +207,7 @@ async def select_tariff_premium_package_callback(
         back_callback="tariff_topup:list",
         user_id=account_user_id,
     )
-    await callback_message(callback).edit_text(
-        get_text("choose_payment_method_traffic"), reply_markup=markup
-    )
+    await render_card(callback, get_text("choose_payment_method_traffic"), markup)
     await callback.answer()
 
 
@@ -263,12 +258,13 @@ async def hwid_devices_list_callback(
         renewal=False,
         stars_packages=stars_packages,
     )
-    await callback_message(callback).edit_text(
+    await render_card(
+        callback,
         get_text(
             "select_hwid_device_package",
             date=(active or {}).get("extra_hwid_devices_valid_until_text") or "",
         ),
-        reply_markup=markup,
+        markup,
     )
     await callback.answer()
 
@@ -361,9 +357,7 @@ async def hwid_devices_package_callback(
         back_callback="hwid_devices:list",
         user_id=account_user_id,
     )
-    await callback_message(callback).edit_text(
-        get_text("choose_payment_method_hwid_devices"), reply_markup=markup
-    )
+    await render_card(callback, get_text("choose_payment_method_hwid_devices"), markup)
     await callback.answer()
 
 
@@ -410,8 +404,8 @@ async def tariff_change_list_callback(
             )
         ]
     )
-    await callback_message(callback).edit_text(
-        get_text("wa_tariffs_choose"), reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+    await render_card(
+        callback, get_text("wa_tariffs_choose"), InlineKeyboardMarkup(inline_keyboard=rows)
     )
     await callback.answer()
 
@@ -512,9 +506,10 @@ async def tariff_change_select_callback(
             )
         ]
     )
-    await callback_message(callback).edit_text(
+    await render_card(
+        callback,
         f"{target.name(current_lang)}\n{target.description(current_lang)}".strip(),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        InlineKeyboardMarkup(inline_keyboard=rows),
     )
     await callback.answer()
 
@@ -576,9 +571,10 @@ async def tariff_change_confirm_apply_callback(
             get_text("wa_tariff_change_confirm_action", action=action_text),
         ]
     )
-    await callback_message(callback).edit_text(
+    await render_card(
+        callback,
         message_text,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        InlineKeyboardMarkup(inline_keyboard=rows),
     )
     await callback.answer()
 
@@ -622,9 +618,10 @@ async def tariff_change_confirm_pay_callback(
             get_text("wa_tariff_change_confirm_action", action=payment_text),
         ]
     )
-    await callback_message(callback).edit_text(
+    await render_card(
+        callback,
         message_text,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        InlineKeyboardMarkup(inline_keyboard=rows),
     )
     await callback.answer()
 
@@ -689,7 +686,5 @@ async def tariff_change_pay_callback(
         back_callback=f"tariff_change:confirm_pay:{tariff_key}:{amount_raw}",
         user_id=account_user_id,
     )
-    await callback_message(callback).edit_text(
-        get_text("choose_payment_method"), reply_markup=markup
-    )
+    await render_card(callback, get_text("choose_payment_method"), markup)
     await callback.answer()

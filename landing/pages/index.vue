@@ -3,8 +3,6 @@ useHead({ title: 'Proliv Network' })
 </script>
 
 <template>
-  <DotField side="left" />
-  <DotField side="right" />
   <main>
     <LandingHeroSection />
     <LandingLocationsSection />

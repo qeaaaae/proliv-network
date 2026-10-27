@@ -42,7 +42,9 @@ from .start_common import (
     _resolve_referrer_from_start_ref,
     router,
 )
+from .menu_card import card_enabled
 from .start_menus import send_main_menu
+from .welcome_banner import send_welcome_message
 
 logger = logging.getLogger(__name__)
 
@@ -528,13 +530,20 @@ async def start_command_handler(
 
     open_referral_page_for_existing_user = should_open_referral_from_start and is_existing_user
 
-    # Send welcome message if not disabled
+    # Send welcome message if not disabled. With the photo-card UI enabled the
+    # main menu itself is the persistent card, so a separate banner would only
+    # duplicate it.
     if (
         not settings.DISABLE_WELCOME_MESSAGE
         and not open_referral_page_for_existing_user
         and not notifications_start_requested
+        and not card_enabled()
     ):
-        await message.answer(_(key="welcome", user_name=hd.quote(user.full_name)))
+        await send_welcome_message(
+            message_bot(message),
+            message.chat.id,
+            _(key="welcome", user_name=hd.quote(user.full_name)),
+        )
 
     if notifications_start_requested:
         await message.answer(_("telegram_notifications_started"), parse_mode="HTML")

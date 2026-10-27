@@ -1,58 +1,63 @@
 <script setup lang="ts">
 useHead({ title: 'Статус - Proliv Network' })
 
-interface GeoRow {
-  cc: string
-  flag: string
-  list: string
-}
-
 interface Service {
+  id: string
   name: string
   flag?: string
   icon?: string
+  up: boolean
   state: string
   uptime: string
-  // 48 half-hour slots over the last 24h; 'ok' | 'down' | 'degraded'
-  slots: string[]
-  // demo geo-detection per service, replaced by node geocheck.sh output later
-  geo?: { seen: GeoRow[]; unavailable: string; cdn: string }
+  // 48 half-hour slots over the last 24h; 0 ok | 1 degraded | 2 down | -1 unknown
+  slots: number[]
 }
 
-const SLOTS = 48
-const ok = () => Array.from({ length: SLOTS }, () => 'ok')
+interface StatusPayload {
+  updated_at: number
+  all_up: boolean
+  groups: { locations: Service[]; services: Service[] }
+}
 
-const locations: Service[] = [
-  {
-    name: 'Эстония · Таллин',
-    flag: 'ee',
-    state: 'Работает',
-    uptime: '100%',
-    slots: ok(),
-    geo: {
-      seen: [{ cc: 'EE', flag: 'ee', list: 'ifconfig.co, ipquery.io, Google, YouTube, JetBrains' }],
-      unavailable: 'нет',
-      cdn: 'Cloudflare EE · YouTube EE · Netflix EE',
-    },
-  },
-  {
-    name: 'Великобритания · Лондон',
-    flag: 'gb',
-    state: 'Работает',
-    uptime: '100%',
-    slots: ok(),
-    geo: {
-      seen: [{ cc: 'GB', flag: 'gb', list: 'ifconfig.co, ipquery.io, Google, YouTube, JetBrains' }],
-      unavailable: 'нет',
-      cdn: 'Cloudflare GB · YouTube GB · Netflix GB',
-    },
-  },
-]
+const EMPTY_SLOT = -1
+const emptySlots = () => Array.from({ length: 48 }, () => EMPTY_SLOT)
 
-const services: Service[] = [
-  { name: 'Telegram-бот', icon: 'tg', state: 'Работает', uptime: '100%', slots: ok() },
-  { name: 'Личный кабинет', icon: 'cab', state: 'Скоро', uptime: '—', slots: ok() },
-]
+const locations = ref<Service[]>([])
+const services = ref<Service[]>([])
+const allUp = ref(true)
+const updatedAt = ref<number | null>(null)
+const failed = ref(false)
+
+const updatedLabel = computed(() => {
+  if (!updatedAt.value) return ''
+  const d = new Date(updatedAt.value * 1000)
+  return `Обновлено ${d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`
+})
+
+const slotClass = (s: number) =>
+  s === 0 ? 'slot--ok' : s === 1 ? 'slot--degraded' : s === 2 ? 'slot--down' : 'slot--unknown'
+
+async function load() {
+  try {
+    const res = await fetch(`/status/status.json?t=${Date.now()}`)
+    if (!res.ok) throw new Error(String(res.status))
+    const data = (await res.json()) as StatusPayload & { samples?: unknown }
+    locations.value = data.groups?.locations ?? []
+    services.value = data.groups?.services ?? []
+    allUp.value = Boolean(data.all_up ?? true)
+    updatedAt.value = data.updated_at || null
+    failed.value = false
+  } catch {
+    failed.value = true
+  }
+}
+
+let timer: ReturnType<typeof setInterval> | undefined
+onMounted(() => {
+  load()
+  timer = setInterval(load, 30000)
+})
+onUnmounted(() => clearInterval(timer))
 </script>
 
 <template>
@@ -64,7 +69,9 @@ const services: Service[] = [
 
       <div class="status-hero" data-reveal>
         <h1 class="status-title">Статус Proliv Network</h1>
-        <span class="status-badge"><i class="badge-dot" aria-hidden="true" />Всё работает</span>
+        <span v-if="!failed" class="status-badge" :class="{ 'status-badge--down': !allUp }">
+          <i class="badge-dot" aria-hidden="true" />{{ allUp ? 'Всё работает' : 'Есть проблемы' }}
+        </span>
       </div>
       <p class="status-lead" data-reveal style="--delay: 0.08s">
         Здесь видно, как сейчас работают наши локации и сервисы
@@ -73,43 +80,29 @@ const services: Service[] = [
       <section class="status-panel card" aria-label="Локации" data-reveal style="--delay: 0.12s">
         <h2 class="panel-title">Локации</h2>
         <ul class="service-list">
-          <li v-for="s in locations" :key="s.name" class="service">
+          <li v-for="s in locations" :key="s.id" class="service">
             <div class="service-head">
               <img v-if="s.flag" class="service-flag" :src="`/images/flags/${s.flag}.svg`" alt="" width="26" height="18">
               <div class="service-id">
                 <h3>{{ s.name }}</h3>
-                <span class="service-state"><i class="state-dot" aria-hidden="true" />{{ s.state }}</span>
+                <span class="service-state">
+                  <i class="state-dot" :class="{ 'state-dot--down': !s.up }" aria-hidden="true" />{{ s.state }}
+                </span>
               </div>
               <span class="service-uptime">{{ s.uptime }}<small> за 24 часа</small></span>
             </div>
             <div class="uptime-bar" role="img" :aria-label="`Аптайм ${s.uptime} за 24 часа`">
               <i
-                v-for="(slot, i) in s.slots"
+                v-for="(slot, i) in (s.slots.length ? s.slots : emptySlots())"
                 :key="i"
                 class="slot"
-                :class="`slot--${slot}`"
+                :class="slotClass(slot)"
                 :style="{ '--i': i }"
               />
             </div>
             <div class="uptime-axis">
               <span>24 часа назад</span>
               <span>Сейчас</span>
-            </div>
-            <div v-if="s.geo" class="geo">
-              <p class="geo-label">Видят страну:</p>
-              <p v-for="row in s.geo.seen" :key="row.cc" class="geo-line">
-                <img class="geo-flag" :src="`/images/flags/${row.flag}.svg`" :alt="row.cc" width="18" height="13">
-                <b>{{ row.cc }}:</b>
-                <span>{{ row.list }}</span>
-              </p>
-              <p class="geo-line">
-                <span class="geo-tag">Недоступно:</span>
-                <span>{{ s.geo.unavailable }}</span>
-              </p>
-              <p class="geo-line">
-                <span class="geo-tag">CDN:</span>
-                <span>{{ s.geo.cdn }}</span>
-              </p>
             </div>
           </li>
         </ul>
@@ -118,7 +111,7 @@ const services: Service[] = [
       <section class="status-panel card" aria-label="Сервисы" data-reveal style="--delay: 0.16s">
         <h2 class="panel-title">Сервисы</h2>
         <ul class="service-list">
-          <li v-for="s in services" :key="s.name" class="service">
+          <li v-for="s in services" :key="s.id" class="service">
             <div class="service-head">
               <span class="service-icon" aria-hidden="true">
                 <svg v-if="s.icon === 'tg'" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm4.7 6.7-1.6 7.6c-.1.5-.4.7-.9.4l-2.4-1.8-1.2 1.1c-.1.1-.2.3-.5.3l.2-2.5 4.5-4.1c.2-.2 0-.3-.3-.1l-5.6 3.5-2.4-.8c-.5-.2-.5-.5.1-.8l9.3-3.6c.5-.1.8.2.4.8z"/></svg>
@@ -126,16 +119,18 @@ const services: Service[] = [
               </span>
               <div class="service-id">
                 <h3>{{ s.name }}</h3>
-                <span class="service-state"><i class="state-dot" aria-hidden="true" />{{ s.state }}</span>
+                <span class="service-state">
+                  <i class="state-dot" :class="{ 'state-dot--down': !s.up }" aria-hidden="true" />{{ s.state }}
+                </span>
               </div>
               <span class="service-uptime">{{ s.uptime }}<small v-if="s.uptime !== '—'"> за 24 часа</small></span>
             </div>
             <div class="uptime-bar" role="img" :aria-label="`Аптайм ${s.uptime} за 24 часа`">
               <i
-                v-for="(slot, i) in s.slots"
+                v-for="(slot, i) in (s.slots.length ? s.slots : emptySlots())"
                 :key="i"
                 class="slot"
-                :class="`slot--${slot}`"
+                :class="slotClass(slot)"
                 :style="{ '--i': i }"
               />
             </div>
@@ -148,7 +143,8 @@ const services: Service[] = [
       </section>
 
       <p class="status-note" data-reveal style="--delay: 0.2s">
-        Страница в демо-режиме: живые метрики подключатся к Remnawave после запуска нод.
+        <template v-if="failed">Не удалось загрузить метрики - попробуйте обновить страницу.</template>
+        <template v-else>Живые метрики с узлов и сервисов. {{ updatedLabel }}</template>
       </p>
     </div>
   </main>
@@ -209,6 +205,13 @@ const services: Service[] = [
     0 0 6px rgba(61, 220, 132, 0.8),
     0 0 16px rgba(61, 220, 132, 0.4);
   animation: badge-pulse 2.4s ease-in-out infinite;
+}
+
+.status-badge--down .badge-dot {
+  background: #ff8587;
+  box-shadow:
+    0 0 6px rgba(255, 133, 135, 0.8),
+    0 0 16px rgba(255, 133, 135, 0.4);
 }
 
 @keyframes badge-pulse {
@@ -309,6 +312,10 @@ const services: Service[] = [
   background: #3ddc84;
 }
 
+.state-dot--down {
+  background: #ff8587;
+}
+
 .service-uptime {
   margin-left: auto;
   color: var(--text);
@@ -358,53 +365,17 @@ const services: Service[] = [
   background: #ff8587;
 }
 
+.slot--unknown {
+  background: var(--border, #2a3240);
+  opacity: 0.4;
+}
+
 .uptime-axis {
   display: flex;
   justify-content: space-between;
   margin-top: 8px;
   color: var(--muted);
   font-size: 12px;
-}
-
-.geo {
-  margin-top: 14px;
-  padding: 12px 14px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
-  font-family: ui-monospace, 'Cascadia Mono', Menlo, monospace;
-  font-size: 12.5px;
-  line-height: 1.7;
-}
-
-.geo-label {
-  margin-bottom: 4px;
-  color: var(--fg-secondary);
-}
-
-.geo-line {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--fg-secondary);
-}
-
-.geo-line b {
-  color: var(--text);
-  font-weight: 600;
-}
-
-.geo-flag {
-  flex: none;
-  border-radius: 3px;
-  object-fit: cover;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14);
-}
-
-.geo-tag {
-  flex: none;
-  min-width: 98px;
-  color: var(--muted);
 }
 
 .status-note {

@@ -26,6 +26,8 @@ from config.settings import Settings
 from db.dal import user_dal
 from db.models import User
 
+from .menu_card import render_card
+
 logger = logging.getLogger(__name__)
 
 
@@ -187,7 +189,7 @@ async def ensure_required_channel_subscription(
     if isinstance(event, types.CallbackQuery):
         if keyboard and event.message:
             try:
-                await callback_message(event).edit_text(prompt_text, reply_markup=keyboard)
+                await render_card(event, prompt_text, keyboard)
             except Exception as edit_error:
                 logger.debug(
                     "Failed to edit prompt message for user %s: %s",

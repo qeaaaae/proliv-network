@@ -46,7 +46,9 @@ logger = logging.getLogger(__name__)
 async def yookassa_webhook_route(request: web.Request) -> web.Response:
 
     try:
-        bot: Bot = app_required(request, "bot", Bot)
+        # Telegram bot is optional (TELEGRAM_ENABLED=False installs no "bot"
+        # into the app context); downstream handlers accept bot=None.
+        bot: Bot | None = app_optional(request, "bot", Bot)
         i18n_instance: JsonI18n = app_required(request, "i18n", JsonI18n)
         settings: Settings = app_required(request, "settings", Settings)
         panel_service: PanelApiService = app_required(request, "panel_service", PanelApiService)

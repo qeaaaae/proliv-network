@@ -1,0 +1,138 @@
+# ============================================================
+# Minishop (TG-магазин): overlay для подключения к нашей панели
+# Upstream-код: shop/ (vendored fork 3252a8/remnawave-minishop)
+# Конфигурация: shop/.env (из infra/minishop.env.example)
+#
+# Запуск (из корня репо):
+#   docker compose -f shop/docker-compose.yml -f infra/minishop.compose.yml up -d --build
+# Стоп:
+#   docker compose -f shop/docker-compose.yml -f infra/minishop.compose.yml down
+#
+# Что делает overlay: добавляет backend/worker/migrate/bot во внешнюю
+# сеть remnawave-network, которую создаёт корневой docker-compose.yml,
+# чтобы бот ходил в нашу панель по http://remnawave:3000/api.
+# Порты и прочее - через shop/.env (см. infra/minishop.env.example).
+# ============================================================
+
+# shop/ завендорен через git subtree - .git внутри shop/ нет.
+# Dockerfile монтирует .git только чтобы узнать версию; когда sha
+# передан build-arg'ом, git-блок пропускается. .git-файл (gitdir) в
+# shop/ нужен лишь для самого bind-mount.
+x-minishop-build-args: &minishop_build_args
+  REMNAWAVE_MINISHOP_BUILD_TAG: 'v3.8.3'
+  REMNAWAVE_MINISHOP_BUILD_COMMIT: '727c2387'
+  REMNAWAVE_MINISHOP_BRANCH: 'main'
+  REMNAWAVE_MINISHOP_BUILD_PROVENANCE: 'custom'
+
+services:
+  backend:
+    build:
+      args: *minishop_build_args
+    environment:
+      # TELEGRAM_ENABLED берётся из shop/.env (True): initData-авторизация
+      # /api/auth/token гейтится ей + BOT_TOKEN - без неё TG-вход в ЛК мёртв.
+      # Webapp-сессии подписываются фиксированным секретом. ПРОД: убрать
+      # ВЕСЬ этот dev-блок (WEBAPP_SESSION_SECRET -> в shop/.env,
+      # APP_RUNTIME_MODE, QA_AUTH_ENABLED, EMAIL_LOGIN_ENABLED).
+      # Внимание: QA_AUTH/EMAIL_LOGIN/APP_RUNTIME_MODE=dev в проде - дыра.
+      WEBAPP_SESSION_SECRET: 'proliv-local-dev-secret'
+      # Email-логин без SMTP: единственный non-TG способ получить webapp-
+      # токен локально (кабинет dev-login ходит в /api/auth/email/password).
+      APP_RUNTIME_MODE: 'dev'
+      QA_AUTH_ENABLED: 'True'
+      EMAIL_LOGIN_ENABLED: 'True'
+      MY_DEVICES_SECTION_ENABLED: 'True'
+      SUBSCRIPTION_REISSUE_ENABLED: 'True'
+    networks:
+      - remnawave-minishop
+      - remnawave-network
+
+  # Telegram-часть отдельным процессом (профиль "bot" - не стартует при
+  # обычном `up -d`, нужен явный `--profile bot` или `up -d bot`).
+  # Тот же backend-образ: run_bot всегда поднимает aiohttp, поэтому
+  # "чистого" бота без HTTP не существует - этот инстанс слушает :8080
+  # и принимает апдейты на POST /tg/webhook; webapp-порт выключен.
+  # Edge/прокси в проде: /tg/webhook -> remnawave-minishop-bot:8080,
+  # остальное -> remnawave-minishop-backend:8080. Подробнее - infra/bot.md.
+  bot:
+    profiles: ["bot"]
+    container_name: remnawave-minishop-bot
+    build:
+      context: ../shop
+      dockerfile: deploy/docker/Dockerfile
+      target: backend
+      args: *minishop_build_args
+    image: 3252a8/remnawave-minishop-backend:${IMAGE_TAG:-latest}
+    # Штатный CMD - plugin_launcher.py backend - тут вреден: второй
+    # лаунчер роли "backend" конкурирует за общий plugin-store
+    # (observations["backend"], двойной запуск миграций при смене
+    # поколения плагинов). Прямой запуск main_backend.py - как у сервиса
+    # migrate. Плагины из общего store всё равно загружаются при старте,
+    # но после установки/обновления плагина нужен `restart bot`.
+    command: ['python', 'backend/main_backend.py']
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ${APP_ENV_FILE:-.env}
+    environment:
+      IMAGE_TAG: ${IMAGE_TAG:-latest}
+      POSTGRES_HOST: postgres
+      REDIS_URL: redis://redis:6379/0
+      WEB_SERVER_INTERNAL_PORT: '8080'
+      # Сервис существует только ради TG: без реального BOT_TOKEN в
+      # shop/.env упадёт с явной ошибкой (aiogram валидирует токен при
+      # старте) - это и есть сигнал, что профиль подняли раньше времени.
+      TELEGRAM_ENABLED: 'True'
+      # WebApp API живёт на backend; вторая копия :8081 тут не нужна.
+      WEBAPP_ENABLED: 'false'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - shop-data:/app/data
+    ports:
+      # Только для локального туннеля (rathole/ngrok -> 127.0.0.1:8088);
+      # в проде Telegram ходит через edge-прокси на bot:8080 по docker-сети.
+      - '127.0.0.1:${BOT_WEB_SERVER_PORT:-8088}:8080'
+    networks:
+      - remnawave-minishop
+      - remnawave-network
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:8080/healthz']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      start_interval: 3s
+
+  worker:
+    build:
+      args: *minishop_build_args
+    networks:
+      - remnawave-minishop
+      - remnawave-network
+
+  migrate:
+    build:
+      args: *minishop_build_args
+    networks:
+      - remnawave-minishop
+      - remnawave-network
+
+  frontend:
+    build:
+      args: *minishop_build_args
+
+networks:
+  # Имя должно совпадать с upstream docker-compose.yml
+  remnawave-minishop:
+    name: remnawave-minishop-network
+
+  # Создаётся корневым docker-compose.yml (панель, БД панели, sub-page)
+  remnawave-network:
+    name: remnawave-network
+    external: true

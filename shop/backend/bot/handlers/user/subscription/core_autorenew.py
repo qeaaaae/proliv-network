@@ -23,13 +23,13 @@ from bot.services.subscription_service_impl.core import SubscriptionService
 from bot.services.telegram_account import require_telegram_account_id
 from bot.utils.callback_answer import (
     callback_data,
-    callback_message,
     message_from_user,
 )
 from config.settings import Settings
 from db.dal import subscription_dal
 from db.models import Subscription
 
+from ..menu_card import render_card
 from .core_common import (
     _hwid_callback_token,
     _recurring_service_for_subscription,
@@ -159,11 +159,7 @@ async def toggle_autorenew_handler(
         get_text("autorenew_confirm_enable") if enable else get_text("autorenew_confirm_disable")
     )
     kb = get_autorenew_confirm_keyboard(enable, sub.subscription_id, current_lang, i18n)
-    try:
-        await callback_message(callback).edit_text(confirm_text, reply_markup=kb)
-    except Exception:
-        with contextlib.suppress(Exception):
-            await callback_message(callback).answer(confirm_text, reply_markup=kb)
+    await render_card(callback, confirm_text, kb)
     with contextlib.suppress(Exception):
         await callback.answer()
     return

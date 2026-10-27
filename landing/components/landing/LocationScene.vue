@@ -132,6 +132,32 @@ function paintLandmark(m: CanvasRenderingContext2D, seed: string) {
     tri(0.1, 0.14, 0.16, 0.26, 0.22, 0.14)
     tri(0.4, 0.14, 0.46, 0.3, 0.52, 0.14)
     tri(0.84, 0.14, 0.9, 0.25, 0.96, 0.14)
+  } else if (seed === 'de') {
+    // Frankfurt skyline: Main Tower, Commerzbank, Messeturm, ECB
+    rect(0, 0, 1, 0.045)
+
+    // Main Tower + antenna
+    rect(0.18, 0.045, 0.07, 0.46)
+    rect(0.212, 0.505, 0.006, 0.09)
+
+    // Commerzbank Tower: tall block with notched top + spire
+    rect(0.42, 0.045, 0.08, 0.6)
+    tri(0.42, 0.645, 0.46, 0.74, 0.5, 0.645)
+    rect(0.457, 0.74, 0.006, 0.07)
+
+    // Messeturm: pyramid top
+    rect(0.62, 0.045, 0.06, 0.42)
+    tri(0.62, 0.465, 0.65, 0.58, 0.68, 0.465)
+
+    // ECB twin towers
+    rect(0.78, 0.045, 0.05, 0.36)
+    rect(0.85, 0.045, 0.05, 0.36)
+    rect(0.78, 0.2, 0.12, 0.025)
+
+    // low blocks
+    rect(0.05, 0.045, 0.08, 0.2)
+    rect(0.3, 0.045, 0.07, 0.26)
+    rect(0.53, 0.045, 0.06, 0.18)
   } else {
     // generic skyline
     const rand = mulberry32(hashSeed(seed))

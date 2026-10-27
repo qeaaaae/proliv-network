@@ -20,9 +20,6 @@ from bot.services.device_topup_availability import (
 from bot.services.panel_api_service import PanelApiService
 from bot.services.subscription_service_impl.core import SubscriptionService
 from bot.services.traffic_topup_availability import resolve_traffic_topup_availability
-from bot.utils.callback_answer import (
-    callback_message,
-)
 from bot.utils.install_links import (
     append_install_share_link_text,
     ensure_user_install_guide_links,
@@ -30,6 +27,7 @@ from bot.utils.install_links import (
 from config.settings import Settings
 from db.dal import device_name_dal, subscription_dal
 
+from ..menu_card import render_card
 from .core_common import (
     _auto_renew_control_visible,
     _event_user_id,
@@ -132,10 +130,7 @@ async def my_subscription_command_handler(
         if isinstance(event, types.CallbackQuery):
             with contextlib.suppress(Exception):
                 await event.answer()
-            try:
-                await callback_message(event).edit_text(text, reply_markup=kb)
-            except Exception:
-                await callback_message(event).answer(text, reply_markup=kb)
+            await render_card(event, text, kb)
         else:
             await event.answer(text, reply_markup=kb)
         return
@@ -475,18 +470,7 @@ async def my_subscription_command_handler(
     if isinstance(event, types.CallbackQuery):
         with contextlib.suppress(Exception):
             await event.answer()
-        try:
-            await callback_message(event).edit_text(
-                text, reply_markup=markup, parse_mode="HTML", disable_web_page_preview=True
-            )
-        except Exception:
-            await bot.send_message(
-                chat_id=target.chat.id,
-                text=text,
-                reply_markup=markup,
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-            )
+        await render_card(event, text, markup, parse_mode="HTML", disable_web_page_preview=True)
     else:
         await target.answer(
             text, reply_markup=markup, parse_mode="HTML", disable_web_page_preview=True
@@ -660,9 +644,6 @@ async def my_devices_command_handler(
     if isinstance(event, types.CallbackQuery):
         with contextlib.suppress(Exception):
             await event.answer()
-        try:
-            await callback_message(event).edit_text(text, reply_markup=markup)
-        except Exception:
-            await callback_message(event).answer(text, reply_markup=markup)
+        await render_card(event, text, markup)
     else:
         await target.answer(text, reply_markup=markup)

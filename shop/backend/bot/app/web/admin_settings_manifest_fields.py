@@ -674,6 +674,26 @@ SETTINGS_MANIFEST: list[SettingField] = [
         "Show the Telegram bot referral link in the user Web App bonus section.",
         subsection="referral",
     ),
+    SettingField(
+        "REFERRAL_INFO_URL",
+        "url",
+        "pricing",
+        "Referral info page URL",
+        "Opened by the 'Referral program & bonuses' and 'Learn more' buttons.",
+        subsection="referral",
+    ),
+    SettingField(
+        "BONUS_EXCHANGE_DAY_PRICE",
+        "float",
+        "pricing",
+        "Bonus exchange day price",
+        (
+            "Balance charged per 1 subscription day in the bonus exchange screen. "
+            "Leave empty to hide the exchange button."
+        ),
+        min=0,
+        subsection="referral",
+    ),
     *PARTNER_SETTINGS_FIELDS,
     SettingField(
         "LEGACY_REFS",

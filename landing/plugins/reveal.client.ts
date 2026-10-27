@@ -4,7 +4,6 @@ export default defineNuxtPlugin((nuxtApp) => {
   if (!('IntersectionObserver' in window)) return
 
   root.classList.add('motion')
-  root.dataset.reveal = ''
 
   const observer = new IntersectionObserver(
     (entries) => {

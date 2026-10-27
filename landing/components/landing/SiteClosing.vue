@@ -6,6 +6,7 @@ import SiteFooter from './SiteFooter.vue'
 <template>
   <div class="site-closing">
     <div class="content-frame">
+      <DotField side="left" />
       <div class="closing-sheet sheet">
         <FinalCta />
         <SiteFooter />
@@ -16,7 +17,7 @@ import SiteFooter from './SiteFooter.vue'
 
 <style scoped>
 .site-closing {
-  padding: 56px 0 clamp(40px, 6vw, 72px);
+  padding: 56px 0 clamp(12px, 1.6vw, 20px);
 }
 
 .closing-sheet {

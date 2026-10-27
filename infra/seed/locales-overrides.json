@@ -1,0 +1,22 @@
+{
+  "ru": {
+    "welcome": "Добро пожаловать в Proliv Network, {user_name}!",
+    "main_menu_greeting": "Proliv Network\n\nПривет, {user_name}! 👋\nОткройте «Личный кабинет», чтобы настроить подключение, посмотреть подписку или продлить доступ.",
+    "menu_personal_account_button": "🔑 Личный кабинет",
+    "menu_support_button": "💬 Поддержка Proliv",
+    "menu_info_button": "ℹ️ О Proliv",
+    "bot_command_start_description": "Proliv Network - главное меню",
+    "referral_friend_message": "🚀 Привет! Попробуй Proliv Network - быстрый VPN в UK, Эстонии и Германии.\n\n🎁 По моей ссылке тебе дадут бонусные дни к подписке!\n\n{referral_link}",
+    "referral_friend_message_with_webapp": "🚀 Привет! Попробуй Proliv Network - быстрый VPN в UK, Эстонии и Германии.\n\n🎁 По моей ссылке тебе дадут бонусные дни к подписке!\n\nTelegram: {referral_link}\nWeb: {webapp_referral_link}"
+  },
+  "en": {
+    "welcome": "Welcome to Proliv Network, {user_name}!",
+    "main_menu_greeting": "Proliv Network\n\nHi, {user_name}! 👋\nOpen your account to connect, check your subscription or extend access.",
+    "menu_personal_account_button": "🔑 Account",
+    "menu_support_button": "💬 Proliv Support",
+    "menu_info_button": "ℹ️ About Proliv",
+    "bot_command_start_description": "Proliv Network - main menu",
+    "referral_friend_message": "🚀 Hi! Try Proliv Network - fast VPN in the UK, Estonia and Germany.\n\n🎁 My link gives you bonus days on your subscription!\n\n{referral_link}",
+    "referral_friend_message_with_webapp": "🚀 Hi! Try Proliv Network - fast VPN in the UK, Estonia and Germany.\n\n🎁 My link gives you bonus days on your subscription!\n\nTelegram: {referral_link}\nWeb: {webapp_referral_link}"
+  }
+}

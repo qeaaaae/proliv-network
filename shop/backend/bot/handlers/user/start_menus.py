@@ -10,6 +10,7 @@ from bot.keyboards.inline.user_keyboards import (
     get_main_menu_inline_keyboard,
 )
 from bot.middlewares.i18n import JsonI18n
+from bot.services.partner_common import currency_scale, minor_to_decimal_string
 from bot.services.partner_program_service import PartnerProgramService
 from bot.services.subscription_service_impl.core import SubscriptionService
 from bot.services.telegram_account import require_telegram_account_id
@@ -19,6 +20,9 @@ from bot.utils.callback_answer import (
     safe_answer_callback,
 )
 from config.settings import Settings
+from db.dal import subscription_dal, user_balance_dal
+
+from .menu_card import render_card
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +80,27 @@ async def send_main_menu(
     show_trial_button_in_menu = await should_show_trial_button(
         settings, subscription_service, session, user_id
     )
-    text = _(key="main_menu_greeting", user_name=user_full_name)
+
+    currency = settings.balance_settings.currency
+    balance_minor = await user_balance_dal.balance_minor(session, user_id, currency)
+    balance_text = minor_to_decimal_string(
+        balance_minor, scale=currency_scale(currency)
+    ).rstrip("0").rstrip(".")
+    currency_display = "₽" if currency.upper() == "RUB" else currency
+
+    active_sub = await subscription_dal.get_active_subscription_by_user_id(session, user_id)
+    if active_sub is not None and active_sub.end_date:
+        status_block = _(
+            "main_menu_sub_active", end_date=active_sub.end_date.strftime("%d.%m.%Y")
+        )
+    else:
+        status_block = _("main_menu_sub_expired")
+
+    text = (
+        f"{_(key='main_menu_greeting', user_name=user_full_name)}\n\n"
+        f"{_('main_menu_account_block', user_id=event_user.id, balance=balance_text, currency=currency_display)}\n\n"
+        f"{status_block}"
+    )
     reply_markup = get_main_menu_inline_keyboard(
         current_lang,
         i18n,
@@ -102,11 +126,7 @@ async def send_main_menu(
         return
 
     try:
-        if is_edit:
-            await target_message_obj.edit_text(text, reply_markup=reply_markup)
-        else:
-            await target_message_obj.answer(text, reply_markup=reply_markup)
-
+        await render_card(target_event, text, reply_markup, is_edit=is_edit)
         if isinstance(target_event, types.CallbackQuery):
             await safe_answer_callback(target_event)
     except Exception as e_send_edit:
@@ -117,13 +137,6 @@ async def send_main_menu(
             type(e_send_edit).__name__,
             e_send_edit,
         )
-        if is_edit and target_message_obj:
-            try:
-                await target_message_obj.answer(text, reply_markup=reply_markup)
-            except Exception as e_send_new:
-                logger.error(
-                    "Also failed to send new main menu message for user %s: %s", user_id, e_send_new
-                )
         if isinstance(target_event, types.CallbackQuery):
             await safe_answer_callback(
                 target_event,
@@ -187,11 +200,7 @@ async def send_bot_interface_menu(
         return
 
     try:
-        if is_edit:
-            await target_message_obj.edit_text(text, reply_markup=reply_markup)
-        else:
-            await target_message_obj.answer(text, reply_markup=reply_markup)
-
+        await render_card(target_event, text, reply_markup, is_edit=is_edit)
         if isinstance(target_event, types.CallbackQuery):
             await safe_answer_callback(target_event)
     except Exception as e_send_edit:
@@ -202,12 +211,3 @@ async def send_bot_interface_menu(
             type(e_send_edit).__name__,
             e_send_edit,
         )
-        if is_edit:
-            try:
-                await target_message_obj.answer(text, reply_markup=reply_markup)
-            except Exception as e_send_new:
-                logger.error(
-                    "Also failed to send new bot interface menu for user %s: %s",
-                    user_id,
-                    e_send_new,
-                )

@@ -10,13 +10,37 @@ from config.support_links import normalize_support_link
 
 
 def get_referral_link_keyboard(
-    lang: str, i18n_instance: JsonI18n, back_callback: str = "main_action:back_to_main"
+    lang: str,
+    i18n_instance: JsonI18n,
+    back_callback: str = "main_action:back_to_main",
+    *,
+    referral_info_url: str | None = None,
+    exchange_enabled: bool = False,
+    share_url: str | None = None,
 ) -> InlineKeyboardMarkup:
     _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
     builder = InlineKeyboardBuilder()
-    builder.button(
-        text=_(key="referral_share_message_button"), callback_data="referral_action:share_message"
-    )
+    if share_url:
+        builder.row(
+            InlineKeyboardButton(
+                text=_(key="referral_invite_friend_button"),
+                url=share_url,
+            )
+        )
+    if exchange_enabled:
+        builder.row(
+            InlineKeyboardButton(
+                text=_(key="referral_exchange_button"),
+                callback_data="referral_action:exchange",
+            )
+        )
+    if referral_info_url:
+        builder.row(
+            InlineKeyboardButton(
+                text=_(key="referral_program_details_button"),
+                url=referral_info_url,
+            )
+        )
     builder.button(text=_(key="back_to_main_menu_button"), callback_data=back_callback)
     builder.adjust(1)
     return builder.as_markup()

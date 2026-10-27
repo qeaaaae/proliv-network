@@ -109,24 +109,51 @@ services:
     restart: unless-stopped
     networks:
       - remnawave-network
+      - remnawave-minishop-network
     profiles: ['dev']
     volumes:
       - ./infra/Caddyfile.local:/etc/caddy/Caddyfile:ro
     ports:
       - 127.0.0.1:3443:3443
       - 127.0.0.1:3444:3444
+      - 127.0.0.1:8090:8090
     depends_on:
       remnawave:
         condition: service_started
 
   # ---------- Landing (Nuxt, static via nginx) ----------
   landing:
-    build: ./landing
+    build:
+      context: ./landing
+      args:
+        NUXT_PUBLIC_CABINET_URL: ${NUXT_PUBLIC_CABINET_URL:-http://localhost:8082}
     container_name: proliv-landing
     restart: unless-stopped
     profiles: ['site']
+    volumes:
+      - ./status:/usr/share/nginx/html/status:ro
     ports:
       - 127.0.0.1:8080:80
+
+  # ---------- Cabinet (личный кабинет, Nuxt SSR server) ----------
+  cabinet:
+    build:
+      context: ./cabinet
+      args:
+        NUXT_PUBLIC_LANDING_URL: ${NUXT_PUBLIC_LANDING_URL:-http://localhost:8080}
+        NUXT_PUBLIC_BOT_USERNAME: ${NUXT_PUBLIC_BOT_USERNAME:-}
+    container_name: proliv-cabinet
+    restart: unless-stopped
+    profiles: ['app']
+    networks:
+      - remnawave-network
+    env_file: proliv.env
+    environment:
+      - NUXT_PUBLIC_DEV_AUTH=${NUXT_PUBLIC_DEV_AUTH:-1}
+      # Внутренний URL WebApp API бэкенда (minishop), по docker-сети
+      - NUXT_SHOP_API_URL=${NUXT_SHOP_API_URL:-http://remnawave-minishop-backend:8081}
+    ports:
+      - 127.0.0.1:8082:80
 
   # ---------- TG shop bot ----------
   # См. infra/bot.md. Запуск:
@@ -136,6 +163,9 @@ networks:
   remnawave-network:
     name: remnawave-network
     driver: bridge
+  remnawave-minishop-network:
+    name: remnawave-minishop-network
+    external: true
 
 volumes:
   remnawave-db-data:

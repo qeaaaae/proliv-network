@@ -34,6 +34,7 @@ MENU_APPEARANCE_ENTRIES = (
     MenuAppearanceEntry("trial", "menu_activate_trial_button", ("main", "bot"), "🎁"),
     MenuAppearanceEntry("personal_account", "menu_personal_account_button", ("main", "bot"), "🔑"),
     MenuAppearanceEntry("bot_interface", "menu_bot_interface_button", ("main",), "🤖"),
+    MenuAppearanceEntry("purchases", "menu_purchases_button", ("bot",), "🛍️"),
     MenuAppearanceEntry("subscribe", "menu_subscribe_inline", ("bot",), "🚀"),
     MenuAppearanceEntry("my_subscription", "menu_my_subscription_inline", ("bot",), "📋"),
     MenuAppearanceEntry("payment_history", "menu_payment_history_button", ("bot",), "💳"),

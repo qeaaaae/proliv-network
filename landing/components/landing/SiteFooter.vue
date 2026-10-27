@@ -31,7 +31,7 @@ const documents = [
           <li>
             <a
               class="footer-link"
-              href="https://t.me/prolivnet_bot"
+              href="https://t.me/ProlivNetworkBot"
               target="_blank"
               rel="noopener"
             >Telegram-бот</a>
@@ -39,7 +39,7 @@ const documents = [
           <li>
             <a
               class="footer-link"
-              href="https://t.me/proliv_support"
+              href="https://t.me/prolivnet?direct"
               target="_blank"
               rel="noopener"
             >Поддержка</a>

@@ -1,23 +1,38 @@
 import logging
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
+from uuid import uuid4
 
 from aiogram import Bot, F, Router, types
 from aiogram.filters import Command
+from aiogram.utils.keyboard import InlineKeyboardBuilder, InlineKeyboardButton
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.middlewares.i18n import JsonI18n
+from bot.services.partner_common import (
+    amount_to_minor,
+    currency_scale,
+    minor_to_decimal_string,
+)
 from bot.services.partner_program_service import PartnerProgramService
 from bot.services.referral_service import ReferralService
+from bot.services.subscription_service_impl.core import SubscriptionService
 from bot.services.telegram_account import require_telegram_account_id
-from bot.utils.callback_answer import callback_data, callback_message, message_from_user
+from bot.utils.callback_answer import callback_data, message_from_user
+from bot.utils.custom_emoji import custom_emoji_unicode_html
 from bot.utils.referral_links import build_webapp_referral_link
 from config.settings import Settings
-from db.dal import user_dal
+from db.dal import user_balance_dal, user_dal
+
+from .menu_card import render_card, send_card
 
 logger = logging.getLogger(__name__)
 
 router = Router(name="user_referral_router")
+
+Translator = Callable[..., str]
 
 
 async def referral_command_handler(
@@ -130,24 +145,30 @@ async def referral_command_handler(
 
     from bot.keyboards.inline.user_keyboards import get_referral_link_keyboard
 
+    share_text = custom_emoji_unicode_html(_("referral_share_intro"))
+    if webapp_referral_link:
+        share_text += _("referral_share_web_line", webapp_referral_link=webapp_referral_link)
+    share_url = f"https://t.me/share/url?url={quote(referral_link)}&text={quote(share_text)}"
+
     reply_markup_val = get_referral_link_keyboard(
         current_lang,
         i18n,
         back_callback=back_callback,
+        referral_info_url=settings.REFERRAL_INFO_URL,
+        exchange_enabled=bool(settings.BONUS_EXCHANGE_DAY_PRICE),
+        share_url=share_url,
     )
 
     if isinstance(event, types.Message):
-        await event.answer(text, reply_markup=reply_markup_val, disable_web_page_preview=True)
+        await send_card(
+            bot,
+            event.chat.id,
+            text,
+            reply_markup_val,
+            disable_web_page_preview=True,
+        )
     elif isinstance(event, types.CallbackQuery) and event.message:
-        try:
-            await callback_message(event).edit_text(
-                text, reply_markup=reply_markup_val, disable_web_page_preview=True
-            )
-        except Exception as e_edit:
-            logger.warning("Failed to edit message for referral info: %s. Sending new one.", e_edit)
-            await callback_message(event).answer(
-                text, reply_markup=reply_markup_val, disable_web_page_preview=True
-            )
+        await render_card(event, text, reply_markup_val, disable_web_page_preview=True)
         await event.answer()
 
 
@@ -159,6 +180,7 @@ async def referral_action_handler(
     referral_service: ReferralService,
     bot: Bot,
     session: AsyncSession,
+    subscription_service: SubscriptionService,
 ) -> None:
     action = callback_data(callback).split(":")[1]
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
@@ -178,51 +200,148 @@ async def referral_action_handler(
         await callback.answer(_("referral_program_unavailable_for_partner"), show_alert=True)
         return
 
-    if action == "share_message":
-        try:
-            bot_info = await bot.get_me()
-            bot_username = bot_info.username
-            if not bot_username:
-                await callback.answer(_("error_generating_referral_link"), show_alert=True)
-                return
+    if action == "back":
+        await referral_command_handler(
+            callback, settings, i18n_data, referral_service, bot, session
+        )
+        return
 
-            inviter_user_id = await require_telegram_account_id(session, callback.from_user.id)
-            referral_link = await referral_service.generate_referral_link(
-                session, bot_username, inviter_user_id
-            )
+    elif action == "exchange":
+        await _render_exchange_screen(callback, settings, _, session)
 
-            if not referral_link:
-                logger.error(
-                    "Failed to generate referral link for user %s via inline button.",
-                    inviter_user_id,
-                )
-                await callback.answer(_("error_generating_referral_link"), show_alert=True)
-                return
-
-            webapp_referral_link = await _generate_webapp_referral_link(
-                session,
-                settings,
-                inviter_user_id,
-            )
-            if webapp_referral_link:
-                friend_message = _(
-                    "referral_friend_message_with_webapp",
-                    referral_link=referral_link,
-                    webapp_referral_link=webapp_referral_link,
-                )
-            else:
-                friend_message = _("referral_friend_message", referral_link=referral_link)
-
-            await callback_message(callback).answer(friend_message, disable_web_page_preview=True)
-
-        except Exception as e:
-            logger.error("Error in referral share message: %s", e)
-            await callback.answer(_("error_occurred_try_again"), show_alert=True)
+    elif action == "exchange_confirm":
+        await _handle_exchange_confirm(callback, settings, _, session, subscription_service)
+        return
 
     await callback.answer()
 
 
-Translator = Callable[..., str]
+async def _exchange_context(
+    settings: Settings, session: AsyncSession, user_id: int
+) -> tuple[str, int, int, int] | None:
+    price = settings.BONUS_EXCHANGE_DAY_PRICE
+    if not price or price <= 0:
+        return None
+    currency = settings.balance_settings.currency
+    scale = currency_scale(currency)
+    price_minor = amount_to_minor(price, scale=scale)
+    if price_minor <= 0:
+        return None
+    balance_minor = await user_balance_dal.balance_minor(session, user_id, currency)
+    return currency, scale, price_minor, balance_minor
+
+
+async def _render_exchange_screen(
+    callback: types.CallbackQuery,
+    settings: Settings,
+    gettext: Translator,
+    session: AsyncSession,
+) -> None:
+    user_id = await require_telegram_account_id(session, callback.from_user.id)
+    context = await _exchange_context(settings, session, user_id)
+    if context is None:
+        await callback.answer(gettext("referral_exchange_unavailable"), show_alert=True)
+        return
+    currency, scale, price_minor, balance_minor = context
+    days = balance_minor // price_minor
+
+    text = gettext(
+        "referral_exchange_screen",
+        price=minor_to_decimal_string(price_minor, scale=scale),
+        currency=currency,
+        balance=minor_to_decimal_string(balance_minor, scale=scale),
+        days=days,
+    )
+    if days < 1:
+        text = f"{text}\n\n{gettext('referral_exchange_insufficient')}"
+
+    builder = InlineKeyboardBuilder()
+    if days >= 1:
+        builder.row(
+            InlineKeyboardButton(
+                text=gettext("referral_exchange_do_button"),
+                callback_data="referral_action:exchange_confirm",
+            )
+        )
+    builder.row(
+        InlineKeyboardButton(
+            text=gettext("wa_back"),
+            callback_data="referral_action:back",
+        )
+    )
+    await render_card(callback, text, builder.as_markup())
+
+
+async def _handle_exchange_confirm(
+    callback: types.CallbackQuery,
+    settings: Settings,
+    gettext: Translator,
+    session: AsyncSession,
+    subscription_service: SubscriptionService,
+) -> None:
+    user_id = await require_telegram_account_id(session, callback.from_user.id)
+    await user_dal.lock_user_by_id(session, user_id)
+
+    context = await _exchange_context(settings, session, user_id)
+    if context is None:
+        await callback.answer(gettext("referral_exchange_unavailable"), show_alert=True)
+        return
+    currency, scale, price_minor, balance_minor = context
+    days = int(balance_minor // price_minor)
+    if days <= 0:
+        await callback.answer(gettext("referral_exchange_insufficient"), show_alert=True)
+        return
+
+    spend_minor = days * price_minor
+    exchange_id = uuid4().hex
+    await user_balance_dal.create_ledger_entry(
+        session,
+        user_id=user_id,
+        currency=currency,
+        currency_scale=scale,
+        amount_minor=-spend_minor,
+        kind="extension_purchase",
+        state="posted",
+        reference_type="bonus_exchange",
+        reference_id=f"bonus-exchange:{user_id}:{exchange_id[:16]}",
+        idempotency_key=f"bonus-exchange:{exchange_id}",
+        reason="bonus balance exchange to subscription days",
+        posted_at=datetime.now(UTC),
+    )
+    try:
+        new_end_date = await subscription_service.extend_active_subscription_days(
+            session,
+            user_id=user_id,
+            bonus_days=days,
+            reason="bonus exchange",
+        )
+    except Exception:
+        logger.exception("Bonus exchange failed while extending user %s.", user_id)
+        await session.rollback()
+        await callback.answer(gettext("referral_exchange_failed"), show_alert=True)
+        return
+    if not new_end_date:
+        await session.rollback()
+        await callback.answer(gettext("referral_exchange_failed"), show_alert=True)
+        return
+    await session.commit()
+
+    text = gettext(
+        "referral_exchange_success",
+        amount=minor_to_decimal_string(spend_minor, scale=scale),
+        currency=currency,
+        days=days,
+        end_date=new_end_date.strftime("%d.%m.%Y"),
+    )
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(
+            text=gettext("wa_back"),
+            callback_data="referral_action:back",
+        )
+    )
+    await render_card(callback, text, builder.as_markup())
+    await callback.answer()
 
 
 def _period_bonus_text(

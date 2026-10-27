@@ -2,6 +2,8 @@ import logging
 
 from aiogram import Bot, Router
 from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     InlineQuery,
     InlineQueryResultArticle,
     InlineQueryResultUnion,
@@ -118,7 +120,38 @@ async def create_referral_result(
             return None
 
         # Create message content (use same text as friend message)
-        message_text = _("referral_friend_message", referral_link=referral_link)
+        webapp_referral_link = None
+        db_user = await get_user_by_telegram_id(session, inline_query.from_user.id)
+        if settings.SUBSCRIPTION_MINI_APP_URL and db_user:
+            from bot.utils.referral_links import build_webapp_referral_link
+            from db.dal import user_dal
+
+            referral_code = await user_dal.ensure_referral_code(session, db_user)
+            if referral_code:
+                webapp_referral_link = build_webapp_referral_link(
+                    settings.SUBSCRIPTION_MINI_APP_URL, referral_code
+                )
+        if webapp_referral_link:
+            message_text = _(
+                "referral_friend_message_with_webapp",
+                referral_link=referral_link,
+                webapp_referral_link=webapp_referral_link,
+            )
+        else:
+            message_text = _("referral_friend_message", referral_link=referral_link)
+
+        reply_markup: InlineKeyboardMarkup | None = None
+        if settings.REFERRAL_INFO_URL:
+            reply_markup = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=_("referral_learn_more_button"),
+                            url=settings.REFERRAL_INFO_URL,
+                        )
+                    ]
+                ]
+            )
 
         return InlineQueryResultArticle(
             id="referral_link",
@@ -127,6 +160,7 @@ async def create_referral_result(
             input_message_content=InputTextMessageContent(
                 message_text=message_text, disable_web_page_preview=True
             ),
+            reply_markup=reply_markup,
             thumbnail_url=settings.INLINE_REFERRAL_THUMBNAIL_URL,
         )
 

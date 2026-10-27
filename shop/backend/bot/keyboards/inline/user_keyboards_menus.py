@@ -147,9 +147,9 @@ def get_bot_interface_inline_keyboard(
 
     builder.row(
         menu_button(
-            "subscribe",
-            text=_(key="menu_subscribe_inline"),
-            callback_data="main_action:bot_subscribe",
+            "purchases",
+            text=_(key="menu_purchases_button"),
+            callback_data="main_action:purchases",
         )
     )
     builder.row(
@@ -160,9 +160,6 @@ def get_bot_interface_inline_keyboard(
         )
     )
 
-    promo_button = menu_button(
-        "promo", text=_(key="menu_apply_promo_button"), callback_data="main_action:bot_apply_promo"
-    )
     payment_history_url = subscription_mini_app_path_url(settings, "payment-history")
     if payment_history_url:
         builder.row(
@@ -180,7 +177,6 @@ def get_bot_interface_inline_keyboard(
                 callback_data="main_action:bot_referral",
             )
         )
-    builder.row(promo_button)
 
     language_button = menu_button(
         "language",
@@ -217,6 +213,38 @@ def get_bot_interface_inline_keyboard(
         )
     )
 
+    return builder.as_markup()
+
+
+def get_purchases_keyboard(
+    lang: str,
+    i18n_instance: JsonI18n,
+    settings: Settings,
+) -> InlineKeyboardMarkup:
+    """Purchases hub: renew/activate promo/back. Reuses menu appearance ids for icons."""
+    _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
+    builder = MenuKeyboardBuilder(settings)
+    builder.row(
+        menu_button(
+            "subscribe",
+            text=_(key="purchases_renew_button"),
+            callback_data="main_action:bot_subscribe",
+        )
+    )
+    builder.row(
+        menu_button(
+            "promo",
+            text=_(key="purchases_promo_button"),
+            callback_data="main_action:bot_apply_promo",
+        )
+    )
+    builder.row(
+        menu_button(
+            "back_to_main",
+            text=_(key="wa_back"),
+            callback_data="main_action:bot_interface",
+        )
+    )
     return builder.as_markup()
 
 

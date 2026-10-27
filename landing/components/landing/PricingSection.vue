@@ -15,7 +15,7 @@ const periods: Period[] = [
   { label: '1 месяц', months: 1, price: 179, note: 'за 1 месяц' },
   { label: '3 месяца', months: 3, price: 499, note: 'за 3 месяца' },
   { label: '6 месяцев', months: 6, price: 949, note: 'за 6 месяцев' },
-  { label: '12 месяцев', months: 12, price: 1749, note: 'за 12 месяцев' },
+  { label: '12 месяцев', months: 12, price: 1799, note: 'за 12 месяцев' },
 ]
 
 const selected = ref(0)
@@ -44,6 +44,7 @@ watch(selected, (i) => {
 <template>
   <section id="pricing" class="landing-block" aria-labelledby="pricing-title">
     <div class="content-frame">
+      <DotField side="right" />
       <header class="block-head">
         <p class="block-kicker">03 — Тариф</p>
         <h2 id="pricing-title">
@@ -108,7 +109,7 @@ watch(selected, (i) => {
                 <path d="M3 12h18" />
                 <path d="M12 3c2.5 2.6 3.9 5.7 3.9 9s-1.4 6.4-3.9 9c-2.5-2.6-3.9-5.7-3.9-9s1.4-6.4 3.9-9Z" />
               </svg>
-              <span><strong class="numeric">2</strong> локации</span>
+              <span><strong class="numeric">3</strong> локации</span>
             </li>
             <li>
               <svg class="plan-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -128,9 +129,9 @@ watch(selected, (i) => {
               </svg>
               <span class="addon-copy">
                 <span>Дополнительный трафик</span>
-                <small>Покупка от 10 ГБ</small>
+                <small>Пакеты 100 / 500 ГБ</small>
               </span>
-              <strong class="numeric addon-price">0,50 ₽ за 1 ГБ</strong>
+              <strong class="numeric addon-price">от 49 ₽</strong>
             </li>
             <li>
               <svg class="plan-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

@@ -14,7 +14,6 @@ from bot.middlewares.i18n import JsonI18n
 from bot.services.panel_api_service import PanelApiService
 from bot.services.subscription_service_impl.core import SubscriptionService
 from bot.services.telegram_account import require_telegram_account_id
-from bot.utils.callback_answer import callback_message
 from bot.utils.config_link import prepare_config_links
 from bot.utils.install_links import (
     append_install_share_link_text,
@@ -22,6 +21,7 @@ from bot.utils.install_links import (
 )
 from config.settings import Settings
 
+from .menu_card import render_card
 from .start import send_main_menu
 from .trial_captcha_handler import ensure_bot_trial_captcha
 from .trial_captcha_handler import router as captcha_router
@@ -57,27 +57,30 @@ async def request_trial_confirmation_handler(
         pass
 
     if not settings.TRIAL_ENABLED:
-        await callback_message(callback).edit_text(
+        await render_card(
+            callback,
             _("trial_feature_disabled"),
-            reply_markup=get_main_menu_inline_keyboard(current_lang, i18n, settings, False),
+            get_main_menu_inline_keyboard(current_lang, i18n, settings, False),
         )
         with contextlib.suppress(Exception):
             await callback.answer()
         return
 
     if settings.TRIAL_PAYMENT_ENABLED:
-        await callback_message(callback).edit_text(
+        await render_card(
+            callback,
             _("trial_payment_required"),
-            reply_markup=get_main_menu_inline_keyboard(current_lang, i18n, settings, True),
+            get_main_menu_inline_keyboard(current_lang, i18n, settings, True),
         )
         with contextlib.suppress(Exception):
             await callback.answer()
         return
 
     if await subscription_service.has_trial_blocking_subscription(session, user_id):
-        await callback_message(callback).edit_text(
+        await render_card(
+            callback,
             _("trial_already_had_subscription_or_trial"),
-            reply_markup=get_main_menu_inline_keyboard(current_lang, i18n, settings, False),
+            get_main_menu_inline_keyboard(current_lang, i18n, settings, False),
         )
         with contextlib.suppress(Exception):
             await callback.answer()
@@ -170,23 +173,13 @@ async def request_trial_confirmation_handler(
         )
     )
 
-    try:
-        await callback_message(callback).edit_text(
-            final_message_text_in_chat,
-            parse_mode="HTML",
-            reply_markup=reply_markup,
-            disable_web_page_preview=True,
-        )
-    except Exception as e_edit:
-        logger.warning("Could not edit trial result message: %s. Sending new one.", e_edit)
-
-        if callback.message:
-            await callback_message(callback).answer(
-                final_message_text_in_chat,
-                parse_mode="HTML",
-                reply_markup=reply_markup,
-                disable_web_page_preview=True,
-            )
+    await render_card(
+        callback,
+        final_message_text_in_chat,
+        reply_markup,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
 
 
 @router.callback_query(F.data == "trial_action:confirm_activate")
@@ -310,23 +303,13 @@ async def confirm_activate_trial_handler(
         )
     )
 
-    try:
-        await callback_message(callback).edit_text(
-            final_message_text_in_chat,
-            parse_mode="HTML",
-            reply_markup=reply_markup,
-            disable_web_page_preview=True,
-        )
-    except Exception as e_edit:
-        logger.warning("Could not edit trial result message: %s. Sending new one.", e_edit)
-
-        if callback.message:
-            await callback_message(callback).answer(
-                final_message_text_in_chat,
-                parse_mode="HTML",
-                reply_markup=reply_markup,
-                disable_web_page_preview=True,
-            )
+    await render_card(
+        callback,
+        final_message_text_in_chat,
+        reply_markup,
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
 
     if activation_result and activation_result.get("activated") and end_date_obj:
         try:

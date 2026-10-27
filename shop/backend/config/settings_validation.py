@@ -122,6 +122,7 @@ class SettingsValidationMixin:
         "CRYPT4_REDIRECT_URL",
         "PRIVACY_POLICY_URL",
         "USER_AGREEMENT_URL",
+        "REFERRAL_INFO_URL",
         "SUBSCRIPTION_MINI_APP_URL",
         "PUBLIC_APP_URL",
         "EMAIL_AUTH_SECRET",
@@ -169,6 +170,15 @@ class SettingsValidationMixin:
     def normalize_minishop_edge_token_header(cls, value):
         normalized = str(value or "").strip()
         return normalized or "X-Minishop-Edge-Token"
+
+    @field_validator("BONUS_EXCHANGE_DAY_PRICE", mode="before")
+    @classmethod
+    def validate_optional_float(cls, value):
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
+        return value
 
     @field_validator("USER_HWID_DEVICE_LIMIT", "TRIAL_HWID_DEVICE_LIMIT", mode="before")
     @classmethod

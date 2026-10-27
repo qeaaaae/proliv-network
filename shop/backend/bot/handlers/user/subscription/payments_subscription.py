@@ -16,9 +16,10 @@ from bot.keyboards.inline.user_keyboards import (
 from bot.middlewares.i18n import JsonI18n
 from bot.services.checkout_promos import CheckoutPromoResult
 from bot.services.telegram_account import require_telegram_account_id
-from bot.utils.callback_answer import callback_data, callback_message
+from bot.utils.callback_answer import callback_data
 from config.settings import Settings
 
+from ..menu_card import render_card
 from .core_purchase import _resolve_period_promo, _with_checkout_promo_notice
 
 logger = logging.getLogger(__name__)
@@ -151,12 +152,6 @@ async def select_subscription_period_callback_handler(
         checkout_stars_promo=stars_promo_quote,
     )
 
-    try:
-        await callback_message(callback).edit_text(text_content, reply_markup=reply_markup)
-    except Exception as e_edit:
-        logger.warning(
-            "Edit message for payment method selection failed: %s. Sending new one.", e_edit
-        )
-        await callback_message(callback).answer(text_content, reply_markup=reply_markup)
+    await render_card(callback, text_content, reply_markup)
     with contextlib.suppress(Exception):
         await callback.answer()

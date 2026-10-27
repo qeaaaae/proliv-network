@@ -2,6 +2,12 @@ export default defineNuxtConfig({
   compatibilityDate: '2025-10-25',
   devtools: { enabled: false },
   ssr: true,
+  runtimeConfig: {
+    public: {
+      // локальный dev кабинета; в проде переопределяется NUXT_PUBLIC_CABINET_URL при сборке
+      cabinetUrl: process.env.NUXT_PUBLIC_CABINET_URL || 'http://localhost:3300',
+    },
+  },
   app: {
     head: {
       htmlAttrs: { lang: 'ru' },
@@ -14,7 +20,7 @@ export default defineNuxtConfig({
         {
           name: 'description',
           content:
-            'Две локации с портом 10 Гбит/с, 1000 ГБ трафика в месяц и 5 устройств. Подключение от 179 ₽.',
+            'Три локации с портом 10 Гбит/с, 1000 ГБ трафика в месяц и 5 устройств. Подключение от 179 ₽.',
         },
         { property: 'og:type', content: 'website' },
         { property: 'og:site_name', content: 'Proliv Network' },
@@ -22,7 +28,7 @@ export default defineNuxtConfig({
         {
           property: 'og:description',
           content:
-            'Две локации с портом 10 Гбит/с, 1000 ГБ трафика в месяц и 5 устройств. Подключение от 179 ₽.',
+            'Три локации с портом 10 Гбит/с, 1000 ГБ трафика в месяц и 5 устройств. Подключение от 179 ₽.',
         },
       ],
       link: [{ rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],

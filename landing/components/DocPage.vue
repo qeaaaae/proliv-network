@@ -1,6 +1,7 @@
 <script setup lang="ts">
 defineProps<{
   title: string
+  lead?: string
   updated?: string
 }>()
 </script>
@@ -17,7 +18,8 @@ defineProps<{
             <NuxtLink to="/" class="doc-back">На главную</NuxtLink>
           </div>
           <h1 class="doc-title">{{ title }}</h1>
-          <p v-if="updated" class="doc-updated">Обновлено: {{ updated }}</p>
+          <p v-if="lead" class="doc-lead">{{ lead }}</p>
+          <p v-if="updated" class="doc-updated">Редакция от {{ updated }}</p>
         </header>
         <article class="doc-body">
           <slot />
@@ -70,6 +72,12 @@ defineProps<{
   font-weight: 600;
   line-height: 1.2;
   letter-spacing: -0.01em;
+}
+
+.doc-lead {
+  margin-top: 14px;
+  color: var(--fg-secondary);
+  font-size: 15px;
 }
 
 .doc-updated {

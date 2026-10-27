@@ -216,6 +216,12 @@ class Settings(
         default="[500, 1000, 2000, 5000]",
         description="JSON array of suggested user balance top-up amounts.",
     )
+    BONUS_EXCHANGE_DAY_PRICE: float | None = Field(
+        default=None,
+        gt=0,
+        allow_inf_nan=False,
+        description="Balance price per 1 subscription day in the bonus exchange. Empty disables it.",
+    )
 
     SUPPORT_LINK: str | None = Field(default=None)
     SERVER_STATUS_URL: str | None = Field(default=None)
@@ -232,6 +238,10 @@ class Settings(
     SERVER_STATUS_TIMEOUT_SECONDS: float = Field(default=5, gt=0)
     PRIVACY_POLICY_URL: str | None = Field(default=None)
     USER_AGREEMENT_URL: str | None = Field(default=None)
+    REFERRAL_INFO_URL: str | None = Field(
+        default=None,
+        description="Public page describing the referral program; shown as a link button in the bot.",
+    )
     REQUIRED_CHANNEL_ID: int | None = Field(
         default=None, description="Telegram channel ID the user must join to access the bot"
     )
