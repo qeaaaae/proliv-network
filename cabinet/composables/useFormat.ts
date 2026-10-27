@@ -17,6 +17,10 @@ export function useFormat() {
     return Math.max(0, Math.ceil(ms / 86400_000))
   }
 
+  // 0/пусто в контракте бэкенда = безлимит устройств; показываем словами, не значком
+  const deviceUsage = (count: number, limit: number | null | undefined) =>
+    limit && limit > 0 ? `${count} / ${limit}` : `${count} · без лимита`
+
   const plural = (n: number, one: string, few: string, many: string) => {
     const mod10 = n % 10
     const mod100 = n % 100
@@ -25,5 +29,5 @@ export function useFormat() {
     return many
   }
 
-  return { rub, date, dateTime, daysLeft, plural }
+  return { rub, date, dateTime, daysLeft, plural, deviceUsage }
 }

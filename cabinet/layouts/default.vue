@@ -1,14 +1,12 @@
 <script setup lang="ts">
-import { ArrowLeft } from '@lucide/vue'
-
 const config = useRuntimeConfig()
 </script>
 
 <template>
+  <BlueprintLayer />
   <header class="app-top">
-    <a :href="config.public.landingUrl" class="app-top__back">
-      <ArrowLeft :size="15" />
-      На главную
+    <a :href="config.public.landingUrl" class="app-top__logo" aria-label="Proliv Network - на главную">
+      <ProlivLogo :height="32" />
     </a>
     <UserChip />
   </header>

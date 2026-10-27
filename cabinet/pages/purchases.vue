@@ -3,7 +3,6 @@ import {
   Check,
   CreditCard,
   Gauge,
-  Gift,
   Globe,
   LoaderCircle,
   Plus,
@@ -20,7 +19,7 @@ const fmt = useFormat()
 interface Tariffs {
   plan: { name: string; spec: string }
   periods: { id: string; days: number; label: string; price: number; oldPrice: number | null }[]
-  extras: { id: string; title: string; price: number }[]
+  extras: { id: string; kind: 'traffic' | 'device'; title: string; price: number }[]
   methods: { id: string; title: string; icon: string | null }[]
 }
 
@@ -180,6 +179,17 @@ const ORDER_STATUS: Record<Order['status'], string> = {
             </span>
           </div>
 
+          <div class="sum-lines">
+            <div class="sum-line">
+              <span class="muted">{{ data?.plan.name }} · {{ selectedPeriod?.label }}</span>
+              <span class="numeric">{{ fmt.rub(selectedPeriod?.price ?? 0) }}</span>
+            </div>
+            <div v-if="(data?.methods?.length ?? 0) === 1" class="sum-line">
+              <span class="muted">Способ оплаты</span>
+              <span>{{ data?.methods?.[0]?.title }}</span>
+            </div>
+          </div>
+
           <div v-if="(data?.methods?.length ?? 0) > 1" class="field">
             <span>Способ оплаты</span>
             <div class="methods">
@@ -212,19 +222,23 @@ const ORDER_STATUS: Record<Order['status'], string> = {
             @click="checkout"
           >
             <LoaderCircle v-if="pending" :size="16" class="spinner" />
-            {{ method ? 'Перейти к оплате' : 'Способы оплаты не настроены' }}
+            {{ method ? 'Перейти к оплате' : 'Оплата картой скоро будет доступна' }}
           </button>
         </div>
       </section>
     </div>
 
     <!-- Докупка -->
-    <section class="panel" style="margin-top: 14px">
+    <section v-if="data?.extras?.length" class="panel" style="margin-top: 14px">
       <div class="panel__title"><Plus :size="17" />Докупить к подписке</div>
       <div v-for="e in data?.extras" :key="e.id" class="row-line">
-        <span class="row-line__icon"><Gift :size="15" /></span>
+        <span class="row-line__icon">
+          <Smartphone v-if="e.kind === 'device'" :size="15" />
+          <Gauge v-else :size="15" />
+        </span>
         <span class="row-line__body">
           <span class="row-line__label">{{ e.title }}</span>
+          <span class="row-line__hint">{{ e.kind === 'device' ? 'Доп. устройства к подписке' : 'Доп. трафик на месяц' }}</span>
         </span>
         <span class="row-line__value numeric" style="font-size: 14px">{{ fmt.rub(e.price) }}</span>
         <button class="btn btn--ghost btn--sm" @click="buyExtra(e.id)">Купить</button>
@@ -232,9 +246,9 @@ const ORDER_STATUS: Record<Order['status'], string> = {
     </section>
 
     <!-- История покупок -->
-    <section class="panel" style="margin-top: 14px">
+    <section v-if="ordersData?.orders?.length" class="panel" style="margin-top: 14px">
       <div class="panel__title"><ReceiptText :size="17" />История покупок</div>
-      <div v-if="ordersData?.orders?.length">
+      <div>
         <div v-for="o in ordersData.orders" :key="o.id" class="row-line">
           <span class="row-line__icon"><ReceiptText :size="15" /></span>
           <span class="row-line__body">
@@ -257,7 +271,6 @@ const ORDER_STATUS: Record<Order['status'], string> = {
           <span class="order-status" :class="`order-status--${o.status}`">{{ ORDER_STATUS[o.status] }}</span>
         </div>
       </div>
-      <p v-else class="panel--pad muted" style="font-size: 13px">Покупок пока не было</p>
     </section>
   </div>
 </template>

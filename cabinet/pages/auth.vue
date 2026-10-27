@@ -40,71 +40,23 @@ async function onTelegramAuth(user: Record<string, unknown>) {
 // через postMessage, меняем на сессию через наш BFF. nonce приходит с бэкенда.
 const oauthPending = ref(false)
 
-function waitForOAuthMessage(popup: Window | null): Promise<{ id_token?: string; error?: string }> {
-  return new Promise((resolve, reject) => {
-    const timer = window.setInterval(() => {
-      if (popup?.closed) {
-        cleanup()
-        reject(new Error('popup_closed'))
-      }
-    }, 500)
-    const onMessage = (ev: MessageEvent) => {
-      if (ev.origin !== 'https://oauth.telegram.org') return
-      cleanup()
-      resolve(ev.data as { id_token?: string; error?: string })
-    }
-    const cleanup = () => {
-      window.clearInterval(timer)
-      window.removeEventListener('message', onMessage)
-    }
-    window.addEventListener('message', onMessage)
-  })
-}
 
-async function onTelegramOAuth() {
-  if (pending.value || oauthPending.value) return
-  oauthPending.value = true
-  try {
-    const res = await $fetch<{ nonce?: string; client_id?: number | string; request_access?: string[] }>(
-      '/api/auth/telegram/nonce',
-      { method: 'POST' },
-    )
-    if (!res?.nonce || !res?.client_id) throw new Error('oauth_not_configured')
-
-    const scopes = ['openid', 'profile']
-    for (const access of res.request_access ?? []) {
-      if (access === 'phone') scopes.push('phone')
-      if (access === 'write') scopes.push('telegram:bot_access')
-    }
-
-    const authUrl = new URL('https://oauth.telegram.org/auth')
-    authUrl.searchParams.set('response_type', 'post_message')
-    authUrl.searchParams.set('client_id', String(res.client_id))
-    authUrl.searchParams.set('redirect_uri', `${window.location.origin}/auth`)
-    authUrl.searchParams.set('scope', scopes.join(' '))
-    authUrl.searchParams.set('nonce', res.nonce)
-    authUrl.searchParams.set('lang', 'ru')
-
-    const popup = window.open(authUrl.toString(), 'tg_oauth', 'width=550,height=650,popup=true')
-    const data = await waitForOAuthMessage(popup)
-    if (!data?.id_token) throw new Error(data?.error || 'oauth_failed')
-
-    await $fetch('/api/auth/telegram', {
-      method: 'POST',
-      body: { idToken: data.id_token, nonce: res.nonce },
-    })
-    await goNext()
-  } catch {
-    push('Не удалось войти через Telegram. Попробуйте ещё раз', 'error')
-  } finally {
-    oauthPending.value = false
-  }
+// Официальный Telegram OIDC code-flow: уходим на /api/auth/telegram/start,
+// он редиректит на oauth.telegram.org; callback обменивает code на id_token
+// и сам ставит сессию (всё серверно, в браузере секрета нет).
+function onTelegramOAuth() {
+  window.location.href = '/api/auth/telegram/start'
 }
 
 const isMiniApp = ref(false)
 
 // Внутри Telegram Mini App входим автоматически по initData
 onMounted(async () => {
+  // callback OIDC вернул с ошибкой
+  if (new URLSearchParams(window.location.search).get('oauth_error')) {
+    push('Не удалось войти через Telegram. Попробуйте ещё раз', 'error')
+    history.replaceState(null, '', '/auth')
+  }
   const initData = (window as { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp?.initData
   if (!initData || pending.value) return
   isMiniApp.value = true
@@ -153,8 +105,7 @@ async function submit() {
 
 <template>
   <div class="auth-screen">
-    <DotField side="left" />
-    <DotField side="right" />
+    <BlueprintLayer />
 
     <header class="auth-screen__brand">
       <a :href="config.public.landingUrl"><ProlivLogo :height="30" /></a>
@@ -222,11 +173,10 @@ async function submit() {
             v-if="!isMiniApp"
             class="btn btn--ghost btn--block"
             type="button"
-            :disabled="pending || oauthPending"
+            :disabled="pending"
             @click="onTelegramOAuth"
           >
-            <LoaderCircle v-if="oauthPending" :size="16" class="spinner" />
-            <Send v-else :size="16" />
+            <Send :size="16" />
             Войти через Telegram
           </button>
           <TelegramLogin

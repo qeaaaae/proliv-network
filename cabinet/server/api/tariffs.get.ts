@@ -47,13 +47,21 @@ export default defineEventHandler(async (event) => {
     })
 
   // Докупки: трафик-пакеты (обычные + premium) и пакеты устройств.
-  const extras: { id: string; title: string; price: number }[] = []
+  const deviceUnits = (n: number) =>
+    n % 10 === 1 && n % 100 !== 11
+      ? 'устройство'
+      : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20)
+        ? 'устройства'
+        : 'устройств'
+  const bareTitle = (t: string | undefined) => !t || /^\+\d+$/.test(t.trim())
+  const extras: { id: string; kind: 'traffic' | 'device'; title: string; price: number }[] = []
   for (const p of trafficOpts?.plans ?? []) {
     const gb = Number(p.traffic_gb ?? p.months ?? 0)
     if (!gb) continue
     extras.push({
       id: `${p.sale_mode === 'premium_topup' ? 'premium' : 'traffic'}-${gb}`,
-      title: p.title || `+${gb} ГБ`,
+      kind: 'traffic',
+      title: bareTitle(p.title) ? `+${gb} ГБ` : (p.title ?? ''),
       price: p.price ?? 0,
     })
   }
@@ -62,16 +70,19 @@ export default defineEventHandler(async (event) => {
     if (!count) continue
     extras.push({
       id: `device-${count}`,
-      title: p.title || `+${count} устройств`,
+      kind: 'device',
+      title: bareTitle(p.title) ? `+${count} ${deviceUnits(count)}` : (p.title ?? ''),
       price: p.price ?? 0,
     })
   }
   if (!extras.length) {
     // Фолбэк: пакеты устройств из карточки тарифа (/api/me -> plans)
     for (const p of main?.hwid_device_packages ?? []) {
+      const count = Number(p.device_count ?? 0)
       extras.push({
         id: `device-${p.device_count ?? p.id}`,
-        title: p.title || `+${p.device_count} устройство`,
+        kind: 'device',
+        title: bareTitle(p.title) ? `+${count} ${deviceUnits(count)}` : (p.title ?? ''),
         price: p.price ?? 0,
       })
     }

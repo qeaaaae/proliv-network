@@ -69,31 +69,6 @@ const platforms = [
   },
 ]
 
-const LOCATION_NAMES: Record<string, string> = {
-  ee: 'Таллин',
-  gb: 'Лондон',
-  de: 'Франкфурт',
-}
-
-const locationPending = ref(false)
-
-async function setLocation(loc: string) {
-  if (loc === sub.value?.location || locationPending.value) return
-  locationPending.value = true
-  try {
-    const res = await $fetch<{ locationName: string }>('/api/location', {
-      method: 'POST',
-      body: { location: loc },
-    })
-    push(`Локация переключена: ${res.locationName}`)
-    await refresh()
-  } catch (e) {
-    push((e as { data?: { statusMessage?: string } }).data?.statusMessage ?? 'Не удалось переключить', 'error')
-  } finally {
-    locationPending.value = false
-  }
-}
-
 const DEVICE_ICONS: Record<Device['platform'], typeof Smartphone> = {
   ios: Smartphone,
   android: Smartphone,
@@ -225,35 +200,13 @@ async function activateTrial() {
           </div>
         </div>
 
-        <!-- Локация -->
-        <div class="row-line row-line--loc">
-          <span class="row-line__icon"><Radio :size="15" /></span>
-          <span class="row-line__body">
-            <span class="row-line__label">Локация</span>
-            <span class="row-line__hint">Точка выхода в приложении</span>
-          </span>
-          <span class="pills" style="max-width: none; margin: 0">
-            <button
-              v-for="loc in sub.locations"
-              :key="loc"
-              class="pills__item pills__item--flag"
-              :class="{ 'is-active': sub.location === loc }"
-              :disabled="locationPending"
-              @click="setLocation(loc)"
-            >
-              <img :src="`/images/flags/${loc}.svg`" :alt="loc.toUpperCase()" width="18" height="13" />
-              {{ LOCATION_NAMES[loc] ?? loc.toUpperCase() }}
-            </button>
-          </span>
-        </div>
-
         <!-- Устройства -->
         <div class="panel--pad" style="border-top: 1px solid var(--line); padding-bottom: 14px">
           <div class="devices-head">
             <span class="devices-head__title">
               <Smartphone :size="15" />
               Устройства
-              <span class="muted numeric">{{ sub.devices.length }} / {{ sub.deviceLimit }}</span>
+              <span class="muted numeric">{{ fmt.deviceUsage(sub.devices.length, sub.deviceLimit) }}</span>
             </span>
             <button class="btn btn--ghost btn--sm" @click="reissueOpen = true">
               <RefreshCcw :size="13" />
@@ -287,7 +240,7 @@ async function activateTrial() {
         </div>
         <div class="stat">
           <div class="stat__label"><Smartphone :size="14" />Устройства</div>
-          <div class="stat__value numeric">{{ sub.devices.length }} / {{ sub.deviceLimit }}</div>
+          <div class="stat__value numeric">{{ fmt.deviceUsage(sub.devices.length, sub.deviceLimit) }}</div>
           <div class="stat__sub">
             <span v-for="(d, i) in sub.devices.slice(0, 2)" :key="d.id">
               {{ i ? ' · ' : '' }}{{ d.name }}

@@ -1,6 +1,6 @@
 import { requireUser } from '../utils/session'
 import { bytesToGb, hasShopBackend, mapDevice, shopFetch, type ShopDevice, type ShopMe } from '../utils/backend'
-import { getLocation, LOCATION_IDS } from '../utils/store'
+import { LOCATION_IDS } from '../utils/store'
 
 export default defineEventHandler(async (event) => {
   const user = requireUser(event)
@@ -27,7 +27,6 @@ export default defineEventHandler(async (event) => {
         devices,
         deviceLimit: dev?.max_devices ?? sub.max_devices ?? 0,
         locations: [...LOCATION_IDS],
-        location: getLocation(user.id),
         subscriptionUrl: sub.config_link || sub.connect_url || '',
       }
     : null
