@@ -16,10 +16,18 @@
 }
 
 # Edge для webhook-туннеля (cloudflared -> 127.0.0.1:8090):
-# /tg/webhook -> bot, остальные /webhook/* -> backend.
+# /tg/webhook -> bot, /webhook/* -> backend, остальное -> 404.
 :8090 {
 	encode
 	@tg path /tg/webhook*
-	reverse_proxy @tg http://remnawave-minishop-bot:8080
-	reverse_proxy http://remnawave-minishop-backend:8080
+	handle @tg {
+		reverse_proxy http://remnawave-minishop-bot:8080
+	}
+	@wh path /webhook/*
+	handle @wh {
+		reverse_proxy http://remnawave-minishop-backend:8080
+	}
+	handle {
+		respond 404
+	}
 }

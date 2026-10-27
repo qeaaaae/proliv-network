@@ -71,7 +71,7 @@ DB-оверрайды настроек и админку Web App.
 | `TRIAL_ENABLED` | кнопка триала | `false` — по SPEC триал только через промокод/рефералку (`referral_welcome_bonus_tariff` + `REFERRAL_WELCOME_BONUS_DAYS` в тарифном каталоге) |
 | `MY_DEVICES_SECTION_ENABLED` | раздел «Мои устройства» | `true` |
 | `SERVER_STATUS_ENABLED` | страница статуса серверов | `false`, пока статус-страницы нет |
-| `MENU_BUTTONS_JSON` | кастомные кнопки меню (внешние/TG/WebApp/page, локализованные подписи, эмодзи, видимость) — схема `backend/config/menu_buttons.py` | например кнопка «Сайт» на `https://proliv.net` |
+| `MENU_BUTTONS_JSON` | кастомные кнопки меню (внешние/TG/WebApp/page, локализованные подписи, эмодзи, видимость) — схема `backend/config/menu_buttons.py` | например кнопка «Сайт» на `https://proliv-network.xyz` |
 | `TELEGRAM_MENU_APPEARANCE_JSON` | порядок/вид кнопок TG-меню | по вкусу |
 | `TELEGRAM_CUSTOM_EMOJI_LIBRARY_JSON` | кастомные TG-эмодзи (id — десятичные строки) — `backend/config/telegram_menu.py` | если есть premium-эмодзи |
 
@@ -178,7 +178,7 @@ Stars-платежей нет.
       `/start` и `/tg` (`START_COMMAND_DESCRIPTION` → `bot_command_*_description`),
       но **сам список команд и локализованные описания — в BotFather**
 - [ ] **Menu Button / Domain** — привязать Mini App URL
-      (`SUBSCRIPTION_MINI_APP_URL`, напр. `https://app.proliv.net`). При старте
+      (`SUBSCRIPTION_MINI_APP_URL`, напр. `https://app.proliv-network.xyz`). При старте
       backend делает `set_chat_menu_button(MenuButtonWebApp)` и сразу возвращает
       `MenuButtonDefault` — это только регистрация домена у Telegram
       (`backend/bot/main_bot.py:182-188`); постоянную кнопку меню задаёт BotFather.
@@ -235,7 +235,7 @@ docker compose -f shop/docker-compose.yml -f infra/minishop.compose.yml --env-fi
 4. Тексты оферты и политики ПД — managed-документы в админке.
 5. `SUPPORT_LINK` — реальный TG-канал/бот поддержки.
 6. BotFather-чек-лист (§5).
-7. Прода: `SUBSCRIPTION_MINI_APP_URL=https://app.proliv.net` в `shop/.env`
+7. Прода: `SUBSCRIPTION_MINI_APP_URL=https://app.proliv-network.xyz` в `shop/.env`
    (env-файлы правит только пользователь — см. AGENTS.md).
 8. После сида/правки файлов — рестарт `backend`+`worker`
    (`docker restart remnawave-minishop-backend remnawave-minishop-worker`).

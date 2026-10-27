@@ -30,14 +30,14 @@ ON CONFLICT (key) DO UPDATE
       updated_at = now();
 
 -- Намеренно НЕ сидируем (env/админка - правильнее):
---   SUBSCRIPTION_MINI_APP_URL   - задаётся в shop/.env (https://app.proliv.net на проде)
+--   SUBSCRIPTION_MINI_APP_URL   - задаётся в shop/.env (https://app.proliv-network.xyz на проде)
 --   WEBAPP_LOGO_URL             - лучше загрузить лого через админку "Внешний вид"
 --   PRIVACY_POLICY_URL          - лучше managed-документ (Админка -> Документы)
 --   USER_AGREEMENT_URL          - лучше managed-документ (Админка -> Документы)
 -- Если всё же нужны внешние ссылки, раскомментировать и подставить:
 -- INSERT INTO app_setting_overrides (key, value, updated_at) VALUES
---   ('PRIVACY_POLICY_URL', '"https://proliv.net/legal/policy"', now()),
---   ('USER_AGREEMENT_URL', '"https://proliv.net/legal/terms"',  now())
+--   ('PRIVACY_POLICY_URL', '"https://proliv-network.xyz/legal/policy"', now()),
+--   ('USER_AGREEMENT_URL', '"https://proliv-network.xyz/legal/terms"',  now())
 -- ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
 
 COMMIT;

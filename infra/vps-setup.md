@@ -57,7 +57,7 @@ ssh root@<IP> "cd /root/ProlivVPN"
 cd /root/ProlivVPN
 bash ./infra/deploy-vps.sh          # спросит DOMAIN и EMAIL
 # или неинтерактивно:
-DOMAIN=proliv.net EMAIL=me@mail.com bash ./infra/deploy-vps.sh
+DOMAIN=proliv-network.xyz EMAIL=me@mail.com bash ./infra/deploy-vps.sh
 ```
 
 Скрипт **идемпотентен**: поставит Docker, настроит UFW, разложит файлы в

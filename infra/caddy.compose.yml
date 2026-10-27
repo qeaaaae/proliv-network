@@ -29,6 +29,7 @@ services:
       - '0.0.0.0:443:443/udp' # HTTP/3 (QUIC)
     networks:
       - remnawave-network
+      - proliv_default
     volumes:
       - ${PROLIV_DIR:-/opt/proliv}/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-ssl-data:/data
@@ -37,6 +38,10 @@ services:
 networks:
   remnawave-network:
     name: remnawave-network
+    driver: bridge
+    external: true
+  proliv_default:
+    name: proliv_default
     driver: bridge
     external: true
 

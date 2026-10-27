@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # geo-check: определяет, какую страну видят сервисы с этой ноды.
-# Запуск на ноде:  bash <(curl -fsSL https://infra.proliv.net/geocheck.sh)
+# Запуск на ноде:  bash <(curl -fsSL https://infra.proliv-network.xyz/geocheck.sh)
 # Вывод: построчно  СЕРВИС=CC  и  СЕРВИС=BLOCKED|OK
 set -u
 

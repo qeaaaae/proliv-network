@@ -22,7 +22,7 @@
 # Запуск:
 #   sudo bash ./infra/deploy-vps.sh                    # из клона репо
 #   curl -fsSL <raw-url>/deploy-vps.sh | sudo bash     # потребует REPO_URL
-#   sudo DOMAIN=proliv.net EMAIL=me@mail.com bash ./infra/deploy-vps.sh
+#   sudo DOMAIN=proliv-network.xyz EMAIL=me@mail.com bash ./infra/deploy-vps.sh
 #
 # Переменные окружения:
 #   DOMAIN    - базовый домен (промпт, если не задан)
@@ -96,7 +96,7 @@ ufw status | sed 's/^/    /'
 DOMAIN="${DOMAIN:-}"
 if [[ -z "$DOMAIN" ]]; then
     if [[ -t 0 ]]; then
-        read -rp "Enter base domain (e.g. proliv.net): " DOMAIN
+        read -rp "Enter base domain (e.g. proliv-network.xyz): " DOMAIN
     else
         die "DOMAIN env var is required in non-interactive mode (DOMAIN=example.com)"
     fi
