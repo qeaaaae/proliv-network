@@ -60,7 +60,7 @@ async def handle_view_user_logs(
         logs_text_parts = [f"{_('admin_user_recent_actions_title', user_id=public_id)}\n"]
 
         for log in logs:
-            timestamp = log.timestamp.strftime("%Y-%m-%d %H:%M") if log.timestamp else "N/A"
+            timestamp = log.timestamp.strftime("%d.%m.%Y %H:%M") if log.timestamp else "N/A"
             event_type = log.event_type or "N/A"
             content_preview = (log.content or "")[:50] + (
                 "..." if len(log.content or "") > 50 else ""
@@ -139,7 +139,7 @@ async def handle_view_user_invitees(
             lines = []
             for index, invitee in enumerate(invitees, start=safe_page * page_size + 1):
                 registered = (
-                    invitee.registration_date.strftime("%Y-%m-%d")
+                    invitee.registration_date.strftime("%d.%m.%Y")
                     if invitee.registration_date
                     else ""
                 )

@@ -170,7 +170,7 @@ class NotificationPartnerMixin(NotificationUserContextMixin):
             ),
             user_display=user_display,
             application_id=application_id,
-            timestamp=submitted_at.strftime("%Y-%m-%d %H:%M:%S"),
+            timestamp=submitted_at.strftime("%d.%m.%Y %H:%M"),
         )
         await self._send_to_log_channel(message, reply_markup=keyboard)
 
@@ -196,7 +196,7 @@ class NotificationPartnerMixin(NotificationUserContextMixin):
                 ),
                 user_display=user_display,
                 application_id=application_id,
-                timestamp=decided_at.strftime("%Y-%m-%d %H:%M:%S"),
+                timestamp=decided_at.strftime("%d.%m.%Y %H:%M"),
             )
             await self._send_to_log_channel(admin_message, reply_markup=keyboard)
             key = "partner_application_approved_notification"
@@ -239,7 +239,7 @@ class NotificationPartnerMixin(NotificationUserContextMixin):
                 ),
                 user_display=user_display,
                 partner_id=partner_id,
-                timestamp=changed_at.strftime("%Y-%m-%d %H:%M:%S"),
+                timestamp=changed_at.strftime("%d.%m.%Y %H:%M"),
             )
             await self._send_to_log_channel(admin_message, reply_markup=keyboard)
             key = "partner_profile_activated_notification"
@@ -289,7 +289,7 @@ class NotificationPartnerMixin(NotificationUserContextMixin):
             amount=hd.quote(self._partner_amount(amount_minor, currency_scale)),
             currency=hd.quote(str(currency).upper()),
             withdrawal_id=withdrawal_id,
-            timestamp=requested_at.strftime("%Y-%m-%d %H:%M:%S"),
+            timestamp=requested_at.strftime("%d.%m.%Y %H:%M"),
         )
         await self._send_to_log_channel(message, reply_markup=keyboard)
 

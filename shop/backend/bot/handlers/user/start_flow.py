@@ -37,12 +37,12 @@ from config.tariffs_config import referral_welcome_bonus_tariff_key_for_settings
 from db.dal import subscription_dal, user_dal
 from db.models import User
 
+from .menu_card import card_enabled
 from .start_channel import ensure_required_channel_subscription
 from .start_common import (
     _resolve_referrer_from_start_ref,
     router,
 )
-from .menu_card import card_enabled
 from .start_menus import send_main_menu
 from .welcome_banner import send_welcome_message
 
@@ -430,7 +430,7 @@ async def start_command_handler(
                                 _(
                                     "referral_welcome_bonus_applied",
                                     days=referral_welcome_days,
-                                    end_date=referral_bonus_end_date.strftime("%d.%m.%Y %H:%M:%S"),
+                                    end_date=referral_bonus_end_date.strftime("%d.%m.%Y %H:%M"),
                                 ),
                                 parse_mode="HTML",
                             )
@@ -615,7 +615,7 @@ async def start_command_handler(
                 promo_success_text = _(
                     "promo_code_applied_success_full",
                     end_date=(
-                        new_end_date.strftime("%d.%m.%Y %H:%M:%S") if new_end_date else "N/A"
+                        new_end_date.strftime("%d.%m.%Y %H:%M") if new_end_date else "N/A"
                     ),
                     config_link=config_link_text,
                 )

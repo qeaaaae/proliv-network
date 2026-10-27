@@ -220,7 +220,9 @@ class Settings(
         default=None,
         gt=0,
         allow_inf_nan=False,
-        description="Balance price per 1 subscription day in the bonus exchange. Empty disables it.",
+        description=(
+            "Balance price per 1 subscription day in the bonus exchange. Empty disables it."
+        ),
     )
 
     SUPPORT_LINK: str | None = Field(default=None)
@@ -240,7 +242,9 @@ class Settings(
     USER_AGREEMENT_URL: str | None = Field(default=None)
     REFERRAL_INFO_URL: str | None = Field(
         default=None,
-        description="Public page describing the referral program; shown as a link button in the bot.",
+        description=(
+            "Public page describing the referral program; shown as a link button in the bot."
+        ),
     )
     REQUIRED_CHANNEL_ID: int | None = Field(
         default=None, description="Telegram channel ID the user must join to access the bot"
@@ -690,6 +694,15 @@ class Settings(
     SUPPORT_ADMIN_EMAIL_COOLDOWN_SECONDS: int = Field(default=30 * 60)
     SUBSCRIPTION_MINI_APP_URL: str | None = Field(default=None)
     PUBLIC_APP_URL: str | None = Field(default=None)
+    WEBAPP_ADMIN_URL: str | None = Field(
+        default=None,
+        description=(
+            "Optional base URL of the Mini App admin panel (e.g. "
+            "https://admin.example.com). Used for admin deep links when the "
+            "user-facing Mini App is hosted on a different origin. Falls back "
+            "to SUBSCRIPTION_MINI_APP_URL when unset."
+        ),
+    )
     SUBSCRIPTION_GATEWAY_ENABLED: bool = Field(default=True)
     SUBSCRIPTION_LINK_MODE: Literal["panel", "minishop"] = Field(default="panel")
     SUBSCRIPTION_GATEWAY_REWRITE_PROFILE_PAGE_URL: bool = Field(default=False)

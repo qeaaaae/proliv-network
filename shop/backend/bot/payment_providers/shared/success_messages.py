@@ -34,7 +34,7 @@ class SuccessMessage:
 
 
 def _fmt_date(dt: datetime | None, fallback: str) -> str:
-    return dt.strftime("%Y-%m-%d") if dt else fallback
+    return dt.strftime("%d.%m.%Y") if dt else fallback
 
 
 def build_success_message(payload: SuccessMessage) -> str:
@@ -122,7 +122,7 @@ def append_hwid_renewal_note(
         count_int = 0
     if count_int <= 0:
         return text
-    date_text = valid_until.strftime("%Y-%m-%d") if valid_until else ""
+    date_text = valid_until.strftime("%d.%m.%Y") if valid_until else ""
     note = translator(
         "payment_successful_hwid_devices_renewal_note",
         count=format_human_units(count_int),
@@ -144,7 +144,7 @@ def append_hwid_renewed_note(
         count_int = 0
     if count_int <= 0:
         return text
-    date_text = valid_until.strftime("%Y-%m-%d") if valid_until else ""
+    date_text = valid_until.strftime("%d.%m.%Y") if valid_until else ""
     note = translator(
         "payment_successful_hwid_devices_renewed_note",
         count=format_human_units(count_int),

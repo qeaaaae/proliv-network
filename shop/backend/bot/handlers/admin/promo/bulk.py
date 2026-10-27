@@ -437,7 +437,7 @@ async def create_bulk_promo_codes_final(
                 if data.get("validity_days"):
                     valid_until = (
                         datetime.now(UTC) + timedelta(days=data["validity_days"])
-                    ).strftime("%Y-%m-%d %H:%M:%S")
+                    ).strftime("%d.%m.%Y %H:%M")
                 else:
                     valid_until = _("admin_bulk_promo_csv_unlimited")
 

@@ -194,7 +194,7 @@ class PaymentContextMixin(SubscriptionServiceMixinContract):
         if not plan.email:
             return
 
-        end_date_text = end_date.strftime("%Y-%m-%d") if end_date else ""
+        end_date_text = end_date.strftime("%d.%m.%Y") if end_date else ""
         try:
             from bot.payment_providers import provider_label_map
 

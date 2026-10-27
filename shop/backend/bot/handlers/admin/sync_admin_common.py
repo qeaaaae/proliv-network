@@ -103,7 +103,7 @@ def _compact_log_value(value: Any, *, max_len: int = 64) -> str:
     if value == "":
         return "empty"
     if isinstance(value, datetime):
-        text = value.isoformat()
+        text = value.strftime("%d.%m.%Y %H:%M")
     elif isinstance(value, (list, tuple, set)):
         values = list(value)
         preview = ",".join(str(item) for item in values[:3])

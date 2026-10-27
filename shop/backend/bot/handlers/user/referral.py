@@ -22,7 +22,6 @@ from bot.services.subscription_service_impl.core import SubscriptionService
 from bot.services.telegram_account import require_telegram_account_id
 from bot.utils.callback_answer import callback_data, message_from_user
 from bot.utils.custom_emoji import custom_emoji_unicode_html
-from bot.utils.referral_links import build_webapp_referral_link
 from config.settings import Settings
 from db.dal import user_balance_dal, user_dal
 
@@ -120,24 +119,8 @@ async def referral_command_handler(
 
     referral_stats = await referral_service.get_referral_stats(session, inviter_user_id)
 
-    webapp_referral_link = await _generate_webapp_referral_link(
-        session,
-        settings,
-        inviter_user_id,
-    )
-    webapp_link_section = (
-        _(
-            "referral_webapp_link_line",
-            webapp_referral_link=webapp_referral_link,
-        )
-        if webapp_referral_link
-        else ""
-    )
-
     text = _(
         "referral_program_info_new",
-        referral_link=referral_link,
-        webapp_link_section=webapp_link_section,
         bonus_details=bonus_details_str,
         invited_count=referral_stats["invited_count"],
         purchased_count=referral_stats["purchased_count"],
@@ -146,8 +129,6 @@ async def referral_command_handler(
     from bot.keyboards.inline.user_keyboards import get_referral_link_keyboard
 
     share_text = custom_emoji_unicode_html(_("referral_share_intro"))
-    if webapp_referral_link:
-        share_text += _("referral_share_web_line", webapp_referral_link=webapp_referral_link)
     share_url = f"https://t.me/share/url?url={quote(referral_link)}&text={quote(share_text)}"
 
     reply_markup_val = get_referral_link_keyboard(
@@ -157,6 +138,7 @@ async def referral_command_handler(
         referral_info_url=settings.REFERRAL_INFO_URL,
         exchange_enabled=bool(settings.BONUS_EXCHANGE_DAY_PRICE),
         share_url=share_url,
+        referral_link=referral_link,
     )
 
     if isinstance(event, types.Message):
@@ -464,25 +446,6 @@ def _build_referral_bonus_details_text(
         "\n".join(bonus_info_parts)
         if bonus_info_parts
         else translator("referral_no_bonuses_configured")
-    )
-
-
-def _build_webapp_referral_link(base_url: str | None, referral_code: str | None) -> str | None:
-    return build_webapp_referral_link(base_url, referral_code)
-
-
-async def _generate_webapp_referral_link(
-    session: AsyncSession,
-    settings: Settings,
-    inviter_user_id: int,
-) -> str | None:
-    if not settings.SUBSCRIPTION_MINI_APP_URL:
-        return None
-    db_user = await user_dal.get_user_by_id(session, inviter_user_id)
-    referral_code = await user_dal.ensure_referral_code(session, db_user) if db_user else None
-    return _build_webapp_referral_link(
-        settings.SUBSCRIPTION_MINI_APP_URL,
-        referral_code,
     )
 
 

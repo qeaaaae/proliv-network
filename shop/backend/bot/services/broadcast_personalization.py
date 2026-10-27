@@ -724,7 +724,7 @@ def _resolve_value(
 def _fmt_date(value: datetime | None) -> str:
     if value is None:
         return ""
-    return value.strftime("%Y-%m-%d")
+    return value.strftime("%d.%m.%Y")
 
 
 def _days_left(end_date: datetime | None) -> int:

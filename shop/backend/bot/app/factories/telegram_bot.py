@@ -53,7 +53,7 @@ def create_telegram_bot(settings: Settings, *, token: str | None = None) -> Bot:
     api_base_url = settings.TELEGRAM_BOT_API_BASE_URL
     if proxy_url is None and api_base_url is None:
         bot = Bot(token=bot_token, default=default)
-        bot.session.middleware.register(CustomEmojiFallbackMiddleware())
+        bot.session.middleware.register(CustomEmojiFallbackMiddleware(settings))
         return bot
 
     api_server: TelegramAPIServer | None = None
@@ -63,7 +63,7 @@ def create_telegram_bot(settings: Settings, *, token: str | None = None) -> Bot:
     if proxy_url is None:
         assert api_server is not None
         session = AiohttpSession(api=api_server)
-        session.middleware.register(CustomEmojiFallbackMiddleware())
+        session.middleware.register(CustomEmojiFallbackMiddleware(settings))
         return Bot(token=bot_token, default=default, session=session)
 
     raw_proxy_url = proxy_url.get_secret_value()
@@ -77,5 +77,5 @@ def create_telegram_bot(settings: Settings, *, token: str | None = None) -> Bot:
         else AiohttpSession(proxy=raw_proxy_url)
     )
     session.middleware.register(TelegramProxyErrorMiddleware())
-    session.middleware.register(CustomEmojiFallbackMiddleware())
+    session.middleware.register(CustomEmojiFallbackMiddleware(settings))
     return Bot(token=bot_token, default=default, session=session)

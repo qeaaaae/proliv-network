@@ -340,7 +340,7 @@ class TorrentBlockerNotificationService:
             message = self.i18n.gettext(
                 language,
                 "torrent_blocker_notification",
-                unblock_at=report.will_unblock_at.strftime("%Y-%m-%d %H:%M UTC"),
+                unblock_at=report.will_unblock_at.strftime("%d.%m.%Y %H:%M"),
             )
         else:
             message = self.i18n.gettext(

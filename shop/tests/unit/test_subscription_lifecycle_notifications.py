@@ -162,7 +162,7 @@ def test_send_stage_records_telegram_and_email_channel_keys(monkeypatch):
     assert bot.messages == [
         {
             "chat_id": 555,
-            "text": "Hi Ada, expires on 2026-06-01",
+            "text": "Hi Ada, expires on 01.06.2026",
             "reply_markup": "markup",
         }
     ]
@@ -454,7 +454,7 @@ def test_email_only_user_gets_neutral_name_direct_copy_and_renewal_login_link(mo
     assert delivery.email_sent is True
     assert bot.messages == []
     content = email_service.messages[0]["content"]
-    assert "Hi dear user, expires on 2026-06-01" in content.text
+    assert "Hi dear user, expires on 01.06.2026" in content.text
     assert "Hi user@example.test" not in content.text
     assert "User -8758169927032035" not in content.text
     assert "Direct email notice" in content.html

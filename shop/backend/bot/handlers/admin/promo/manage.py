@@ -371,7 +371,7 @@ async def promo_export_activations_handler(
             writer.writerow(
                 [
                     act.user_id,
-                    act.activated_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    act.activated_at.strftime("%d.%m.%Y %H:%M"),
                     act.payment_id or "",
                     getattr(payment, "status", "") or "",
                     getattr(payment, "provider", "") or "",
@@ -476,10 +476,10 @@ async def promo_export_all_handler(
                 i18n.gettext(export_lang, "csv_yes")
                 if promo.is_active
                 else i18n.gettext(export_lang, "csv_no"),
-                promo.valid_until.strftime("%Y-%m-%d %H:%M:%S")
+                promo.valid_until.strftime("%d.%m.%Y %H:%M")
                 if promo.valid_until
                 else i18n.gettext(export_lang, "admin_promo_valid_indefinitely"),
-                promo.created_at.strftime("%Y-%m-%d %H:%M:%S") if promo.created_at else "N/A",
+                promo.created_at.strftime("%d.%m.%Y %H:%M") if promo.created_at else "N/A",
                 promo.created_by_admin_id or "N/A",
             ]
             writer.writerow(row)

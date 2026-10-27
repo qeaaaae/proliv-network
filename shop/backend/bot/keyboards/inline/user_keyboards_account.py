@@ -1,4 +1,4 @@
-from aiogram.types import InlineKeyboardMarkup, WebAppInfo
+from aiogram.types import CopyTextButton, InlineKeyboardMarkup, WebAppInfo
 from aiogram.utils.keyboard import InlineKeyboardBuilder, InlineKeyboardButton
 
 from bot.middlewares.i18n import JsonI18n
@@ -17,6 +17,7 @@ def get_referral_link_keyboard(
     referral_info_url: str | None = None,
     exchange_enabled: bool = False,
     share_url: str | None = None,
+    referral_link: str | None = None,
 ) -> InlineKeyboardMarkup:
     _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
     builder = InlineKeyboardBuilder()
@@ -25,6 +26,13 @@ def get_referral_link_keyboard(
             InlineKeyboardButton(
                 text=_(key="referral_invite_friend_button"),
                 url=share_url,
+            )
+        )
+    if referral_link:
+        builder.row(
+            InlineKeyboardButton(
+                text=_(key="referral_copy_link_button"),
+                copy_text=CopyTextButton(text=referral_link),
             )
         )
     if exchange_enabled:

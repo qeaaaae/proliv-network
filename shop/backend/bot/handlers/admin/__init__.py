@@ -1,6 +1,16 @@
 from aiogram import Router
 
-from . import ads, broadcast, common, logs_admin, payments, statistics, sync_admin, user_management
+from . import (
+    ads,
+    broadcast,
+    common,
+    logs_admin,
+    nodes_status,
+    payments,
+    statistics,
+    sync_admin,
+    user_management,
+)
 from .promo import promo_router_aggregate
 
 admin_router_aggregate = Router(name="admin_features_router")
@@ -14,5 +24,6 @@ admin_router_aggregate.include_router(sync_admin.router)
 admin_router_aggregate.include_router(logs_admin.router)
 admin_router_aggregate.include_router(payments.router)
 admin_router_aggregate.include_router(ads.router)
+admin_router_aggregate.include_router(nodes_status.router)
 
 __all__ = ("admin_router_aggregate",)

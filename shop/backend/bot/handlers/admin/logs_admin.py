@@ -157,7 +157,7 @@ async def _display_formatted_logs(
             )
 
             timestamp_str_display = (
-                log_entry_model.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+                log_entry_model.timestamp.strftime("%d.%m.%Y %H:%M")
                 if log_entry_model.timestamp
                 else "N/A"
             )
@@ -452,7 +452,7 @@ async def export_logs_csv_handler(
         # Write data rows
         for log in logs_models:
             # Format timestamp
-            timestamp_str = log.timestamp.strftime("%Y-%m-%d %H:%M:%S UTC") if log.timestamp else ""
+            timestamp_str = log.timestamp.strftime("%d.%m.%Y %H:%M") if log.timestamp else ""
 
             # Clean content and raw_update_preview (remove newlines and quotes for CSV)
             content_clean = (log.content or "").replace("\n", " ").replace("\r", " ").strip()
@@ -494,7 +494,7 @@ async def export_logs_csv_handler(
             caption=_(
                 "admin_logs_csv_export_success",
                 count=len(logs_models),
-                date=now.strftime("%Y-%m-%d %H:%M:%S"),
+                date=now.strftime("%d.%m.%Y %H:%M"),
             ),
         )
 

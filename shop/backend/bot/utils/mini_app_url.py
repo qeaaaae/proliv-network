@@ -91,6 +91,31 @@ def subscription_mini_app_path_url(
     return urlunsplit((parts.scheme, parts.netloc, joined_path, urlencode(query), parts.fragment))
 
 
+def admin_mini_app_base_url(settings: Settings) -> str:
+    """Base URL for admin panel deep links inside the Mini App.
+
+    ``WEBAPP_ADMIN_URL`` allows hosting the admin panel on a different origin
+    than the user-facing Mini App; when unset the subscription app URL is used,
+    matching upstream single-origin deployments.
+    """
+    return str(
+        getattr(settings, "WEBAPP_ADMIN_URL", None)
+        or getattr(settings, "SUBSCRIPTION_MINI_APP_URL", None)
+        or ""
+    ).strip()
+
+
+def admin_mini_app_path_url(settings: Settings, path: str) -> str | None:
+    """Return a Mini App URL for an ``/admin/...`` path."""
+    base = admin_mini_app_base_url(settings)
+    if not base:
+        return None
+    normalized_path = str(path or "").strip().strip("/")
+    parts = urlsplit(base)
+    joined_path = f"{parts.path.rstrip('/')}/{normalized_path}"
+    return urlunsplit((parts.scheme, parts.netloc, joined_path, parts.query, parts.fragment))
+
+
 def subscription_main_mini_app_deep_link(
     settings: Settings,
     bot_username: str | None,

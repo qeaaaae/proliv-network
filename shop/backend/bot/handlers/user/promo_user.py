@@ -204,7 +204,7 @@ async def process_promo_code_input(
 
         response_to_user_text = _(
             "promo_code_applied_success_full",
-            end_date=(new_end_date.strftime("%d.%m.%Y %H:%M:%S") if new_end_date else "N/A"),
+            end_date=(new_end_date.strftime("%d.%m.%Y %H:%M") if new_end_date else "N/A"),
             config_link=config_link_text,
         )
         install_links = await ensure_user_install_guide_links(session, settings, account_user_id)

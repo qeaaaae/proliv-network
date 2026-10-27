@@ -102,7 +102,7 @@ class SubscriptionLifecycleNotificationService:
         final_end_date_text = end_date_text
         if final_end_date_text is None:
             end_date = self._as_utc(getattr(sub, "end_date", None))
-            final_end_date_text = end_date.strftime("%Y-%m-%d") if end_date else ""
+            final_end_date_text = end_date.strftime("%d.%m.%Y") if end_date else ""
 
         recipient_email = self._email_recipient(resolved_user)
         user_name_fallback = self.i18n.gettext(lang, "user_name_fallback")

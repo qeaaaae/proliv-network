@@ -52,6 +52,7 @@ if TYPE_CHECKING:
         WEBAPP_SESSION_SECRET: str
         PUBLIC_APP_URL: str | None
         SUBSCRIPTION_MINI_APP_URL: str | None
+        WEBAPP_ADMIN_URL: str | None
         TELEGRAM_ENABLED: bool
         BRUTE_FORCE_MAX_FAILURES: int
         BRUTE_FORCE_WINDOW_SECONDS: int

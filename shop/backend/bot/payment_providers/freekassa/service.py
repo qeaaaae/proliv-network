@@ -588,7 +588,7 @@ class FreeKassaService(HttpClientMixin):
                 success_prefix = translator(
                     "free_kassa_order_full",
                     order_id=provider_payment_id,
-                    date=datetime.now(UTC).strftime("%Y-%m-%d"),
+                    date=datetime.now(UTC).strftime("%d.%m.%Y"),
                 )
 
             outcome = await finalize_successful_payment(
@@ -880,7 +880,7 @@ def _callback_lead_text(
     return translator(
         "free_kassa_order_info",
         order_id=order_id_display,
-        date=datetime.now(UTC).strftime("%Y-%m-%d"),
+        date=datetime.now(UTC).strftime("%d.%m.%Y"),
     )
 
 

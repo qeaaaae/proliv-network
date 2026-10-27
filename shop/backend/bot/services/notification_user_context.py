@@ -8,7 +8,10 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.text_decorations import html_decoration as hd
 from sqlalchemy import select
 
-from bot.utils.mini_app_url import bot_start_deep_link, subscription_mini_app_path_url
+from bot.utils.mini_app_url import (
+    admin_mini_app_path_url,
+    bot_start_deep_link,
+)
 from bot.utils.text_sanitizer import username_for_display
 from db.dal import user_dal
 from db.models import User
@@ -105,10 +108,8 @@ class NotificationUserContextMixin:
         if user_id is not None:
             reference = minishop_id if minishop_id and minishop_id != "—" else str(user_id)
             card_link = bot_start_deep_link(self.bot_username, f"admin_user_{reference}")
-            if card_link is None and getattr(self.settings, "SUBSCRIPTION_MINI_APP_URL", None):
-                card_link = subscription_mini_app_path_url(
-                    self.settings, f"admin/users/{reference}"
-                )
+            if card_link is None:
+                card_link = admin_mini_app_path_url(self.settings, f"admin/users/{reference}")
             card_button = (
                 InlineKeyboardButton(
                     text=translate(card_button_key),

@@ -518,7 +518,7 @@ class BackupWorker:
         completed_at = result.completed_at.astimezone()
         lines = [
             "Remnawave Minishop backup",
-            f"Created: {completed_at.strftime('%Y-%m-%d %H:%M:%S %Z')}",
+            f"Created: {completed_at.strftime('%d.%m.%Y %H:%M')}",
             f"Database dump: {'yes' if result.db_dump_included else 'no'}",
             f"Compose files: {result.compose_files_count}",
             f"Archive size: {self._human_size(result.size_bytes)}",

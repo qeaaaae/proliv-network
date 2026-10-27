@@ -775,7 +775,7 @@ async def process_successful_payment(
                 else "yookassa_auto_renewal",
                 days=activation_details.get("duration_days"),
                 months=int(subscription_months),
-                end_date=final_end_date_for_user.strftime("%Y-%m-%d"),
+                end_date=final_end_date_for_user.strftime("%d.%m.%Y"),
             )
             include_keyboard = False
         elif (
