@@ -13,4 +13,19 @@ dist/
 *.bak.*
 infra/tools/
 
+# server-state / generated
+status/
+infra/.tunnel-urls-applied
+infra/tunnel-urls.env
+
+# secrets
+*.pem
+*.key
+*.crt
+*.p12
+id_rsa*
+*.env.*
+!*.env.example
+!*.env.*.example
+
 shop/graphify-out/

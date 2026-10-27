@@ -86,7 +86,7 @@ cd shop; pytest; ruff check backend; mypy backend; cd frontend; npm run check
 
 ## Прод-инфраструктура (развёрнута 2026-10-27)
 
-- `proliv-main` (Швеция, `144.31.240.216`): VPS-0 - панель+лендинг+бот+ЛК. Стек в `/opt/proliv` (`docker-compose.yml`+`proliv.env` скопированы scp). Панель v3.4.7 + postgres:18.4 + valkey:9 + subpage v8.0.1 + caddy devproxy (:3443 панель, :3444 subpage - обязателен, иначе ProxyCheckMiddleware отклоняет plain-HTTP).
+- `proliv-main` (Швеция, `144.31.240.216`): VPS-0 - панель+лендинг+бот+ЛК. Стек в `/opt/proliv` (`docker-compose.yml`+`proliv.env` скопированы scp). Панель v3.4.7 + postgres:18.4 + valkey:9 + subpage v8.0.1 + caddy devproxy (:3443 панель, :3444 subpage - обязателен, иначе ProxyCheckMiddleware отклоняет plain-HTTP). **devproxy - постоянный сервис (не dev-профиль)**: `REMNAWAVE_PANEL_URL` у subpage = `http://proliv-devproxy:3443`, офиц. образ сам X-Forwarded-* не шлёт (без моста: GetSubscriptionInfo 404/сокет-дроп -> 502 на браузерных запросах). Minishop ходит в панель напрямую - свой клиент добавляет заголовки (`panel_api_core.py`, `remnawave_subscription_source.py`).
 - `proliv-node-de` (Германия, `13.143.192.49`): `remnawave/node:3.4.3` в `/opt/remnanode` (network_mode host, NODE_PORT=2222, SECRET_KEY в `/opt/remnanode/.env`). UFW: 22+443 всем, 2222 только с 144.31.240.216.
 - SSH: алиасы в `~/.ssh/config`, ключ `~/.ssh/proliv`; root по ключу + deploy(1000,sudo), парольный вход выключен.
 - Панель-админ: `admin` (пароль в выдаче юзеру 2026-10-27, политика: 24+ симв A-Za-z0-9). Админка: `ssh -L 3443:localhost:3443 proliv-main` -> http://localhost:3443.
