@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -euo pipefail
+JWT=$(tr -d '[:space:]' < /root/.panel-jwt)
+API="http://127.0.0.1:3443/api"
+H=(-H "Authorization: Bearer $JWT" -H 'X-Forwarded-For: 127.0.0.1' -H 'X-Forwarded-Proto: https')
+
+echo "=== check downloaded files exist ==="
+ls -la /tmp/geosite.dat /tmp/geoip.dat 2>/dev/null || {
+  echo "re-downloading..."
+  curl -sL --max-time 120 -o /tmp/geosite.dat "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat"
+  curl -sL --max-time 120 -o /tmp/geoip.dat "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat"
+}
+
+echo "=== copy to landing static dir ==="
+cp /tmp/geosite.dat /tmp/geoip.dat /opt/proliv/status/
+ls -la /opt/proliv/status/
+
+echo "=== verify public access ==="
+for f in geosite.dat geoip.dat; do
+  curl -s -o /dev/null -w "$f -> %{http_code} %{size_download}B %{content_type}\n" --max-time 15 "https://proliv-network.xyz/status-data/$f"
+done
+
+echo "=== rebuild routing profile with own urls ==="
+curl -s "${H[@]}" "$API/subscription-settings" -o /tmp/subset.json
+python3 - <<'PY'
+import json, base64
+profile = {
+  "Name": "Proliv",
+  "GlobalProxy": "true",
+  "RemoteDNSType": "DoH",
+  "RemoteDNSDomain": "https://dns.google/dns-query",
+  "RemoteDNSIP": "8.8.8.8",
+  "DomesticDNSType": "DoH",
+  "DomesticDNSDomain": "https://common.doh.dns.yandex.net/dns-query",
+  "DomesticDNSIP": "77.88.8.8",
+  "Geoipurl": "https://proliv-network.xyz/status-data/geoip.dat",
+  "Geositeurl": "https://proliv-network.xyz/status-data/geosite.dat",
+  "LastUpdated": "",
+  "DnsHosts": {"dns.google": "8.8.8.8", "common.doh.dns.yandex.net": "77.88.8.8"},
+  "DirectSites": ["geosite:category-ru"],
+  "DirectIp": ["geoip:private", "geoip:ru"],
+  "ProxySites": [],
+  "ProxyIp": [],
+  "BlockSites": [],
+  "BlockIp": [],
+  "DomainStrategy": "IPIfNonMatch",
+  "FakeDNS": "false",
+  "UseChunkFiles": "true"
+}
+b64 = base64.b64encode(json.dumps(profile, ensure_ascii=False).encode()).decode()
+d = json.load(open('/tmp/subset.json'))
+r = d.get('response', d) if isinstance(d, dict) else d
+crh = r.get('customResponseHeaders', {})
+crh['routing'] = f"happ://routing/onadd/{b64}"
+body = {
+  "uuid": r.get('uuid'),
+  "serveJsonAtBaseSubscription": r.get('serveJsonAtBaseSubscription'),
+  "isShowCustomRemarks": r.get('isShowCustomRemarks'),
+  "customRemarks": r.get('customRemarks'),
+  "customResponseHeaders": crh,
+  "randomizeHosts": r.get('randomizeHosts'),
+  "responseRules": r.get('responseRules'),
+}
+open('/tmp/ss_patch3.json','w').write(json.dumps(body, ensure_ascii=False))
+print('profile urls -> proliv-network.xyz')
+PY
+
+curl -s -X PATCH "${H[@]}" -H 'Content-Type: application/json' --data-binary @/tmp/ss_patch3.json "$API/subscription-settings" -o /dev/null
+
+echo "=== verify live header ==="
+curl -s --max-time 15 -H "User-Agent: Happ/1.9.2" -D /tmp/h.txt "https://sub.proliv-network.xyz/WKA2c2STkbrb5LHf" -o /dev/null
+grep -i routing /tmp/h.txt | python3 -c "
+import sys,base64,json,re
+line=sys.stdin.read()
+b64=line.split('onadd/')[-1].strip()
+p=json.loads(base64.b64decode(b64))
+print('DirectSites:',p['DirectSites'])
+print('Geositeurl:',p['Geositeurl'])
+print('Geoipurl:',p['Geoipurl'])
+"
