@@ -20,7 +20,7 @@ from bot.utils.callback_answer import (
     safe_answer_callback,
 )
 from config.settings import Settings
-from db.dal import subscription_dal, user_balance_dal
+from db.dal import partner_dal, subscription_dal, user_balance_dal
 
 from .menu_card import render_card
 
@@ -83,6 +83,14 @@ async def send_main_menu(
 
     currency = settings.balance_settings.currency
     balance_minor = await user_balance_dal.balance_minor(session, user_id, currency)
+    # Vendored-патч: в главном меню «Бонусы» показываем сумму бонусного и
+    # партнёрского кошельков - в кабинете карточка «Бонусный счёт» считает так же.
+    if settings.partner_settings.enabled:
+        partner_profile = await partner_dal.get_profile_by_user_id(session, user_id)
+        if partner_profile is not None:
+            balance_minor += await partner_dal.balance_minor(
+                session, int(partner_profile.partner_id), currency
+            )
     balance_text = minor_to_decimal_string(
         balance_minor, scale=currency_scale(currency)
     ).rstrip("0").rstrip(".")

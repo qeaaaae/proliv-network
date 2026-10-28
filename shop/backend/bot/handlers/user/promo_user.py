@@ -113,7 +113,13 @@ async def process_promo_code_input(
     _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs)
     code_input = (message.text or "").strip() if message.text else ""
     user = message_from_user(message)
-    account_user_id = await require_telegram_account_id(session, user.id)
+    try:
+        account_user_id = await require_telegram_account_id(session, user.id)
+    except Exception:
+        logger.exception("Failed to resolve account for promo input")
+        await state.clear()
+        await message.answer(_("error_occurred_try_again"))
+        return
 
     is_suspicious = False
     if not code_input:
@@ -151,9 +157,16 @@ async def process_promo_code_input(
         except Exception as e:
             logger.error("Failed to send suspicious promo notification: %s", e)
 
-    success, result = await promo_code_service.apply_promo_code(
-        session, account_user_id, code_input, current_lang
-    )
+    try:
+        success, result = await promo_code_service.apply_promo_code(
+            session, account_user_id, code_input, current_lang
+        )
+    except Exception:
+        await session.rollback()
+        logger.exception("Promo code apply failed for user %s", account_user_id)
+        await state.clear()
+        await message.answer(_("error_occurred_try_again"))
+        return
     if success and isinstance(result, PromoCheckoutRequired):
         await session.commit()
         logger.info(

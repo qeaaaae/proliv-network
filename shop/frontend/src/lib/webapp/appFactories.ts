@@ -468,9 +468,14 @@ export function createAppFactories({
       );
       void billingStore.applyCheckoutPromo();
     },
-    prefillCheckoutPromo: (code) => {
-      billingStore.setCheckoutPromoInput(code);
-      void billingStore.applyCheckoutPromo();
+    openPromoEntry: () => {
+      const referralEnabled =
+        (getData()?.settings as WebappRecord | undefined)?.referral_program_enabled !== false;
+      if (referralEnabled) {
+        getAppActions().goInvite();
+      } else {
+        getAppActions().goSettings();
+      }
     },
   });
   const authRuntime = createAuthRuntime({

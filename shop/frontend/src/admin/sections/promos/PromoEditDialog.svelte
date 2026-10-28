@@ -490,6 +490,54 @@
                 <div class="admin-link-row">
                   <div class="admin-link-row-meta">
                     <span class="admin-link-row-label">
+                      {at("promo_link_app", {}, "Mini App")}
+                    </span>
+                    {#if promoEditing.app_link}
+                      <a
+                        class="admin-link-row-url"
+                        href={promoEditing.app_link}
+                        target="_blank"
+                        rel="noopener"
+                      >
+                        {promoEditing.app_link}
+                      </a>
+                    {:else}
+                      <span class="admin-link-row-url admin-link-row-url-muted">
+                        {at("promo_link_unavailable", {}, "Unavailable")}
+                      </span>
+                    {/if}
+                  </div>
+                  <div class="admin-promo-link-actions">
+                    <AdminButton
+                      size="icon"
+                      variant="icon"
+                      title={at("open", {}, "Open")}
+                      aria-label={at("open", {}, "Open")}
+                      disabled={!promoEditing.app_link}
+                      onclick={() => openPromoLink(promoEditing.app_link)}
+                    >
+                      <ExternalLink size={14} />
+                    </AdminButton>
+                    <AdminButton
+                      size="icon"
+                      variant="icon"
+                      title={at("copy", {}, "Copy")}
+                      aria-label={at("copy", {}, "Copy")}
+                      disabled={!promoEditing.app_link}
+                      onclick={() =>
+                        promosStore.copyToClipboard(
+                          promoEditing.app_link,
+                          at("promo_link_copied", {}, "Link copied")
+                        )}
+                    >
+                      <Copy size={14} />
+                    </AdminButton>
+                  </div>
+                </div>
+
+                <div class="admin-link-row">
+                  <div class="admin-link-row-meta">
+                    <span class="admin-link-row-label">
                       {at("promo_link_webapp", {}, "Web app")}
                     </span>
                     {#if promoEditing.webapp_link}

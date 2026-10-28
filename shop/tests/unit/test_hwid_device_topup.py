@@ -366,8 +366,8 @@ class HwidDeviceTopupBehaviourTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertIsNotNone(quote)
-        self.assertEqual(quote["price"], 650)
-        self.assertAlmostEqual(quote["proration_ratio"], 13.0)
+        self.assertEqual(quote["price"], 50)
+        self.assertAlmostEqual(quote["proration_ratio"], 1.0)
 
     async def test_quote_treats_clamped_calendar_month_as_full_period(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -454,8 +454,8 @@ class HwidDeviceTopupBehaviourTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertIsNotNone(quote)
-        self.assertEqual(quote["price"], 75)
-        self.assertAlmostEqual(quote["proration_ratio"], 1.5)
+        self.assertEqual(quote["price"], 50)
+        self.assertAlmostEqual(quote["proration_ratio"], 1.0)
 
     async def test_quote_uses_last_paid_duration_when_start_date_is_stale(self):
         with tempfile.TemporaryDirectory() as tmpdir:

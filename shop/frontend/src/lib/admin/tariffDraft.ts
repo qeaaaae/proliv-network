@@ -49,6 +49,7 @@ export interface TariffDraft extends UnknownRecord {
   premium_flexible_traffic_stars_price_per_step: string | number;
   monthly_gb: string | number;
   traffic_limit_strategy: string;
+  traffic_rollover: boolean;
   premium_monthly_gb: string | number;
   premium_unlimited: boolean;
   premium_traffic_limit_strategy: string;
@@ -153,6 +154,7 @@ export function emptyTariffDraft(): TariffDraft {
     premium_flexible_traffic_stars_price_per_step: "",
     monthly_gb: 500,
     traffic_limit_strategy: "MONTH",
+    traffic_rollover: false,
     premium_monthly_gb: "",
     premium_unlimited: false,
     premium_traffic_limit_strategy: "",
@@ -425,6 +427,7 @@ export function draftFromTariff(tariff: UnknownRecord, defaultCurrency = "rub"):
     ),
     monthly_gb: scalarDraftValue(tariff.monthly_gb),
     traffic_limit_strategy: String(tariff.traffic_limit_strategy || ""),
+    traffic_rollover: tariff.traffic_rollover === true,
     premium_monthly_gb: scalarDraftValue(tariff.premium_monthly_gb),
     premium_unlimited: tariff.premium_unlimited === true,
     premium_traffic_limit_strategy: String(tariff.premium_traffic_limit_strategy || ""),
@@ -660,6 +663,7 @@ export function tariffFromDraft(draft: TariffDraft, fallbackCurrency = "rub"): U
   if (tariff.billing_model === "period") {
     const trafficLimitStrategy = String(draft.traffic_limit_strategy || "").trim();
     if (trafficLimitStrategy) tariff.traffic_limit_strategy = trafficLimitStrategy;
+    tariff.traffic_rollover = Boolean(draft.traffic_rollover);
     const seenMonths = new Set();
     if (
       (draft.periodRows || []).some((row) => parseDurationDays(row.duration_days) === null) ||

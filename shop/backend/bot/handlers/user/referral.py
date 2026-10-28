@@ -17,12 +17,15 @@ from bot.services.partner_common import (
     minor_to_decimal_string,
 )
 from bot.services.partner_program_service import PartnerProgramService
+from bot.services.referral_checkout_promo import referral_friend_discount_percent
 from bot.services.referral_service import ReferralService
 from bot.services.subscription_service_impl.core import SubscriptionService
 from bot.services.telegram_account import require_telegram_account_id
 from bot.utils.callback_answer import callback_data, message_from_user
 from bot.utils.custom_emoji import custom_emoji_unicode_html
+from bot.utils.subscription_periods import format_duration_days
 from config.settings import Settings
+from config.subscription_periods import legacy_months_to_days
 from db.dal import user_balance_dal, user_dal
 
 from .menu_card import render_card, send_card
@@ -329,13 +332,14 @@ async def _handle_exchange_confirm(
 def _period_bonus_text(
     translator: Translator,
     *,
-    months: int,
+    days: int,
+    current_lang: str,
     inviter_days: int | None,
     referee_days: int | None,
 ) -> str:
     return translator(
         "referral_bonus_per_period",
-        months=months,
+        period=format_duration_days(days, translator, current_lang),
         inviter_bonus_days=(
             inviter_days if inviter_days is not None else translator("no_bonus_placeholder")
         ),
@@ -350,11 +354,11 @@ def _tariff_period_bonus_entries(tariff: Any) -> list[dict[str, int | None]]:
     for months in sorted(int(month) for month in getattr(tariff, "enabled_periods", [])):
         inviter_days = tariff.referral_inviter_bonus_days(months)
         referee_days = tariff.referral_referee_bonus_days(months)
-        if inviter_days is None and referee_days is None:
+        if not inviter_days and not referee_days:
             continue
         entries.append(
             {
-                "months": months,
+                "days": int(tariff.period_duration_days(months)),
                 "inviter_days": inviter_days,
                 "referee_days": referee_days,
             }
@@ -367,11 +371,11 @@ def _legacy_period_bonus_entries(settings: Settings) -> list[dict[str, int | Non
     for months, _price in sorted(settings.subscription_options.items()):
         inviter_days = settings.referral_bonus_inviter.get(months)
         referee_days = settings.referral_bonus_referee.get(months)
-        if inviter_days is None and referee_days is None:
+        if not inviter_days and not referee_days:
             continue
         entries.append(
             {
-                "months": int(months),
+                "days": legacy_months_to_days(int(months)),
                 "inviter_days": inviter_days,
                 "referee_days": referee_days,
             }
@@ -387,6 +391,39 @@ def _bonus_days_range(translator: Translator, values: list[int]) -> str:
     )
 
 
+def _format_reward_percent(value: float) -> str:
+    return f"{float(value):g}"
+
+
+def _referral_rewards_summary_text(settings: Settings, translator: Translator) -> str:
+    """Fallback rewards copy for deployments without day-based referral bonuses."""
+
+    lines: list[str] = []
+    try:
+        partner_settings = settings.partner_settings
+        partner_enabled = bool(partner_settings.enabled)
+        commission_bps = int(partner_settings.default_commission_bps or 0)
+    except AttributeError:
+        partner_enabled = bool(getattr(settings, "PARTNER_PROGRAM_ENABLED", False))
+        commission_bps = int(getattr(settings, "PARTNER_DEFAULT_COMMISSION_BPS", 0) or 0)
+    if partner_enabled and commission_bps > 0:
+        lines.append(
+            translator(
+                "referral_inviter_commission_line",
+                percent=_format_reward_percent(commission_bps / 100),
+            )
+        )
+    friend_discount = referral_friend_discount_percent(settings)
+    if friend_discount > 0:
+        lines.append(
+            translator(
+                "referral_friend_discount_line",
+                percent=_format_reward_percent(friend_discount),
+            )
+        )
+    return "\n".join(lines) if lines else translator("referral_no_bonuses_configured")
+
+
 def _build_referral_bonus_details_text(
     settings: Settings, translator: Translator, current_lang: str
 ) -> str:
@@ -395,7 +432,8 @@ def _build_referral_bonus_details_text(
         bonus_info_parts = [
             _period_bonus_text(
                 translator,
-                months=int(entry["months"] or 0),
+                days=int(entry["days"] or 0),
+                current_lang=current_lang,
                 inviter_days=entry["inviter_days"],
                 referee_days=entry["referee_days"],
             )
@@ -404,7 +442,7 @@ def _build_referral_bonus_details_text(
         return (
             "\n".join(bonus_info_parts)
             if bonus_info_parts
-            else translator("referral_no_bonuses_configured")
+            else _referral_rewards_summary_text(settings, translator)
         )
 
     period_tariffs = [
@@ -415,7 +453,8 @@ def _build_referral_bonus_details_text(
         bonus_info_parts = [
             _period_bonus_text(
                 translator,
-                months=int(entry["months"] or 0),
+                days=int(entry["days"] or 0),
+                current_lang=current_lang,
                 inviter_days=entry["inviter_days"],
                 referee_days=entry["referee_days"],
             )
@@ -424,7 +463,7 @@ def _build_referral_bonus_details_text(
         return (
             "\n".join(bonus_info_parts)
             if bonus_info_parts
-            else translator("referral_no_bonuses_configured")
+            else _referral_rewards_summary_text(settings, translator)
         )
 
     bonus_info_parts = []
@@ -445,7 +484,7 @@ def _build_referral_bonus_details_text(
     return (
         "\n".join(bonus_info_parts)
         if bonus_info_parts
-        else translator("referral_no_bonuses_configured")
+        else _referral_rewards_summary_text(settings, translator)
     )
 
 

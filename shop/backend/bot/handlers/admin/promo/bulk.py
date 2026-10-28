@@ -15,6 +15,7 @@ from bot.keyboards.inline.admin_keyboards import (
     get_back_to_admin_panel_keyboard,
 )
 from bot.middlewares.i18n import JsonI18n
+from bot.services.message_composition import promo_startapp_deeplink
 from bot.services.promo_code_service import PromoCodeService
 from bot.services.promo_effects import PROMO_APPLIES_TO_SUBSCRIPTION, PromoEffects
 from bot.states.admin_states import AdminStates
@@ -442,7 +443,9 @@ async def create_bulk_promo_codes_final(
                     valid_until = _("admin_bulk_promo_csv_unlimited")
 
                 start_command = f"/start promo_{code}"
-                telegram_link = f"https://t.me/{bot_username}?start=promo_{code}"
+                telegram_link = promo_startapp_deeplink(
+                    bot_username, code
+                ) or f"https://t.me/{bot_username}?start=promo_{code}"
 
                 writer.writerow(
                     [

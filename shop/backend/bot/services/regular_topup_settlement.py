@@ -9,6 +9,10 @@ The panel's lifetime counter minus its period counter stays constant within a pe
 and moves forward by the period's whole usage at a reset. Comparing it with the value
 stored at the previous reset gives the exact usage of the period that ended, even when
 the worker notices the reset late.
+
+A tariff with ``traffic_rollover`` also converts the ended period's unused standing
+quota (baseline + standing bonus, without expirable device quota) into the same
+carried balance, so the next period opens with ``monthly_gb + leftovers``.
 """
 
 import logging
@@ -69,6 +73,10 @@ class RegularTopupPeriod(BaseModel):
     period_start_at: datetime
     lifetime_start_bytes: int = Field(ge=0)
     allowance_bytes: int = Field(ge=0)
+    # Part of the allowance that rolls into the carried balance when the
+    # tariff enables rollover: baseline plus standing bonus, without expirable
+    # device quota. ``None`` marks snapshots saved before rollover existed.
+    rollable_allowance_bytes: int | None = Field(default=None, ge=0)
     observed_used_bytes: int = Field(ge=0)
     observed_overflow_bytes: int = Field(ge=0)
     panel_user_uuid: str
@@ -78,6 +86,17 @@ class RegularTopupPeriod(BaseModel):
     unlimited: bool
     legacy_device_quota_bytes: int = Field(default=0, ge=0)
     strategy_changed: bool = False
+
+
+def _state_rollable_allowance(state: RegularTopupPeriod) -> int:
+    """Quota that may roll over at the end of the snapshot's period."""
+    if state.unlimited:
+        return 0
+    if state.rollable_allowance_bytes is not None:
+        return state.rollable_allowance_bytes
+    # Legacy snapshots predate the stored field; their standing quota is the
+    # tariff baseline plus the standing bonus recorded alongside them.
+    return max(0, state.tariff_baseline_bytes + state.regular_bonus_bytes)
 
 
 def regular_topup_period(sub: Any) -> RegularTopupPeriod | None:
@@ -149,10 +168,19 @@ async def _current_period(
             observed_overflow,
             min(max(0, int(sub.topup_balance_bytes or 0)), max(0, used - allowance)),
         )
+    rollable = source._compute_main_traffic_limit_bytes(
+        tier_baseline_bytes=baseline,
+        topup_balance_bytes=0,
+        regular_bonus_bytes=regular_bonus,
+        regular_unlimited_override=bool(getattr(sub, "regular_unlimited_override", False)),
+        traffic_used_bytes=0,
+        hwid_device_bonus_bytes=0,
+    )
     return RegularTopupPeriod(
         period_start_at=period_start,
         lifetime_start_bytes=lifetime_start,
         allowance_bytes=max(0, allowance),
+        rollable_allowance_bytes=max(0, min(rollable, allowance)),
         observed_used_bytes=max(used, previous.observed_used_bytes if previous else 0),
         observed_overflow_bytes=observed_overflow,
         panel_user_uuid=str(getattr(sub, "panel_user_uuid", "") or ""),
@@ -178,8 +206,10 @@ async def _historical_allowance(
     start: datetime,
     end: datetime,
     moments: list[datetime],
-) -> int:
+) -> tuple[int, int]:
+    """Most generous (allowance, rollable) observed within the period window."""
     allowances = [state.allowance_bytes] if start == state.period_start_at else []
+    rollables = [_state_rollable_allowance(state)] if start == state.period_start_at else []
     for moment in sorted({start, *moments}):
         if not start <= moment < end:
             continue
@@ -189,29 +219,47 @@ async def _historical_allowance(
         summary = await tariff_dal.get_hwid_device_entitlement_summary(
             session, subscription_id=sub.subscription_id, at=moment, include_future=False
         )
+        device_bonus = max(
+            source._hwid_traffic_bonus_bytes_from_summary(summary),
+            int(summary.get("traffic_bonus_bytes") or 0)
+            + int(summary.get("legacy_active_devices") or 0) * state.legacy_device_quota_bytes,
+        )
+        baseline = limits.get(
+            "traffic",
+            max(state.tariff_baseline_bytes, int(getattr(tariff, "monthly_bytes", 0) or 0)),
+        )
+        regular_bonus = max(
+            state.regular_bonus_bytes, int(getattr(sub, "regular_bonus_bytes", 0) or 0)
+        )
+        unlimited_override = state.unlimited or bool(
+            getattr(sub, "regular_unlimited_override", False)
+        )
         allowances.append(
             source._compute_main_traffic_limit_bytes(
-                tier_baseline_bytes=limits.get(
-                    "traffic",
-                    max(state.tariff_baseline_bytes, int(getattr(tariff, "monthly_bytes", 0) or 0)),
-                ),
+                tier_baseline_bytes=baseline,
                 topup_balance_bytes=0,
-                regular_bonus_bytes=max(
-                    state.regular_bonus_bytes, int(getattr(sub, "regular_bonus_bytes", 0) or 0)
-                ),
-                regular_unlimited_override=(
-                    state.unlimited or bool(getattr(sub, "regular_unlimited_override", False))
-                ),
+                regular_bonus_bytes=regular_bonus,
+                regular_unlimited_override=unlimited_override,
                 traffic_used_bytes=0,
-                hwid_device_bonus_bytes=max(
-                    source._hwid_traffic_bonus_bytes_from_summary(summary),
-                    int(summary.get("traffic_bonus_bytes") or 0)
-                    + int(summary.get("legacy_active_devices") or 0)
-                    * state.legacy_device_quota_bytes,
-                ),
+                hwid_device_bonus_bytes=device_bonus,
             )
         )
-    return 0 if 0 in allowances else max(allowances, default=state.allowance_bytes)
+        rollables.append(
+            source._compute_main_traffic_limit_bytes(
+                tier_baseline_bytes=baseline,
+                topup_balance_bytes=0,
+                regular_bonus_bytes=regular_bonus,
+                regular_unlimited_override=unlimited_override,
+                traffic_used_bytes=0,
+                hwid_device_bonus_bytes=0,
+            )
+        )
+    if 0 in allowances:
+        return 0, 0
+    return (
+        max(allowances, default=state.allowance_bytes),
+        max(rollables, default=_state_rollable_allowance(state)),
+    )
 
 
 async def _history_consumption(
@@ -224,7 +272,7 @@ async def _history_consumption(
     current_period_start: datetime,
     ended_used: int,
     balance: int,
-) -> int | None:
+) -> tuple[int, int] | None:
     boundaries = regular_period_boundaries(
         state.period_start_at, current_period_start, state.traffic_strategy
     )
@@ -243,19 +291,21 @@ async def _history_consumption(
         session, sub.subscription_id, boundaries[0], boundaries[-1]
     )
     remaining = balance
+    rolled = 0
     for index, (start, end, used) in enumerate(
         zip(boundaries[:-1], boundaries[1:], usage, strict=True)
     ):
-        allowance = await _historical_allowance(
+        allowance, rollable = await _historical_allowance(
             session, sub, tariff, source, state, start, end, moments
         )
+        rolled += max(0, rollable - used)
         known_overflow = state.observed_overflow_bytes if index == 0 else 0
         overflow = max(known_overflow, max(0, used - allowance) if allowance > 0 else 0)
         result = consume_topup_overflow(
             balance_bytes=remaining, traffic_used_bytes=overflow, allowance_bytes=0
         )
         remaining = result.balance_bytes
-    return balance - remaining
+    return balance - remaining, rolled
 
 
 async def settle_regular_topup(
@@ -280,6 +330,7 @@ async def settle_regular_topup(
         return 0
     current_date = aware_utc(period_start) or aware_utc(previous_period_start) or now
     strategy = normalize_traffic_limit_strategy(traffic_strategy, default="MONTH")
+    rollover = bool(getattr(tariff, "traffic_rollover", False))
     state = regular_topup_period(sub)
     if state is not None and (
         state.panel_user_uuid != str(getattr(sub, "panel_user_uuid", "") or "")
@@ -308,6 +359,22 @@ async def settle_regular_topup(
         if used_bytes < state.observed_used_bytes:
             return 0  # stale/out-of-order panel statistics must not restore usage
         zero_period_ended = used_bytes == 0 and current_date > state.period_start_at
+        if zero_period_ended and rollover:
+            # An idle user still rolls the ended periods' quota. The counter
+            # moved to a later boundary, so the elapsed periods are real.
+            periods_ended = traffic_periods_between(
+                state.period_start_at, current_date, state.traffic_strategy
+            )
+            rolled = _state_rollable_allowance(state) * max(1, periods_ended)
+            sub.topup_balance_bytes = balance + rolled
+            if rolled:
+                logger.info(
+                    "Rolled %s bytes of unused regular quota into the carried balance of "
+                    "subscription %s at the counter reset; %s bytes available.",
+                    rolled,
+                    sub.subscription_id,
+                    sub.topup_balance_bytes,
+                )
         _save_period(
             sub,
             await _current_period(
@@ -329,16 +396,18 @@ async def settle_regular_topup(
         return 0  # an incoherent reset snapshot is not evidence of a closed period
     periods = traffic_periods_between(state.period_start_at, current_date, state.traffic_strategy)
     consumed: int | None = None
+    rolled = 0
     same_strategy = strategy == state.traffic_strategy and not state.strategy_changed
     if same_strategy and periods == 1:
         allowance = state.allowance_bytes
-        if current_date > state.period_start_at and balance > 0:
+        rollable = _state_rollable_allowance(state)
+        if current_date > state.period_start_at and (balance > 0 or rollover):
             # A grant can begin and expire while the worker is offline. Its DB
             # history still protects served traffic at a single counter reset.
             moments = await historical_allowance_observations(
                 session, sub.subscription_id, state.period_start_at, current_date
             )
-            allowance = await _historical_allowance(
+            allowance, rollable = await _historical_allowance(
                 session,
                 sub,
                 tariff,
@@ -355,8 +424,10 @@ async def settle_regular_topup(
         consumed = consume_topup_overflow(
             balance_bytes=balance, traffic_used_bytes=overflow, allowance_bytes=0
         ).consumed_bytes
-    elif same_strategy and balance > 0:
-        consumed = await _history_consumption(
+        if rollover:
+            rolled = max(0, rollable - ended_used)
+    elif same_strategy and (balance > 0 or rollover):
+        history = await _history_consumption(
             session,
             sub,
             tariff,
@@ -367,6 +438,9 @@ async def settle_regular_topup(
             ended_used,
             balance,
         )
+        if history is not None:
+            consumed, history_rolled = history
+            rolled = history_rolled if rollover else 0
     if consumed is None:
         # No fabricated aggregate quota: only previously observed overflow is
         # provable when the panel has discarded history or changed strategy.
@@ -375,6 +449,11 @@ async def settle_regular_topup(
             traffic_used_bytes=state.observed_overflow_bytes,
             allowance_bytes=0,
         ).consumed_bytes
+        if rollover:
+            # With murky period boundaries the last observed quota is the only
+            # provable one; charging the whole ended usage against it stays
+            # conservative and can never over-credit the balance.
+            rolled = max(0, _state_rollable_allowance(state) - ended_used)
         if balance > consumed:
             logger.warning(
                 "Incomplete regular traffic history for subscription %s across %s periods; "
@@ -383,7 +462,7 @@ async def settle_regular_topup(
                 periods,
                 consumed,
             )
-    sub.topup_balance_bytes = balance - consumed
+    sub.topup_balance_bytes = balance - consumed + rolled
     _save_period(
         sub,
         await _current_period(
@@ -403,6 +482,14 @@ async def settle_regular_topup(
             "Charged %s bytes of carried-over traffic to subscription %s at the counter "
             "reset; %s bytes remain.",
             consumed,
+            sub.subscription_id,
+            sub.topup_balance_bytes,
+        )
+    elif rolled:
+        logger.info(
+            "Rolled %s bytes of unused regular quota into the carried balance of "
+            "subscription %s at the counter reset; %s bytes available.",
+            rolled,
             sub.subscription_id,
             sub.topup_balance_bytes,
         )

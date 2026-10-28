@@ -606,6 +606,7 @@ class PromoOut(HttpResponseModel):
     code: str
     bot_link: str | None = None
     webapp_link: str | None = None
+    app_link: str | None = None
     bonus_days: int
     regular_traffic_gb: float = 0
     premium_traffic_gb: float = 0
@@ -638,6 +639,7 @@ class PromoOut(HttpResponseModel):
         *,
         bot_link: str | None = None,
         webapp_link: str | None = None,
+        app_link: str | None = None,
         owner: tuple[str | None, str | None] | None = None,
     ) -> PromoOut:
         effects = PromoEffects.from_model(promo)
@@ -646,6 +648,7 @@ class PromoOut(HttpResponseModel):
             code=promo.code,
             bot_link=bot_link,
             webapp_link=webapp_link,
+            app_link=app_link,
             bonus_days=int(promo.bonus_days),
             regular_traffic_gb=effects.regular_traffic_gb,
             premium_traffic_gb=effects.premium_traffic_gb,

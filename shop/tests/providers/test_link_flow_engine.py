@@ -84,6 +84,11 @@ def _patch_common(monkeypatch):
         return parts, None
 
     monkeypatch.setattr(link_flow, "quote_hwid_callback_parts", _quote)
+    monkeypatch.setattr(
+        link_flow,
+        "resolve_telegram_account_id",
+        AsyncMock(side_effect=lambda session, telegram_id: telegram_id + 10**12),
+    )
     for name in (
         "notify_service_unavailable",
         "notify_callback_parse_error",
@@ -133,7 +138,7 @@ def test_callback_create_path_calls_create_and_renders(monkeypatch):
     called_service, req = desc.create.await_args.args
     assert called_service is service
     assert isinstance(req, CreatePaymentRequest)
-    assert req.payment is payment and req.user_id == 123 and req.amount == 100.0
+    assert req.payment is payment and req.user_id == 123 + 10**12 and req.amount == 100.0
     assert req.months == 1 and req.sale_mode == "subscription"
     # the link was rendered with the descriptor's extracted url/id
     link_flow.render_link_or_fail.assert_awaited_once()
@@ -142,6 +147,66 @@ def test_callback_create_path_calls_create_and_renders(monkeypatch):
     assert kwargs["provider_payment_id"] == "pid-1"
     assert kwargs["lead_text"] is None
     assert kwargs["log_prefix"] == "fake"
+
+
+def test_callback_flow_uses_resolved_account_id_everywhere(monkeypatch):
+    parts = _patch_common(monkeypatch)
+    record_kwargs: dict = {}
+    monkeypatch.setattr(
+        link_flow,
+        "build_payment_record_payload",
+        lambda **k: record_kwargs.update(k) or {"payload": True},
+    )
+    quote_kwargs: dict = {}
+
+    async def _quote(**kwargs):
+        quote_kwargs.update(kwargs)
+        return parts, None
+
+    monkeypatch.setattr(link_flow, "quote_hwid_callback_parts", _quote)
+    payment = SimpleNamespace(payment_id=42, status="pending_fake")
+    fake_dal = SimpleNamespace(
+        find_recent_pending_provider_payment=AsyncMock(return_value=None),
+        create_payment_record=AsyncMock(return_value=payment),
+    )
+    monkeypatch.setattr(link_flow, "payment_dal", fake_dal)
+
+    desc = _descriptor()
+    asyncio.run(
+        run_callback_payment(
+            desc, _callback(), _settings(), {"i18n_instance": object()}, _FakeService(), _session()
+        )
+    )
+
+    account_id = 123 + 10**12
+    link_flow.resolve_telegram_account_id.assert_awaited_once()
+    assert link_flow.resolve_telegram_account_id.await_args.args[1] == 123
+    assert quote_kwargs["user_id"] == account_id
+    assert record_kwargs["user_id"] == account_id
+    assert fake_dal.find_recent_pending_provider_payment.await_args.kwargs["user_id"] == account_id
+    _svc, req = desc.create.await_args.args
+    assert req.user_id == account_id
+
+
+def test_callback_without_linked_account_aborts_before_record(monkeypatch):
+    _patch_common(monkeypatch)
+    monkeypatch.setattr(link_flow, "resolve_telegram_account_id", AsyncMock(return_value=None))
+    fake_dal = SimpleNamespace(
+        find_recent_pending_provider_payment=AsyncMock(),
+        create_payment_record=AsyncMock(),
+    )
+    monkeypatch.setattr(link_flow, "payment_dal", fake_dal)
+
+    desc = _descriptor()
+    asyncio.run(
+        run_callback_payment(
+            desc, _callback(), _settings(), {"i18n_instance": object()}, _FakeService(), _session()
+        )
+    )
+
+    link_flow.notify_payment_record_failure.assert_awaited_once()
+    fake_dal.create_payment_record.assert_not_awaited()
+    desc.create.assert_not_awaited()
 
 
 def test_callback_reuse_hit_short_circuits(monkeypatch):

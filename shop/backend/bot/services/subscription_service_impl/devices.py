@@ -318,14 +318,17 @@ class HwidDeviceMixin(SubscriptionServiceMixinContract):
         basis_seconds = float((period_days if fixed else period_months * 30) * 86400)
         billable_start = max(now, valid_from)
         billable_seconds = max(0.0, (valid_until - billable_start).total_seconds())
-        ratio = self._hwid_proration_ratio(
-            billable_start=billable_start,
-            valid_until=valid_until,
-            period_months=period_months,
-            basis_seconds=basis_seconds,
+        ratio = min(
+            1.0,
+            self._hwid_proration_ratio(
+                billable_start=billable_start,
+                valid_until=valid_until,
+                period_months=period_months,
+                basis_seconds=basis_seconds,
+            ),
         )
         if fixed:
-            ratio = billable_seconds / basis_seconds
+            ratio = min(1.0, billable_seconds / basis_seconds)
         raw_price = full_price * ratio
         price = self._round_hwid_price(raw_price, currency=currency)
         min_price = getattr(package, "min_price", None)

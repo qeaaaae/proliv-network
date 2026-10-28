@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import SecretStr, ValidationError
@@ -565,6 +565,127 @@ def test_partner_commission_exclusion_matrix(
         source_paid_at=paid_at,
     )
     assert result == expected
+
+
+def _patch_partner_dal(
+    monkeypatch: pytest.MonkeyPatch,
+    **mocks: AsyncMock,
+) -> None:
+    for name, mock in mocks.items():
+        monkeypatch.setattr(f"bot.services.partner_commission_service.partner_dal.{name}", mock)
+
+
+def test_partner_commission_attributes_referred_payer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registered_at = datetime(2026, 1, 1, tzinfo=UTC)
+    paid_at = datetime(2026, 1, 2, tzinfo=UTC)
+    payer = SimpleNamespace(
+        user_id=42,
+        referred_by_id=7,
+        registration_date=registered_at,
+        first_name="Friend",
+        last_name=None,
+    )
+    profile = SimpleNamespace(
+        partner_id=3,
+        user_id=7,
+        status="active",
+        commission_bps=1500,
+        activated_at=datetime(2025, 12, 1, tzinfo=UTC),
+    )
+    client = SimpleNamespace(
+        partner_client_id=17,
+        eligible_from=registered_at,
+        attributed_at=registered_at,
+    )
+    decision = SimpleNamespace(commission_id=5)
+    create_attribution = AsyncMock(return_value=client)
+    create_commission = AsyncMock(return_value=decision)
+    create_ledger = AsyncMock()
+    _patch_partner_dal(
+        monkeypatch,
+        get_commission_by_payment_id=AsyncMock(return_value=None),
+        get_client_with_profile_for_user=AsyncMock(return_value=None),
+        get_profile_by_user_id=AsyncMock(return_value=profile),
+        create_client_attribution=create_attribution,
+        create_audit_event=AsyncMock(),
+        create_commission=create_commission,
+        create_ledger_entry=create_ledger,
+    )
+    emit = AsyncMock()
+    monkeypatch.setattr("bot.services.partner_commission_service.events.emit_model", emit)
+    session = SimpleNamespace(
+        get=AsyncMock(return_value=payer),
+        begin_nested=MagicMock(return_value=AsyncMock()),
+    )
+    payment = _payment(payment_id=9, user_id=42, amount=15, sale_mode="trial")
+
+    result = asyncio.run(
+        _commission_service(commission_hold_days=0).record_payment_decision(
+            cast(AsyncSession, session),
+            payment,
+            source_paid_at=paid_at,
+        )
+    )
+
+    assert result is decision
+    create_attribution.assert_awaited_once()
+    attribution_kwargs = create_attribution.await_args.kwargs
+    assert attribution_kwargs["partner_id"] == 3
+    assert attribution_kwargs["client_user_id"] == 42
+    assert attribution_kwargs["source"] == "referral_import"
+    assert attribution_kwargs["eligible_from"] == registered_at
+    assert create_commission.await_args.kwargs["status"] == "available"
+    assert create_commission.await_args.kwargs["commission_amount_minor"] == 225
+    assert create_ledger.await_args.kwargs["state"] == "posted"
+
+
+@pytest.mark.parametrize(
+    ("referred_by_id", "profile"),
+    [
+        (None, None),
+        (7, None),
+        (7, SimpleNamespace(partner_id=3, user_id=7, status="paused")),
+    ],
+)
+def test_partner_commission_skips_unattributed_referred_payer(
+    monkeypatch: pytest.MonkeyPatch,
+    referred_by_id: int | None,
+    profile: SimpleNamespace | None,
+) -> None:
+    payer = SimpleNamespace(
+        user_id=42,
+        referred_by_id=referred_by_id,
+        registration_date=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    create_attribution = AsyncMock()
+    create_commission = AsyncMock()
+    _patch_partner_dal(
+        monkeypatch,
+        get_commission_by_payment_id=AsyncMock(return_value=None),
+        get_client_with_profile_for_user=AsyncMock(return_value=None),
+        get_profile_by_user_id=AsyncMock(return_value=profile),
+        create_client_attribution=create_attribution,
+        create_commission=create_commission,
+    )
+    session = SimpleNamespace(
+        get=AsyncMock(return_value=payer),
+        begin_nested=MagicMock(return_value=AsyncMock()),
+    )
+    payment = _payment(payment_id=9, user_id=42, amount=15, sale_mode="trial")
+
+    result = asyncio.run(
+        _commission_service(commission_hold_days=0).record_payment_decision(
+            cast(AsyncSession, session),
+            payment,
+            source_paid_at=datetime(2026, 1, 2, tzinfo=UTC),
+        )
+    )
+
+    assert result is None
+    create_attribution.assert_not_awaited()
+    create_commission.assert_not_awaited()
 
 
 def test_partner_attribution_is_first_touch(monkeypatch: pytest.MonkeyPatch) -> None:

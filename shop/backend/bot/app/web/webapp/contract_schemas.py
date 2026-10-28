@@ -690,6 +690,8 @@ WEBAPP_REFERRAL_SCHEMA: dict[str, Any] = {
         "welcome_bonus_requires_telegram": BOOLEAN_SCHEMA,
         "welcome_bonus_block_reason": NULLABLE_STRING_SCHEMA,
         "one_bonus_per_referee": BOOLEAN_SCHEMA,
+        "friend_discount_percent": NUMBER_SCHEMA,
+        "exchange_day_price": NULLABLE_NUMBER_SCHEMA,
         "bonus_details": {"type": "array", "items": REFERRAL_BONUS_DETAIL_SCHEMA},
     },
 }

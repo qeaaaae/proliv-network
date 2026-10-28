@@ -24,6 +24,7 @@ from .auth import (
     _require_admin_user_id,
 )
 from .common import (
+    _build_admin_promo_app_link,
     _build_admin_promo_bot_link,
     _build_admin_promo_webapp_link,
     _error,
@@ -127,6 +128,7 @@ def _serialize_promo_for_request(
             settings.SUBSCRIPTION_MINI_APP_URL,
             code,
         ),
+        app_link=_build_admin_promo_app_link(get_bot_username(request), code),
         owner=(owners or {}).get(int(owner_id)) if owner_id else None,
     ).model_dump(mode="json")
 

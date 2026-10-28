@@ -41,7 +41,8 @@ type ActionsStoreDeps = {
   maybeShowActivationSuccessDialog: (context?: Record<string, unknown>) => Promise<boolean>;
   termUnitLabel: TermUnitLabel;
   startCheckoutPromo?: (code: string) => void;
-  prefillCheckoutPromo?: (code: string) => void;
+  /** Opens the screen hosting the promo activation field (invite or settings). */
+  openPromoEntry?: () => void;
 };
 export type ActionsStore = ActionsState & {
   setPromoCode(value: string): void;
@@ -71,7 +72,7 @@ export function createActionsStore({
   maybeShowActivationSuccessDialog,
   termUnitLabel,
   startCheckoutPromo = () => {},
-  prefillCheckoutPromo = () => {},
+  openPromoEntry = () => {},
 }: ActionsStoreDeps) {
   const state = $state<ActionsStore>({
     trialCaptcha: createTrialCaptchaStore(api, t),
@@ -226,7 +227,7 @@ export function createActionsStore({
     state.promoDeeplinkEffectSummary = "";
   }
 
-  async function handlePromoDeeplink(code: string, context: PromoDeeplinkContext = {}) {
+  async function handlePromoDeeplink(code: string, _context: PromoDeeplinkContext = {}) {
     const trimmed = String(code || "").trim();
     if (!trimmed) return;
     try {
@@ -241,13 +242,14 @@ export function createActionsStore({
       const message = stringField(statusPayload.message);
       const effectSummary = formatPromoEffectSummary(statusPayload, { t, termUnitLabel });
       if (status === "requires_checkout") {
-        // The code adjusts a purchase — the checkout flow with the prefilled
-        // code stays the right UX. Reuse the opened deeplink modal if any.
-        if (context.modalOpened) {
-          prefillCheckoutPromo(resolvedCode);
-        } else {
-          startCheckoutPromo(resolvedCode);
-        }
+        // The code adjusts a purchase: land on the promo card with the code
+        // already in the field so the user just taps Activate and the checkout
+        // opens with the discount applied.
+        setPromoCode(resolvedCode);
+        openPromoEntry();
+        showToast(
+          t("wa_promo_deeplink_prefilled", {}, "Promo code filled in. Tap Activate to use it.")
+        );
         return;
       }
       if (status === "standalone") {

@@ -346,7 +346,7 @@ class UserBotMenuTests(unittest.TestCase):
 
         callbacks = self._callback_data(markup)
 
-        self.assertIn("main_action:bot_subscribe", callbacks)
+        self.assertIn("main_action:purchases", callbacks)
         self.assertIn("main_action:bot_my_subscription", callbacks)
         self.assertIn("main_action:bot_referral", callbacks)
         self.assertIn("main_action:bot_info", callbacks)
@@ -387,7 +387,8 @@ class UserBotMenuTests(unittest.TestCase):
         callbacks = self._callback_data(markup)
 
         self.assertNotIn("main_action:bot_referral", callbacks)
-        self.assertIn("main_action:bot_apply_promo", callbacks)
+        # Промокод живёт внутри хаба покупок - хаб остаётся и при выключенной рефералке
+        self.assertIn("main_action:purchases", callbacks)
 
     def test_connect_keyboard_uses_subscription_url_when_bot_guides_disabled(self):
         markup = get_connect_and_main_keyboard(
@@ -788,8 +789,8 @@ class UserBotMenuTests(unittest.TestCase):
             "en",
         )
 
-        self.assertIn("For a friend's 2-month subscription", text)
-        self.assertIn("For a friend's 4-month subscription", text)
+        self.assertIn("For a friend's 2 months subscription", text)
+        self.assertIn("For a friend's 4 months subscription", text)
         self.assertNotIn("Standard", text)
 
     def test_multiple_tariff_referral_text_uses_tariff_ranges(self):

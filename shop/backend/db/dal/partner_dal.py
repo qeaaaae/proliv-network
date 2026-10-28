@@ -585,11 +585,23 @@ async def list_successful_payments_without_decision(
     *,
     limit: int,
 ) -> list[Payment]:
+    attributable = select(PartnerClient.client_user_id).union(
+        select(User.user_id).join(
+            PartnerProfile,
+            and_(
+                PartnerProfile.user_id == User.referred_by_id,
+                PartnerProfile.status == "active",
+            ),
+        )
+    )
     result = await session.execute(
         select(Payment)
-        .join(PartnerClient, PartnerClient.client_user_id == Payment.user_id)
         .outerjoin(PartnerCommission, PartnerCommission.payment_id == Payment.payment_id)
-        .where(Payment.status == "succeeded", PartnerCommission.commission_id.is_(None))
+        .where(
+            Payment.status == "succeeded",
+            PartnerCommission.commission_id.is_(None),
+            Payment.user_id.in_(attributable),
+        )
         .order_by(Payment.payment_id)
         .limit(limit)
         .with_for_update(skip_locked=True, of=Payment)

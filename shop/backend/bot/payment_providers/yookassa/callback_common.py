@@ -21,11 +21,11 @@ from config.subscription_periods import fixed_day_metadata
 from db.dal import payment_dal, user_billing_dal
 
 from ..base import PaymentProviderSpec
-from ..shared import parse_positive_int_units
+from ..shared import PaymentCallbackParts, parse_positive_int_units, payment_link_message_text
 from ..shared import sale_mode_base as _sale_mode_base
 from ..shared.common import build_payment_description
 from .service import YooKassaService
-from .shared import _format_value, _metadata_iso
+from .shared import _metadata_iso
 from .success import HWID_DEVICE_SALE_BASES
 
 logger = logging.getLogger(__name__)
@@ -238,15 +238,13 @@ async def _initiate_yk_payment(
                 await message.edit_text(get_text("error_payment_gateway_link_failed"))
             return False
 
+        link_text = payment_link_message_text(
+            get_text,
+            PaymentCallbackParts(months=months, price=price_rub, sale_mode=sale_mode),
+        )
         try:
             await message.edit_text(
-                get_text(
-                    key="payment_link_message_traffic"
-                    if sale_base in {"traffic", "traffic_package", "topup", "premium_topup"}
-                    else "payment_link_message",
-                    months=int(months),
-                    traffic_gb=_format_value(months),
-                ),
+                link_text,
                 reply_markup=get_payment_url_keyboard(
                     payment_response_yk["confirmation_url"],
                     current_lang,
@@ -260,13 +258,7 @@ async def _initiate_yk_payment(
             logger.warning("Edit message for payment link failed: %s. Sending new one.", e_edit)
             with contextlib.suppress(Exception):
                 await message.answer(
-                    get_text(
-                        key="payment_link_message_traffic"
-                        if sale_base in {"traffic", "traffic_package", "topup", "premium_topup"}
-                        else "payment_link_message",
-                        months=int(months),
-                        traffic_gb=_format_value(months),
-                    ),
+                    link_text,
                     reply_markup=get_payment_url_keyboard(
                         payment_response_yk["confirmation_url"],
                         current_lang,

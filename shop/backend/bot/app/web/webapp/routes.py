@@ -70,7 +70,7 @@ from .auth import (
     telegram_oauth_nonce_route,
     telegram_oauth_start_route,
 )
-from .balance import balance_route, balance_topup_route
+from .balance import balance_route, balance_topup_route, referral_exchange_route
 from .billing import (
     activate_trial_route,
     apply_promo_route,
@@ -419,6 +419,7 @@ def setup_subscription_webapp_routes(app: web.Application) -> None:
         account_telegram_notifications_probe_route,
     )
     app.router.add_post("/api/referral/welcome-bonus/claim", referral_welcome_bonus_claim_route)
+    app.router.add_post("/api/referral/exchange", referral_exchange_route)
     app.router.add_post("/api/promo/apply", apply_promo_route)
     app.router.add_post("/api/promo/status", promo_status_route)
     app.router.add_post("/api/plans/viewed", plans_viewed_route)

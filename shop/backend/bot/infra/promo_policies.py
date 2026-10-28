@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from bot.services.promo_effects import PromoEffects
+from bot.services.referral_checkout_promo import referral_friend_promo_suggestion
 from db.dal import promo_code_dal
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,10 @@ PromoCheckoutSuggestionProvider = Callable[
 _extra_promo_redemption_policies: list[PromoRedemptionPolicy] = []
 _owner_policy_plugins: set[str] = set()
 _promo_checkout_suggestion_providers: list[PromoCheckoutSuggestionProvider] = []
+
+_CORE_PROMO_CHECKOUT_SUGGESTION_PROVIDERS: tuple[PromoCheckoutSuggestionProvider, ...] = (
+    referral_friend_promo_suggestion,
+)
 
 
 async def _core_state_policy(ctx: PromoRedemptionContext) -> PromoRedemptionDecision:
@@ -238,7 +243,11 @@ async def resolve_promo_checkout_suggestions(
 
     suggestions: list[str] = []
     seen: set[str] = set()
-    for provider in tuple(_promo_checkout_suggestion_providers):
+    providers = (
+        *_CORE_PROMO_CHECKOUT_SUGGESTION_PROVIDERS,
+        *_promo_checkout_suggestion_providers,
+    )
+    for provider in providers:
         try:
             result = provider(ctx)
             if inspect_module.isawaitable(result):

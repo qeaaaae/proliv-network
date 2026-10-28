@@ -56,6 +56,7 @@ from bot.services.hwid_device_notifications import (
     HWID_DEVICE_NOTIFICATION_RUNTIME_SETTING_KEYS,
 )
 from bot.services.hwid_device_webhook import HWID_DEVICE_EVENTS
+from bot.services.lte_traffic_alert_worker import LteTrafficAlertWorker
 from bot.services.message_log_notifier import configure_message_log_notifier
 from bot.services.panel_webhook_service import ACTIONABLE_EVENTS
 from bot.services.partner_program_worker import PartnerProgramWorker
@@ -481,6 +482,16 @@ async def _partner_program_task(ctx: PluginContext) -> None:
     ).run()
 
 
+async def _lte_traffic_alert_task(ctx: PluginContext) -> None:
+    await LteTrafficAlertWorker(
+        ctx.settings,
+        ctx.require_session_factory(),
+        ctx.require_panel_service(),
+        ctx.notification_service,
+        ctx.i18n,
+    ).run()
+
+
 async def _admin_broadcast_task(ctx: PluginContext) -> None:
     bot_username: str | None = None
     if ctx.bot is not None:
@@ -582,6 +593,7 @@ def _core_worker_tasks() -> list[WorkerTaskSpec]:
             name="PartnerProgramWorker",
             factory=_partner_program_task,
         ),
+        WorkerTaskSpec(name="LteTrafficAlertWorker", factory=_lte_traffic_alert_task),
         WorkerTaskSpec(name="AdminBroadcastWorker", factory=_admin_broadcast_task),
         WorkerTaskSpec(name="BackupWorker", factory=_backup_worker_task),
         WorkerTaskSpec(name="PanelSyncLoop", factory=_panel_sync_loop),

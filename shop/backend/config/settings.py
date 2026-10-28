@@ -390,29 +390,29 @@ class Settings(
     TORRENT_BLOCKER_NOTIFICATION_INCLUDE_IP: bool = Field(default=False)
 
     REFERRAL_BONUS_DAYS_INVITER_1_MONTH: int | None = Field(
-        default=3, alias="REFERRAL_BONUS_DAYS_1_MONTH"
+        default=None, alias="REFERRAL_BONUS_DAYS_1_MONTH"
     )
     REFERRAL_BONUS_DAYS_INVITER_3_MONTHS: int | None = Field(
-        default=7, alias="REFERRAL_BONUS_DAYS_3_MONTHS"
+        default=None, alias="REFERRAL_BONUS_DAYS_3_MONTHS"
     )
     REFERRAL_BONUS_DAYS_INVITER_6_MONTHS: int | None = Field(
-        default=15, alias="REFERRAL_BONUS_DAYS_6_MONTHS"
+        default=None, alias="REFERRAL_BONUS_DAYS_6_MONTHS"
     )
     REFERRAL_BONUS_DAYS_INVITER_12_MONTHS: int | None = Field(
-        default=30, alias="REFERRAL_BONUS_DAYS_12_MONTHS"
+        default=None, alias="REFERRAL_BONUS_DAYS_12_MONTHS"
     )
 
     REFERRAL_BONUS_DAYS_REFEREE_1_MONTH: int | None = Field(
-        default=1, alias="REFEREE_BONUS_DAYS_1_MONTH"
+        default=None, alias="REFEREE_BONUS_DAYS_1_MONTH"
     )
     REFERRAL_BONUS_DAYS_REFEREE_3_MONTHS: int | None = Field(
-        default=3, alias="REFEREE_BONUS_DAYS_3_MONTHS"
+        default=None, alias="REFEREE_BONUS_DAYS_3_MONTHS"
     )
     REFERRAL_BONUS_DAYS_REFEREE_6_MONTHS: int | None = Field(
-        default=7, alias="REFEREE_BONUS_DAYS_6_MONTHS"
+        default=None, alias="REFEREE_BONUS_DAYS_6_MONTHS"
     )
     REFERRAL_BONUS_DAYS_REFEREE_12_MONTHS: int | None = Field(
-        default=15, alias="REFEREE_BONUS_DAYS_12_MONTHS"
+        default=None, alias="REFEREE_BONUS_DAYS_12_MONTHS"
     )
     # Referral program configuration
     GIFTS_ENABLED: bool = True
@@ -431,8 +431,17 @@ class Settings(
         ),
     )
     REFERRAL_WELCOME_BONUS_DAYS: int = Field(
-        default=3,
+        default=0,
         description="Welcome bonus days granted to a newly registered user who joined via referral link.",  # noqa: E501
+    )
+    REFERRAL_FRIEND_DISCOUNT_PERCENT: float = Field(
+        default=10.0,
+        ge=0,
+        le=100,
+        description=(
+            "Checkout discount percent granted to an invited user on their first "
+            "subscription purchase via a personal single-use promo code. 0 disables."
+        ),
     )
     REFERRAL_WELCOME_BONUS_WITHOUT_TELEGRAM_ENABLED: bool = Field(
         default=True,
@@ -467,7 +476,7 @@ class Settings(
     PARTNER_CLIENT_WELCOME_BONUS_ENABLED: bool = False
     PARTNER_CLIENT_PAYMENT_BONUS_ENABLED: bool = False
     PARTNER_ONE_BONUS_PER_CLIENT: bool = True
-    PARTNER_DEFAULT_COMMISSION_BPS: int = Field(default=3000, ge=0, le=10000)
+    PARTNER_DEFAULT_COMMISSION_BPS: int = Field(default=1500, ge=0, le=10000)
     PARTNER_COMMISSION_HOLD_DAYS: int = Field(default=0, ge=0, le=365)
     PARTNER_ELIGIBLE_CURRENCIES: str = Field(
         default='["RUB"]',
@@ -830,6 +839,35 @@ class Settings(
         default=True, description="Send notifications for suspicious promo attempts"
     )
     LOG_SUPPORT: bool = Field(default=True, description="Send support ticket notifications")
+
+    # Admin alert for heavy per-user traffic on watched (LTE) nodes.
+    LTE_TRAFFIC_ALERT_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Alert admins when a user exceeds the daily traffic threshold on watched nodes."
+        ),
+    )
+    LTE_TRAFFIC_ALERT_GB_PER_DAY: float = Field(
+        default=20.0,
+        gt=0,
+        allow_inf_nan=False,
+        description=(
+            "Traffic in GB per calendar day on watched nodes that triggers an admin alert."
+        ),
+    )
+    LTE_TRAFFIC_ALERT_NODE_UUIDS: str = Field(
+        default="",
+        description=(
+            "Comma-separated Remnawave node UUIDs watched for heavy usage (e.g. LTE nodes). "
+            "Empty disables the check."
+        ),
+    )
+    LTE_TRAFFIC_ALERT_TICK_SECONDS: int = Field(
+        default=3600,
+        ge=60,
+        le=86400,
+        description="How often the LTE traffic alert worker polls panel bandwidth stats.",
+    )
 
     # Anonymous install telemetry (self-hosted friendly, opt-out).
     TELEMETRY_ENABLED: bool = Field(

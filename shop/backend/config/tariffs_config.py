@@ -427,6 +427,11 @@ class Tariff(BaseModel):
     # admin editor writes an explicit value for new tariffs and whenever an
     # administrator selects a tariff-specific strategy.
     traffic_limit_strategy: TrafficLimitStrategy | None = None
+    # When the counter resets, the unused part of the period quota moves into
+    # the carried balance (same place as paid top-ups), so the next period
+    # limit is monthly_gb + what was left over. Applies to period tariffs only;
+    # NO_RESET never closes a period and therefore never rolls.
+    traffic_rollover: bool = False
     prices: dict[str, dict[str, float]] = Field(default_factory=dict)
     prices_rub: dict[str, float] = Field(default_factory=dict)
     prices_stars: dict[str, float] = Field(default_factory=dict)

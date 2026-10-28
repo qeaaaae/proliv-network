@@ -241,8 +241,9 @@ async def main_action_callback_handler(
 ) -> None:
     action = callback_data(callback).split(":")[1]
 
-    if action in {"back_to_main", "back_to_main_keep", "bot_interface"}:
-        await state.clear()
+    # Любая навигация по карточкам главного меню сбрасывает FSM: иначе старый
+    # стейт (промокод, имя устройства, капча) съедает следующее сообщение юзера
+    await state.clear()
 
     from . import promo_user as user_promo_handlers
     from . import referral as user_referral_handlers
