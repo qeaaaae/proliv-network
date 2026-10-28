@@ -9,7 +9,7 @@
 
 | Файл | Куда попадает | Что задаёт |
 |------|---------------|-----------|
-| `tariffs.json` | `/app/data/tariffs.json` (volume `shop-data`) | каталог: 1 тариф `proliv` - 179 ₽/30 дн, 90/180/365 дн со скидкой, 1 ТБ, 5 устройств, топ-апы |
+| `tariffs.json` | `/app/data/tariffs.json` (volume `shop-data`) | каталог: 1 тариф `proliv` - 179 ₽/30 дн, 90/180/365 дн со скидкой, 300 ГБ/мес с переносом остатка (MONTH_ROLLING), 3 устройства, топ-апы |
 | `locales-overrides.json` | `/app/data/locales-overrides.json` | тексты бота: приветствие, кнопки, реф-сообщения (ru+en) |
 | `settings.sql` | БД `app_setting_overrides` | `WEBAPP_TITLE`, `START_COMMAND_DESCRIPTION`, `WEBAPP_PRIMARY_COLOR=#7dd3fc`, `TRIAL_ENABLED=false`, `SUPPORT_LINK` и пр. |
 | `seed.ps1` | - | копирует файлы через `docker cp`, прогоняет SQL, рестартует backend+worker |

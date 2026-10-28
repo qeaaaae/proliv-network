@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Ночной бэкап Proliv: обе БД (pg_dump custom), shop-data volume, конфиги.
+# Ночной бэкап Proliv: только обе БД (pg_dump custom) + env-конфиги (4КБ - секреты не в git).
 # Локально 14 дней + rsync на DE-ноду как offsite внутри своей инфры.
 set -euo pipefail
 
@@ -23,11 +23,7 @@ docker exec remnawave-minishop-postgres pg_dump -U remnawave_minishop -d remnawa
 docker cp remnawave-minishop-postgres:/tmp/shop.dump "$DEST/shop.dump"
 docker exec remnawave-minishop-postgres rm -f /tmp/shop.dump
 
-# --- shop-data volume (брендинг/загрузки) ---
-docker run --rm -v remnawave-minishop-shop-data:/data:ro alpine \
-  tar czf - -C /data . > "$DEST/shop-data.tar.gz"
-
-# --- конфиги (секреты - perms 600) ---
+# --- конфиги (секреты - perms 600; ~4КБ, env не в git) ---
 tar czf "$DEST/configs.tar.gz" -C "$BASE" proliv.env shop/.env docker-compose.yml 2>/dev/null || true
 
 chmod 600 "$DEST"/*

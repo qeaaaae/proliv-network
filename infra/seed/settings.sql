@@ -36,8 +36,8 @@ ON CONFLICT (key) DO UPDATE
 --   USER_AGREEMENT_URL          - лучше managed-документ (Админка -> Документы)
 -- Если всё же нужны внешние ссылки, раскомментировать и подставить:
 -- INSERT INTO app_setting_overrides (key, value, updated_at) VALUES
---   ('PRIVACY_POLICY_URL', '"https://proliv-network.xyz/legal/policy"', now()),
---   ('USER_AGREEMENT_URL', '"https://proliv-network.xyz/legal/terms"',  now())
+--   ('PRIVACY_POLICY_URL', '"https://proliv-network.xyz/privacy"', now()),
+--   ('USER_AGREEMENT_URL', '"https://proliv-network.xyz/terms"',  now())
 -- ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now();
 
 COMMIT;

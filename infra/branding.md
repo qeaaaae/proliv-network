@@ -121,8 +121,10 @@ TG-аватар бота сюда не относится — только BotFa
 
 **Готовый каталог Proliv:** `infra/seed/tariffs.json`. Один тариф `proliv`:
 
-- `billing_model: "period"`, `monthly_gb: 1024` (= 1 ТиБ «1 ТБ»; конверсия
-  `* 1024**3` байт — `tariffs_config.py:713`), `hwid_device_limit: 5`.
+- `billing_model: "period"`, `monthly_gb: 300` (300 ГиБ; конверсия
+  `* 1024**3` байт — `tariffs_config.py`), `traffic_limit_strategy: "MONTH_ROLLING"`
+  (цикл от даты покупки), `traffic_rollover: true` (остаток копится),
+  `hwid_device_limit: 3`.
 - `enabled_periods: [30, 90, 180, 365]` = 1/3/6/12 мес.
 - `prices_rub`: `30 → 179`; скидка задаётся просто ценой ниже кратной месячной:
   `90 → 499` (~166 ₽/мес), `180 → 949` (~158 ₽/мес), `365 → 1799` (~150 ₽/мес).
