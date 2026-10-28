@@ -171,7 +171,7 @@ class PanelWebhookService(PanelWebhookPayloadMixin):
                 if count <= 0:
                     return ""
                 active_until = summary.get("active_until") or sub.end_date
-                date_text = active_until.strftime("%Y-%m-%d") if active_until else ""
+                date_text = active_until.strftime("%d.%m.%Y") if active_until else ""
         except Exception:
             logger.exception("Failed to build HWID renewal note for user %s", internal_user_id)
             return ""

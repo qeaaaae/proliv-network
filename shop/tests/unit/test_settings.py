@@ -442,9 +442,9 @@ class SettingsTests(unittest.TestCase):
 
         self.assertFalse(referral_settings.enabled)
         self.assertEqual(referral_settings.bonus_days_inviter_1_month, 5)
-        self.assertEqual(referral_settings.bonus_days_inviter_3_months, 7)
+        self.assertIsNone(referral_settings.bonus_days_inviter_3_months)
         self.assertEqual(referral_settings.bonus_days_referee_12_months, 11)
-        self.assertEqual(referral_settings.bonus_days_referee_1_month, 1)
+        self.assertIsNone(referral_settings.bonus_days_referee_1_month)
         self.assertFalse(referral_settings.one_bonus_per_referee)
         self.assertEqual(referral_settings.welcome_bonus_days, 9)
         self.assertFalse(referral_settings.welcome_bonus_without_telegram_enabled)

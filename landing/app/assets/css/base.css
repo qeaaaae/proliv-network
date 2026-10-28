@@ -1,0 +1,62 @@
+html {
+  background: var(--bg);
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a3f var(--bg);
+}
+
+html::-webkit-scrollbar {
+  width: 10px;
+}
+
+html::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+
+html::-webkit-scrollbar-thumb {
+  background: #3a3a3f;
+  border: 3px solid var(--bg);
+  border-radius: 10px;
+}
+
+html::-webkit-scrollbar-thumb:hover {
+  background: #55555c;
+}
+
+body {
+  min-width: 0;
+  overflow-x: hidden;
+  color: var(--fg);
+  font-family: var(--font-text);
+  font-size: 16px;
+  font-weight: 450;
+  line-height: 1.55;
+  caret-color: var(--plate);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-weight: 700;
+}
+
+:focus-visible {
+  outline: 2px solid var(--plate);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+html[data-input-modality="pointer"] :focus-visible:not(input, textarea, select, [contenteditable]) {
+  outline: 0;
+}
+
+.site-shell {
+  position: relative;
+  min-height: 100dvh;
+}
+
+section[id] {
+  scroll-margin-top: calc(var(--header-height) + 16px);
+}

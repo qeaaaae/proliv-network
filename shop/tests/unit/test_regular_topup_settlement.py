@@ -100,6 +100,7 @@ class SettleRegularTopupTests(unittest.IsolatedAsyncioTestCase):
         current_baseline: int | None = None,
         history: dict[str, Any] | None = None,
         strategy: str = "MONTH",
+        rollover: bool = False,
     ) -> tuple[int, AsyncMock]:
         summary = AsyncMock(
             side_effect=lambda _session, **kw: {
@@ -132,7 +133,7 @@ class SettleRegularTopupTests(unittest.IsolatedAsyncioTestCase):
             consumed = await settle_regular_topup(
                 AsyncMock(),
                 sub,
-                SimpleNamespace(monthly_bytes=50 * GB),
+                SimpleNamespace(monthly_bytes=50 * GB, traffic_rollover=rollover),
                 subscription_service=_service(device_bonus),
                 used_bytes=used,
                 panel_user_data={"userTraffic": {"lifetimeUsedTrafficBytes": lifetime}},
@@ -307,6 +308,67 @@ class SettleRegularTopupTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(used=used, lifetime=lifetime):
                 consumed, _ = await self._settle(sub, used=used, lifetime=lifetime)
                 self.assertEqual((consumed, sub.traffic_topup_accounting_state), (0, snapshot))
+
+    async def test_rollover_moves_the_unused_quota_into_the_balance(self) -> None:
+        sub = self._sub()
+
+        consumed, _ = await self._settle(sub, used=0, lifetime=520 * GB, rollover=True)
+
+        # 40 of 50 GB were used in the ended period: the remaining 10 GB roll over.
+        self.assertEqual(consumed, 0)
+        self.assertEqual(sub.topup_balance_bytes, 60 * GB)
+        state = regular_topup_period(sub)
+        assert state is not None
+        self.assertEqual(state.rollable_allowance_bytes, 50 * GB)
+
+    async def test_rollover_does_not_roll_quota_that_was_spent(self) -> None:
+        sub = self._sub()
+
+        consumed, _ = await self._settle(sub, used=0, lifetime=560 * GB, rollover=True)
+
+        self.assertEqual(consumed, 30 * GB)
+        self.assertEqual(sub.topup_balance_bytes, 20 * GB)
+
+    async def test_rollover_keeps_the_whole_quota_after_an_idle_period(self) -> None:
+        sub = self._sub()
+
+        consumed, _ = await self._settle(sub, used=0, lifetime=480 * GB, rollover=True)
+
+        self.assertEqual(consumed, 0)
+        self.assertEqual(sub.topup_balance_bytes, 100 * GB)
+        self.assertEqual(sub.traffic_period_lifetime_start_bytes, 480 * GB)
+
+    async def test_rollover_accumulates_across_consecutive_resets(self) -> None:
+        sub = self._sub()
+        await self._settle(sub, used=0, lifetime=520 * GB, rollover=True)
+
+        consumed, _ = await self._settle(
+            sub,
+            used=0,
+            lifetime=560 * GB,
+            previous=datetime(2026, 10, 1, tzinfo=UTC),
+            current=datetime(2026, 11, 1, tzinfo=UTC),
+            rollover=True,
+        )
+
+        self.assertEqual(consumed, 0)
+        self.assertEqual(sub.topup_balance_bytes, 70 * GB)
+
+    async def test_rollover_missed_resets_roll_each_period_quota(self) -> None:
+        start = datetime(2026, 8, 1, tzinfo=UTC)
+        sub = self._sub(state_start=start)
+
+        consumed, _ = await self._settle(
+            sub,
+            used=0,
+            lifetime=580 * GB,
+            previous=start,
+            history=_history(start, datetime(2026, 10, 1, tzinfo=UTC), {0: 80 * GB, 31: 20 * GB}),
+            rollover=True,
+        )
+
+        # August overflow still charges the pack; September's unused 30 GB rolls.
+        self.assertEqual((consumed, sub.topup_balance_bytes), (30 * GB, 50 * GB))
 
 
 def _history(start: datetime, end: datetime, usage: dict[int, int]) -> dict[str, Any]:

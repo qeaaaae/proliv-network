@@ -12,7 +12,9 @@ interface TicketListItem {
   lastMessage: string
 }
 
-const { data: tickets, refresh } = await useFetch<TicketListItem[]>('/api/tickets')
+const { data: tickets, status, refresh } = useFetch<TicketListItem[]>('/api/tickets', {
+  lazy: true,
+})
 
 const formOpen = ref(false)
 const subject = ref('')
@@ -52,6 +54,15 @@ async function createTicket() {
     </div>
 
     <section class="panel">
+      <!-- Загрузка -->
+      <div v-if="status === 'pending'" class="panel--pad stack" aria-hidden="true">
+        <div class="skel" style="height: 15px; width: 60%" />
+        <div class="skel" style="height: 12px; width: 80%" />
+        <div class="skel" style="height: 15px; width: 45%" />
+        <div class="skel" style="height: 12px; width: 70%" />
+      </div>
+
+      <template v-else>
       <!-- Форма нового обращения -->
       <div v-if="formOpen || !tickets?.length" class="panel--pad stack" style="border-bottom: 1px solid var(--line)">
         <div class="field">
@@ -97,6 +108,7 @@ async function createTicket() {
         <div class="empty__icon"><LifeBuoy :size="22" /></div>
         <p style="margin: 0 auto">Обращения из кабинета и из бота прилетают в одно место - ответим и там, и тут.</p>
       </div>
+      </template>
     </section>
   </div>
 </template>

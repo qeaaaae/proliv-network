@@ -13,6 +13,7 @@ from bot.keyboards.inline.user_keyboards import (
     payment_methods_back_callback,
 )
 from bot.middlewares.i18n import JsonI18n
+from bot.services.telegram_account import resolve_telegram_account_id
 from bot.utils.callback_answer import callback_message_or_none
 from config.settings import Settings
 from config.tariffs_config import (
@@ -87,7 +88,12 @@ async def pay_yk_saved_list_handler(
             await callback.answer(get_text("error_try_again"), show_alert=True)
         return
 
-    user_id = callback.from_user.id
+    user_id = await resolve_telegram_account_id(session, callback.from_user.id)
+    if user_id is None:
+        logger.error("No linked account for telegram user %s.", callback.from_user.id)
+        with contextlib.suppress(Exception):
+            await callback.answer(get_text("error_try_again"), show_alert=True)
+        return
     try:
         saved_methods = await user_billing_dal.list_user_payment_methods(
             session, user_id, provider="yookassa"
@@ -242,7 +248,12 @@ async def pay_yk_use_saved_handler(
         return
 
     method_identifier = parts[2]
-    user_id = callback.from_user.id
+    user_id = await resolve_telegram_account_id(session, callback.from_user.id)
+    if user_id is None:
+        logger.error("No linked account for telegram user %s.", callback.from_user.id)
+        with contextlib.suppress(Exception):
+            await callback.answer(get_text("error_try_again"), show_alert=True)
+        return
     base_months = months
     base_price_rub = price_rub
     hwid_quote = None

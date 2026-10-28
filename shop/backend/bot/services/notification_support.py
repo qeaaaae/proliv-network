@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from aiogram import Bot
@@ -33,11 +34,31 @@ from bot.services.user_notification_policy import (
 )
 from bot.utils import MessageContent, send_message_via_queue
 from bot.utils.message_queue import get_queue_manager
-from bot.utils.mini_app_url import subscription_main_mini_app_deep_link
+from bot.utils.mini_app_url import (
+    admin_mini_app_path_url,
+    bot_start_deep_link,
+    subscription_main_mini_app_deep_link,
+)
 from db.dal import app_settings_dal, user_dal
 from db.models import SupportTicket, SupportTicketMessage, User
 
 logger = logging.getLogger(__name__)
+
+
+def _display_datetime(value: object) -> str:
+    """Render an ISO-8601 snapshot timestamp as ``dd.MM.yyyy HH:mm`` (RF style,
+    no timezone suffix)."""
+    if not value:
+        return ""
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return str(value)
+    return parsed.strftime("%d.%m.%Y %H:%M")
+
 
 if TYPE_CHECKING:
     from bot.middlewares.i18n import JsonI18n
@@ -73,11 +94,21 @@ class NotificationSupportMixin(NotificationUserContextMixin):
         ) -> None: ...
 
     def _support_webapp_url(self, path: str) -> str | None:
+        normalized_path = str(path or "").strip()
+        if normalized_path.lstrip("/").startswith("admin/"):
+            return admin_mini_app_path_url(self.settings, normalized_path)
         base_url = str(getattr(self.settings, "SUBSCRIPTION_MINI_APP_URL", "") or "").strip()
         if not base_url:
             return None
-        normalized_path = f"/{str(path or '').lstrip('/')}"
+        normalized_path = f"/{normalized_path.lstrip('/')}"
         return f"{base_url.rstrip('/')}{normalized_path}"
+
+    def _admin_panel_split(self, path: str) -> bool:
+        """True when ``path`` is an admin route hosted on a dedicated origin."""
+        return bool(
+            str(path or "").lstrip("/").startswith("admin/")
+            and str(getattr(self.settings, "WEBAPP_ADMIN_URL", "") or "").strip()
+        )
 
     def _support_ticket_url(self, ticket_id: int, *, admin: bool = True) -> str:
         path = f"/admin/support/{ticket_id}" if admin else f"/support/{ticket_id}"
@@ -101,7 +132,10 @@ class NotificationSupportMixin(NotificationUserContextMixin):
         webapp_url = self._support_webapp_url(path)
         if webapp_url and web_app_button:
             return InlineKeyboardButton(text=text, web_app=WebAppInfo(url=webapp_url))
-        if webapp_url:
+        # With a dedicated admin origin the user Mini App cannot resolve
+        # admin_* startapp params, so the log-channel button points at the
+        # admin panel URL directly instead of the bot deep link.
+        if webapp_url and not self._admin_panel_split(path):
             mini_app_link = subscription_main_mini_app_deep_link(
                 self.settings,
                 self.bot_username,
@@ -173,7 +207,7 @@ class NotificationSupportMixin(NotificationUserContextMixin):
         ):
             value = snapshot.get(key)
             if value:
-                rows.append((label, str(value)))
+                rows.append((label, _display_datetime(value) if key == "end_date" else str(value)))
         return rows
 
     @staticmethod
@@ -239,29 +273,22 @@ class NotificationSupportMixin(NotificationUserContextMixin):
         admin: bool = True,
         web_app_buttons: bool = True,
     ) -> InlineKeyboardMarkup:
-        ticket_path = (
-            f"/admin/support/{ticket.ticket_id}" if admin else f"/support/{ticket.ticket_id}"
+        open_text = self._support_text(
+            self.settings.DEFAULT_LANGUAGE,
+            "wa_support_open_ticket",
+            "Open ticket",
         )
-        rows = [
-            [
-                self._support_mini_app_button(
-                    text=self._support_text(
-                        self.settings.DEFAULT_LANGUAGE,
-                        "wa_support_open_ticket",
-                        "Open ticket",
-                    ),
-                    path=ticket_path,
-                    start_param=(
-                        f"admin_ticket_{ticket.ticket_id}"
-                        if admin
-                        else f"ticket_{ticket.ticket_id}"
-                    ),
-                    fallback_url=self._support_ticket_url(ticket.ticket_id, admin=admin),
-                    web_app_button=web_app_buttons,
-                )
-            ]
-        ]
         if admin and web_app_buttons:
+            # Admin private-chat notifications work inside the bot: the ticket
+            # opens in-place and the user card reuses the management callback.
+            rows = [
+                [
+                    InlineKeyboardButton(
+                        text=open_text,
+                        callback_data=f"admin_ticket:{ticket.ticket_id}",
+                    )
+                ]
+            ]
             profile_row = []
             if getattr(user, "telegram_id", None) and int(user.telegram_id) > 0:
                 profile_row.append(
@@ -274,25 +301,25 @@ class NotificationSupportMixin(NotificationUserContextMixin):
                         url=f"tg://user?id={user.telegram_id}",
                     )
                 )
-            user_card_id = getattr(user, "minishop_id", None) or user.user_id
-            user_card_path = f"/admin/users/{user_card_id}"
-            if self._support_webapp_url(user_card_path):
-                profile_row.append(
-                    self._support_mini_app_button(
-                        text=self._support_text(
-                            self.settings.DEFAULT_LANGUAGE,
-                            "support_user_card_button",
-                            "User card",
-                        ),
-                        path=user_card_path,
-                        start_param=f"admin_user_{user_card_id}",
-                        fallback_url=self._support_ticket_url(ticket.ticket_id, admin=True),
-                        web_app_button=web_app_buttons,
-                    )
+            profile_row.append(
+                InlineKeyboardButton(
+                    text=self._support_text(
+                        self.settings.DEFAULT_LANGUAGE,
+                        "support_user_card_button",
+                        "User card",
+                    ),
+                    callback_data=f"admin_user_card_from_list:{user.user_id}:0",
                 )
-            if profile_row:
-                rows.append(profile_row)
-        elif admin:
+            )
+            rows.append(profile_row)
+            return InlineKeyboardMarkup(inline_keyboard=rows)
+        if admin:
+            # The log channel cannot deliver callbacks, so it deep-links into
+            # the bot's admin chat, mirroring the user-card deep link.
+            ticket_link = bot_start_deep_link(
+                self.bot_username, f"admin_ticket_{ticket.ticket_id}"
+            ) or self._support_ticket_url(ticket.ticket_id, admin=True)
+            rows = [[InlineKeyboardButton(text=open_text, url=ticket_link)]]
             translate = lambda key, **kwargs: self._support_text(
                 self.settings.DEFAULT_LANGUAGE, key, key, **kwargs
             )
@@ -304,7 +331,20 @@ class NotificationSupportMixin(NotificationUserContextMixin):
             )
             if navigation is not None:
                 rows.extend(navigation.inline_keyboard)
-        return InlineKeyboardMarkup(inline_keyboard=rows)
+            return InlineKeyboardMarkup(inline_keyboard=rows)
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    self._support_mini_app_button(
+                        text=open_text,
+                        path=f"/support/{ticket.ticket_id}",
+                        start_param=f"ticket_{ticket.ticket_id}",
+                        fallback_url=self._support_ticket_url(ticket.ticket_id, admin=False),
+                        web_app_button=web_app_buttons,
+                    )
+                ]
+            ]
+        )
 
     def _support_log_thread_id(self) -> int | None:
         return getattr(self.settings, "LOG_SUPPORT_THREAD_ID", None)
@@ -448,10 +488,12 @@ class NotificationSupportMixin(NotificationUserContextMixin):
     ) -> None:
         if not getattr(self.settings, "LOG_SUPPORT", True):
             return
-        priority_emoji = {"low": "🟢", "normal": "🟡", "high": "🟠", "urgent": "🔴"}.get(
-            ticket.priority,
-            "🟡",
-        )
+        priority_emoji = {
+            "low": '<tg-emoji emoji-id="5994324703559290598">🟢</tg-emoji>',
+            "normal": '<tg-emoji emoji-id="5879785854284599288">🟡</tg-emoji>',
+            "high": '<tg-emoji emoji-id="5881702736843511327">🟠</tg-emoji>',
+            "urgent": '<tg-emoji emoji-id="5967333011652350314">🔴</tg-emoji>',
+        }.get(ticket.priority, '<tg-emoji emoji-id="5879785854284599288">🟡</tg-emoji>')
         preview = self._support_preview(first_message, body_format)
         preview_html = self._support_preview_html(first_message, body_format)
         user_display = self._support_user_display(user)
@@ -479,7 +521,7 @@ class NotificationSupportMixin(NotificationUserContextMixin):
             ),
             user_id=hd.quote(str(getattr(user, "minishop_id", None) or "—")),
             tariff=hd.quote(str(snapshot.get("tariff") or "—")),
-            end_date=hd.quote(str(snapshot.get("end_date") or "—")),
+            end_date=hd.quote(_display_datetime(snapshot.get("end_date")) or "—"),
             remaining=hd.quote(str(snapshot.get("remaining") or "—")),
             status=hd.quote(str(snapshot.get("panel_status") or "—")),
             message=preview_html,

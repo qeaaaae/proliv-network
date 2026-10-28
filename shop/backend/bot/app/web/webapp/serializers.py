@@ -478,6 +478,16 @@ async def _build_user_payload(request: web.Request, user_id: int) -> dict[str, A
             ),
             "welcome_bonus_block_reason": referral_welcome_telegram_required_reason,
             "one_bonus_per_referee": bool(referral_settings.one_bonus_per_referee),
+            "friend_discount_percent": (
+                float(settings.REFERRAL_FRIEND_DISCOUNT_PERCENT or 0)
+                if referral_program_enabled
+                else 0.0
+            ),
+            "exchange_day_price": (
+                float(settings.BONUS_EXCHANGE_DAY_PRICE)
+                if settings.BONUS_EXCHANGE_DAY_PRICE and settings.BONUS_EXCHANGE_DAY_PRICE > 0
+                else None
+            ),
             "bonus_details": _serialize_referral_bonus_details(settings, lang),
         },
         "plans": periods_for_client(request, plans_payload),

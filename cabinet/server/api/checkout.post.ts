@@ -32,6 +32,8 @@ export default defineEventHandler(async (event) => {
     giftTo?: string
     extra?: string
     promo?: string
+    balanceSource?: string
+    saleMode?: string
   }>(event)
 
   const me = await shopFetch<ShopMe>(event, '/api/me')
@@ -39,8 +41,17 @@ export default defineEventHandler(async (event) => {
   const method = body?.method || 'yookassa'
   const payload: Record<string, unknown> = { method }
   if (body?.promo) payload.promo_code = body.promo
+  // Балансная скидка upstream: бэкенд сам списывает сколько хватает
+  // (полностью или до минималки провайдера) и выставляет инвойс на остаток.
+  if (body?.balanceSource === 'user' || body?.balanceSource === 'partner') {
+    payload.balance_source = body.balanceSource
+  }
 
-  if (body?.extra) {
+  if (body?.saleMode === 'trial') {
+    // Платный триал: цена и срок считаются на бэкенде из TRIAL_* настроек,
+    // upstream сам выставит инвойс и активирует триал после оплаты.
+    payload.sale_mode = 'trial'
+  } else if (body?.extra) {
     // Докупка: traffic-{gb} | premium-{gb} | device-{count}
     const m = /^(traffic|premium|device)-(\d+(?:\.\d+)?)$/i.exec(body.extra)
     if (!m) throw createError({ statusCode: 400, statusMessage: 'Неизвестный пакет' })
@@ -100,6 +111,14 @@ export default defineEventHandler(async (event) => {
       const giftTo = (body.giftTo || '').trim()
       if (giftTo) payload.gift_recipient_email = giftTo
     }
+  }
+
+  // Реферальная скидка друга: бэкенд сам предлагает персональный промокод
+  // (suggested_promo_code) приглашённым юзерам - подставляем его на
+  // подписочные покупки, если промокод не указан явно. Валидность и
+  // привязку к юзеру бэкенд проверяет сам.
+  if (!payload.promo_code && payload.sale_mode === 'subscription' && me.suggested_promo_code) {
+    payload.promo_code = me.suggested_promo_code
   }
 
   const res = await shopFetch<ShopPaymentResult>(event, '/api/payments', { method: 'POST', body: payload })

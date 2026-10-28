@@ -124,6 +124,31 @@
           {/if}
         </div>
       </AdminSettingCard>
+
+      <AdminSettingCard
+        title={at("tariff_label_traffic_rollover", {}, "Carry unused traffic over")}
+        description={at(
+          "tariff_hint_traffic_rollover",
+          {},
+          "When the period counter resets, the unused part of the monthly quota moves into the carried balance: the next period opens with monthly limit plus what was left over. Device quota bonuses do not carry over."
+        )}
+      >
+        <div class="admin-setting-switch">
+          <Switch.Root
+            aria-label={at("tariff_label_traffic_rollover", {}, "Carry unused traffic over")}
+            checked={Boolean(tariffDraft.traffic_rollover)}
+            onCheckedChange={(value) => tariffsStore.updateDraftField("traffic_rollover", value)}
+            class="admin-switch-root"
+          >
+            <Switch.Thumb class="admin-switch-thumb" />
+          </Switch.Root>
+          <span>
+            {tariffDraft.traffic_rollover
+              ? at("enabled", {}, "Enabled")
+              : at("disabled", {}, "Disabled")}
+          </span>
+        </div>
+      </AdminSettingCard>
     </AdminSettingsGroup>
 
     {#if Number(tariffDraft.monthly_gb || 0) > 0}

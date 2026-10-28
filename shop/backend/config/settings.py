@@ -220,7 +220,9 @@ class Settings(
         default=None,
         gt=0,
         allow_inf_nan=False,
-        description="Balance price per 1 subscription day in the bonus exchange. Empty disables it.",
+        description=(
+            "Balance price per 1 subscription day in the bonus exchange. Empty disables it."
+        ),
     )
 
     SUPPORT_LINK: str | None = Field(default=None)
@@ -240,7 +242,9 @@ class Settings(
     USER_AGREEMENT_URL: str | None = Field(default=None)
     REFERRAL_INFO_URL: str | None = Field(
         default=None,
-        description="Public page describing the referral program; shown as a link button in the bot.",
+        description=(
+            "Public page describing the referral program; shown as a link button in the bot."
+        ),
     )
     REQUIRED_CHANNEL_ID: int | None = Field(
         default=None, description="Telegram channel ID the user must join to access the bot"
@@ -386,29 +390,29 @@ class Settings(
     TORRENT_BLOCKER_NOTIFICATION_INCLUDE_IP: bool = Field(default=False)
 
     REFERRAL_BONUS_DAYS_INVITER_1_MONTH: int | None = Field(
-        default=3, alias="REFERRAL_BONUS_DAYS_1_MONTH"
+        default=None, alias="REFERRAL_BONUS_DAYS_1_MONTH"
     )
     REFERRAL_BONUS_DAYS_INVITER_3_MONTHS: int | None = Field(
-        default=7, alias="REFERRAL_BONUS_DAYS_3_MONTHS"
+        default=None, alias="REFERRAL_BONUS_DAYS_3_MONTHS"
     )
     REFERRAL_BONUS_DAYS_INVITER_6_MONTHS: int | None = Field(
-        default=15, alias="REFERRAL_BONUS_DAYS_6_MONTHS"
+        default=None, alias="REFERRAL_BONUS_DAYS_6_MONTHS"
     )
     REFERRAL_BONUS_DAYS_INVITER_12_MONTHS: int | None = Field(
-        default=30, alias="REFERRAL_BONUS_DAYS_12_MONTHS"
+        default=None, alias="REFERRAL_BONUS_DAYS_12_MONTHS"
     )
 
     REFERRAL_BONUS_DAYS_REFEREE_1_MONTH: int | None = Field(
-        default=1, alias="REFEREE_BONUS_DAYS_1_MONTH"
+        default=None, alias="REFEREE_BONUS_DAYS_1_MONTH"
     )
     REFERRAL_BONUS_DAYS_REFEREE_3_MONTHS: int | None = Field(
-        default=3, alias="REFEREE_BONUS_DAYS_3_MONTHS"
+        default=None, alias="REFEREE_BONUS_DAYS_3_MONTHS"
     )
     REFERRAL_BONUS_DAYS_REFEREE_6_MONTHS: int | None = Field(
-        default=7, alias="REFEREE_BONUS_DAYS_6_MONTHS"
+        default=None, alias="REFEREE_BONUS_DAYS_6_MONTHS"
     )
     REFERRAL_BONUS_DAYS_REFEREE_12_MONTHS: int | None = Field(
-        default=15, alias="REFEREE_BONUS_DAYS_12_MONTHS"
+        default=None, alias="REFEREE_BONUS_DAYS_12_MONTHS"
     )
     # Referral program configuration
     GIFTS_ENABLED: bool = True
@@ -427,8 +431,17 @@ class Settings(
         ),
     )
     REFERRAL_WELCOME_BONUS_DAYS: int = Field(
-        default=3,
+        default=0,
         description="Welcome bonus days granted to a newly registered user who joined via referral link.",  # noqa: E501
+    )
+    REFERRAL_FRIEND_DISCOUNT_PERCENT: float = Field(
+        default=10.0,
+        ge=0,
+        le=100,
+        description=(
+            "Checkout discount percent granted to an invited user on their first "
+            "subscription purchase via a personal single-use promo code. 0 disables."
+        ),
     )
     REFERRAL_WELCOME_BONUS_WITHOUT_TELEGRAM_ENABLED: bool = Field(
         default=True,
@@ -463,7 +476,7 @@ class Settings(
     PARTNER_CLIENT_WELCOME_BONUS_ENABLED: bool = False
     PARTNER_CLIENT_PAYMENT_BONUS_ENABLED: bool = False
     PARTNER_ONE_BONUS_PER_CLIENT: bool = True
-    PARTNER_DEFAULT_COMMISSION_BPS: int = Field(default=3000, ge=0, le=10000)
+    PARTNER_DEFAULT_COMMISSION_BPS: int = Field(default=1500, ge=0, le=10000)
     PARTNER_COMMISSION_HOLD_DAYS: int = Field(default=0, ge=0, le=365)
     PARTNER_ELIGIBLE_CURRENCIES: str = Field(
         default='["RUB"]',
@@ -690,6 +703,15 @@ class Settings(
     SUPPORT_ADMIN_EMAIL_COOLDOWN_SECONDS: int = Field(default=30 * 60)
     SUBSCRIPTION_MINI_APP_URL: str | None = Field(default=None)
     PUBLIC_APP_URL: str | None = Field(default=None)
+    WEBAPP_ADMIN_URL: str | None = Field(
+        default=None,
+        description=(
+            "Optional base URL of the Mini App admin panel (e.g. "
+            "https://admin.example.com). Used for admin deep links when the "
+            "user-facing Mini App is hosted on a different origin. Falls back "
+            "to SUBSCRIPTION_MINI_APP_URL when unset."
+        ),
+    )
     SUBSCRIPTION_GATEWAY_ENABLED: bool = Field(default=True)
     SUBSCRIPTION_LINK_MODE: Literal["panel", "minishop"] = Field(default="panel")
     SUBSCRIPTION_GATEWAY_REWRITE_PROFILE_PAGE_URL: bool = Field(default=False)

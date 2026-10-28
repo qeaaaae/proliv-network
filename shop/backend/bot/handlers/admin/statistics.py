@@ -240,7 +240,7 @@ async def show_statistics_handler(
                 user_info += f" ({payment.user.first_name})"
 
             payment_date_str = (
-                payment.created_at.strftime("%Y-%m-%d") if payment.created_at else "N/A"
+                payment.created_at.strftime("%d.%m.%Y") if payment.created_at else "N/A"
             )
 
             stats_text_parts.append(
@@ -262,7 +262,7 @@ async def show_statistics_handler(
         stats_text_parts.append(f"\n<b>{_('admin_stats_last_sync_header')}</b>")
 
         sync_time_val = sync_status_model.last_sync_time
-        sync_time_str = sync_time_val.strftime("%Y-%m-%d %H:%M:%S UTC") if sync_time_val else "N/A"
+        sync_time_str = sync_time_val.strftime("%d.%m.%Y %H:%M") if sync_time_val else "N/A"
 
         details_val = sync_status_model.details
         details_str = details_val or "N/A"

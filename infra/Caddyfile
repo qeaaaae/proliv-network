@@ -15,21 +15,75 @@
 }
 
 # --- Лендинг - корневой домен ----------------------------------------------
-${DOMAIN} {
+${DOMAIN}, www.${DOMAIN} {
 	encode
-	reverse_proxy landing:80
+	reverse_proxy proliv-landing:80
+}
+
+# --- Личный кабинет / Mini App - app.${DOMAIN} --------------------------------
+app.${DOMAIN} {
+	encode
+	# Публичные install-гайды и share-ссылки подписки (/s/<token>) отдаёт minishop
+	# на :8081 - кабинет (Nuxt) этих путей не имеет. Его SPA тянет свои бандлы,
+	# темы и публичный гайд-API с того же origin, поэтому whitelist повторяет
+	# набор статических путей из блока admin.${DOMAIN}. Для VPN-клиентов /s/<token>
+	# отдаёт саму подписку (SUBSCRIPTION_GATEWAY) - прокси обязан быть полным.
+	@minishop path /s/* /api/subscription-guides/public/* /api/bootstrap /api/i18n /subscription_webapp* /webapp-* /provider-logos/* /fonts/* /favicon.ico /apple-touch-icon* /icon-* /robots.txt
+	handle @minishop {
+		reverse_proxy remnawave-minishop-backend:8081 {
+			header_up X-Forwarded-Proto https
+		}
+	}
+	reverse_proxy proliv-cabinet:80
+}
+
+# --- Админка Mini App - admin.${DOMAIN} --------------------------------------
+# Веб-приложение (SPA + /api + /admin/*) отдаёт сам minishop-backend на :8081.
+# Админская работа идёт внутри Telegram Mini App, поэтому из браузера открыты
+# только то, что реально нужно WebView: админские страницы, API и статика.
+# Всё остальное (юзерские страницы, webauth/oauth-флоу, health) - 404.
+admin.${DOMAIN} {
+	encode
+	@blocked not path /admin* /api/* /subscription_webapp* /webapp-* /provider-logos/* /fonts/* /favicon.ico /apple-touch-icon* /icon-* /robots.txt
+	respond @blocked 404
+	reverse_proxy remnawave-minishop-backend:8081 {
+		header_up X-Forwarded-Proto https
+	}
 }
 
 # --- Remnawave panel - panel.${DOMAIN} --------------------------------------
 panel.${DOMAIN} {
 	encode
-	reverse_proxy remnawave:3000
+	reverse_proxy remnawave:3000 {
+		header_up X-Forwarded-Proto https
+	}
 }
 
 # --- Subscription page - sub.${DOMAIN} ---------------------------------------
 sub.${DOMAIN} {
 	encode
-	reverse_proxy remnawave-subscription-page:3010
+	# Голый корень - на лендинг (subpage без uuid всё равно падает)
+	@root path /
+	redir @root https://${DOMAIN} 302
+	reverse_proxy remnawave-subscription-page:3010 {
+		header_up X-Forwarded-Proto https
+	}
+}
+
+# --- Webhooks - api.${DOMAIN}: /tg/webhook -> bot, /webhook/* -> backend -----
+api.${DOMAIN} {
+	encode
+	@tg path /tg/webhook*
+	handle @tg {
+		reverse_proxy remnawave-minishop-bot:8080
+	}
+	@wh path /webhook/*
+	handle @wh {
+		reverse_proxy remnawave-minishop-backend:8080
+	}
+	handle {
+		respond 404
+	}
 }
 
 # --- Всё остальное на 443 - тихий 204 (как в офиц. рецепте docs.rw) -----------
@@ -47,13 +101,6 @@ sub.${DOMAIN} {
 # wp.${DOMAIN} {
 # 	encode
 # 	reverse_proxy tg-proxy:8080
-# }
-
-# --- Mini App (личный кабинет) - app.${DOMAIN} --------------------------------
-#
-# app.${DOMAIN} {
-# 	encode
-# 	reverse_proxy webapp:80
 # }
 
 # --- CDN-ориджины нод - cdn-ee.${DOMAIN} / cdn-uk.${DOMAIN} -------------------

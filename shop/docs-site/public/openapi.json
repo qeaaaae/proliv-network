@@ -15615,6 +15615,11 @@
             ],
             "default": null
           },
+          "traffic_rollover": {
+            "default": false,
+            "title": "Traffic Rollover",
+            "type": "boolean"
+          },
           "tribute": {
             "anyOf": [
               {
@@ -18237,6 +18242,21 @@
           "request_id"
         ],
         "title": "WebAppQrLoginRequestPayload",
+        "type": "object"
+      },
+      "WebAppReferralExchangePayload": {
+        "properties": {
+          "days": {
+            "maximum": 3660,
+            "minimum": 1,
+            "title": "Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "days"
+        ],
+        "title": "WebAppReferralExchangePayload",
         "type": "object"
       },
       "WebAppSetPasswordPayload": {
@@ -36078,6 +36098,15 @@
                             "null"
                           ]
                         },
+                        "exchange_day_price": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "friend_discount_percent": {
+                          "type": "number"
+                        },
                         "invited_count": {
                           "type": "integer"
                         },
@@ -38289,6 +38318,73 @@
         "summary": "Promo Status",
         "tags": [
           "promo"
+        ]
+      }
+    },
+    "/api/referral/exchange": {
+      "post": {
+        "operationId": "post_referral_exchange_route",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebAppReferralExchangePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "days": {
+                      "type": "integer"
+                    },
+                    "end_date": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "end_date_text": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "days",
+                    "end_date",
+                    "end_date_text"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "JSON response"
+          }
+        },
+        "security": [
+          {
+            "UserSession": []
+          },
+          {
+            "UserBearer": []
+          }
+        ],
+        "summary": "Referral Exchange",
+        "tags": [
+          "referral"
         ]
       }
     },

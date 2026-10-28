@@ -24,6 +24,10 @@ services:
     container_name: remnawave
     hostname: remnawave
     <<: [*common, *logging, *env]
+    environment:
+      # Домен subscription-страницы для генерации ссылок (без схемы - панель сама лепит https://)
+      - SUB_PUBLIC_DOMAIN=sub.proliv-network.xyz
+      - PANEL_DOMAIN=panel.proliv-network.xyz
     volumes:
       - valkey-socket:/var/run/valkey
     ports:
@@ -93,7 +97,9 @@ services:
     profiles: ['subpage']
     environment:
       - APP_PORT=3010
-      - REMNAWAVE_PANEL_URL=http://remnawave:3000
+      # Панель отклоняет plain-HTTP без X-Forwarded-* (ProxyCheckMiddleware) -
+      # идём через devproxy, который их подставляет.
+      - REMNAWAVE_PANEL_URL=http://proliv-devproxy:3443
       - REMNAWAVE_API_TOKEN=${SUBPAGE_API_TOKEN:-change_me}
       - TRUST_PROXY=1
     ports:
@@ -101,8 +107,12 @@ services:
     depends_on:
       remnawave:
         condition: service_healthy
+      devproxy:
+        condition: service_started
 
-  # ---------- Local dev proxy: panel требует HTTPS через reverse proxy ----------
+  # ---------- Internal proxy: panel требует X-Forwarded-* (HTTPS через reverse proxy) ----------
+  # Нужен всегда, не только в dev: subpage и локальные проверки ходят в панель через него.
+  # :3443 -> panel, :3444 -> subpage, :8090 -> webhook edge для туннеля. Все порты на 127.0.0.1.
   devproxy:
     image: caddy:2-alpine
     container_name: proliv-devproxy
@@ -110,7 +120,6 @@ services:
     networks:
       - remnawave-network
       - remnawave-minishop-network
-    profiles: ['dev']
     volumes:
       - ./infra/Caddyfile.local:/etc/caddy/Caddyfile:ro
     ports:
@@ -126,12 +135,12 @@ services:
     build:
       context: ./landing
       args:
-        NUXT_PUBLIC_CABINET_URL: ${NUXT_PUBLIC_CABINET_URL:-http://localhost:8082}
+        NUXT_PUBLIC_CABINET_URL: ${NUXT_PUBLIC_CABINET_URL:-https://app.proliv-network.xyz}
     container_name: proliv-landing
     restart: unless-stopped
     profiles: ['site']
     volumes:
-      - ./status:/usr/share/nginx/html/status:ro
+      - ./status:/usr/share/nginx/html/status-data:ro
     ports:
       - 127.0.0.1:8080:80
 
@@ -140,18 +149,26 @@ services:
     build:
       context: ./cabinet
       args:
-        NUXT_PUBLIC_LANDING_URL: ${NUXT_PUBLIC_LANDING_URL:-http://localhost:8080}
+        NUXT_PUBLIC_LANDING_URL: ${NUXT_PUBLIC_LANDING_URL:-https://proliv-network.xyz}
         NUXT_PUBLIC_BOT_USERNAME: ${NUXT_PUBLIC_BOT_USERNAME:-}
     container_name: proliv-cabinet
     restart: unless-stopped
     profiles: ['app']
     networks:
       - remnawave-network
-    env_file: proliv.env
+    # env_file специально НЕ используем: он тянул в контейнер чужие
+    # TELEGRAM_* переменные из proliv.env. Только нужные - явно ниже.
     environment:
-      - NUXT_PUBLIC_DEV_AUTH=${NUXT_PUBLIC_DEV_AUTH:-1}
+      - NUXT_PUBLIC_DEV_AUTH=${NUXT_PUBLIC_DEV_AUTH:-0}
+      - NUXT_PUBLIC_BOT_USERNAME=${NUXT_PUBLIC_BOT_USERNAME:-}
+      # Публичные URL: Nitro берёт их из runtime env, они перекрывают bake-time значения
+      - NUXT_PUBLIC_LANDING_URL=${NUXT_PUBLIC_LANDING_URL:-https://proliv-network.xyz}
+      - NUXT_PUBLIC_CABINET_URL=${NUXT_PUBLIC_CABINET_URL:-https://app.proliv-network.xyz}
       # Внутренний URL WebApp API бэкенда (minishop), по docker-сети
       - NUXT_SHOP_API_URL=${NUXT_SHOP_API_URL:-http://remnawave-minishop-backend:8081}
+      - NUXT_BOT_TOKEN=${NUXT_BOT_TOKEN:-}
+      - NUXT_SESSION_SECRET=${NUXT_SESSION_SECRET:-}
+      - NUXT_TELEGRAM_OAUTH_CLIENT_SECRET=${NUXT_TELEGRAM_OAUTH_CLIENT_SECRET:-}
     ports:
       - 127.0.0.1:8082:80
 

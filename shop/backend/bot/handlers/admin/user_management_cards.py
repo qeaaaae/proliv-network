@@ -187,7 +187,7 @@ async def format_user_card(
     else:
         username_display = na_value
     registration_date = (
-        user.registration_date.strftime("%Y-%m-%d %H:%M") if user.registration_date else na_value
+        user.registration_date.strftime("%d.%m.%Y %H:%M") if user.registration_date else na_value
     )
 
     card_parts.append(
@@ -233,7 +233,7 @@ async def format_user_card(
             end_date = subscription_details.get("end_date")
             if end_date:
                 end_date_str = (
-                    end_date.strftime("%Y-%m-%d %H:%M")
+                    end_date.strftime("%d.%m.%Y %H:%M")
                     if isinstance(end_date, datetime)
                     else str(end_date)
                 )

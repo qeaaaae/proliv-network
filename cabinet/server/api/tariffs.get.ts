@@ -7,6 +7,12 @@ import {
   type ShopTopupOptions,
 } from '../utils/backend'
 
+interface ShopBalance {
+  enabled?: boolean
+  currency_scale?: number
+  sources?: { id?: string; available?: boolean; amount_minor?: number }[]
+}
+
 function planDays(p: ShopPlan): number {
   return p.duration_days ?? Math.round((p.months ?? 1) * 30)
 }
@@ -21,10 +27,11 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 503, statusMessage: 'Backend is not configured' })
   }
 
-  const [me, trafficOpts, deviceOpts] = await Promise.all([
+  const [me, trafficOpts, deviceOpts, balance] = await Promise.all([
     shopFetch<ShopMe>(event, '/api/me'),
     shopFetch<ShopTopupOptions>(event, '/api/tariffs/topup-options').catch(() => null),
     shopFetch<ShopTopupOptions>(event, '/api/devices/topup-options').catch(() => null),
+    shopFetch<ShopBalance>(event, '/api/balance').catch(() => null),
   ])
   const plans = me.plans ?? []
   const main =
@@ -47,13 +54,21 @@ export default defineEventHandler(async (event) => {
     })
 
   // Докупки: трафик-пакеты (обычные + premium) и пакеты устройств.
-  const extras: { id: string; title: string; price: number }[] = []
+  const deviceUnits = (n: number) =>
+    n % 10 === 1 && n % 100 !== 11
+      ? 'устройство'
+      : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20)
+        ? 'устройства'
+        : 'устройств'
+  const bareTitle = (t: string | undefined) => !t || /^\+\d+$/.test(t.trim())
+  const extras: { id: string; kind: 'traffic' | 'device'; title: string; price: number }[] = []
   for (const p of trafficOpts?.plans ?? []) {
     const gb = Number(p.traffic_gb ?? p.months ?? 0)
     if (!gb) continue
     extras.push({
       id: `${p.sale_mode === 'premium_topup' ? 'premium' : 'traffic'}-${gb}`,
-      title: p.title || `+${gb} ГБ`,
+      kind: 'traffic',
+      title: bareTitle(p.title) ? `+${gb} ГБ` : (p.title ?? ''),
       price: p.price ?? 0,
     })
   }
@@ -62,25 +77,38 @@ export default defineEventHandler(async (event) => {
     if (!count) continue
     extras.push({
       id: `device-${count}`,
-      title: p.title || `+${count} устройств`,
+      kind: 'device',
+      title: bareTitle(p.title) ? `+${count} ${deviceUnits(count)}` : (p.title ?? ''),
       price: p.price ?? 0,
     })
   }
   if (!extras.length) {
     // Фолбэк: пакеты устройств из карточки тарифа (/api/me -> plans)
     for (const p of main?.hwid_device_packages ?? []) {
+      const count = Number(p.device_count ?? 0)
       extras.push({
         id: `device-${p.device_count ?? p.id}`,
-        title: p.title || `+${p.device_count} устройство`,
+        kind: 'device',
+        title: bareTitle(p.title) ? `+${count} ${deviceUnits(count)}` : (p.title ?? ''),
         price: p.price ?? 0,
       })
     }
   }
 
+  // minishop в icon шлёт lucide-имя для своего webapp, а не URL - поэтому
+  // логотипы мапим по id провайдера на локальные svg; абсолютный URL
+  // (если админ задал свой) пропускаем как есть.
+  const METHOD_ICONS: Record<string, string> = {
+    yookassa: '/images/payments/yookassa.svg',
+    cryptobot: '/images/payments/cryptobot.svg',
+    heleket: '/images/payments/heleket.svg',
+  }
   const methods = (me.payment_methods ?? []).map((m) => ({
     id: m.id || '',
     title: m.name || m.id || '',
-    icon: m.icon || (m.id === 'yookassa' ? '/images/payments/yookassa.svg' : ''),
+    icon:
+      METHOD_ICONS[m.id ?? ''] ??
+      (m.icon && /^https?:\/\//.test(m.icon) ? m.icon : ''),
   }))
 
   const specParts: string[] = []
@@ -90,13 +118,27 @@ export default defineEventHandler(async (event) => {
     specParts.push(`${main.device_count ?? main.hwid_device_limit} устройств`)
   }
 
+  // Балансы для галочки «списать бонусы» в чекауте: user = бонусный счёт,
+  // partner = комиссии партнёрки. available флаг уже учитывает enabled и
+  // ненулевой остаток; партнёр - ещё и balance_payment_enabled.
+  const scale = balance?.currency_scale ?? 2
+  const srcAmount = (id: string) => {
+    if (balance?.enabled === false) return 0
+    const s = balance?.sources?.find((x) => x.id === id)
+    return s?.available ? (s.amount_minor ?? 0) / 10 ** scale : 0
+  }
+
   return {
     plan: {
       name: me.subscription?.tariff_name || main?.tariff_name || 'Proliv Network',
       spec: specParts.join(', ') || main?.description || '',
+      devices: main?.device_count ?? main?.hwid_device_limit ?? 0,
     },
     periods,
     extras,
     methods,
+    balances: { user: srcAmount('user'), partner: srcAmount('partner') },
+    suggestedPromoCode: me.suggested_promo_code ?? null,
+    friendDiscountPercent: Number(me.referral?.friend_discount_percent ?? 0),
   }
 })

@@ -3,12 +3,9 @@ import {
   Bell,
   Check,
   Gift,
-  KeyRound,
   LoaderCircle,
   LogOut,
-  Mail,
   Send,
-  ShieldCheck,
 } from '@lucide/vue'
 
 const { push } = useToast()
@@ -22,16 +19,19 @@ interface Account {
 }
 
 interface Settings {
-  settings: { notifyExpiry: boolean; notifyNews: boolean; notifySecurity: boolean }
+  settings: { notifySystem: boolean; notifyNews: boolean }
 }
 
-const { data } = await useFetch<Account>('/api/account')
-const { data: settingsData } = await useFetch<Settings>('/api/settings')
+const { data, status } = useFetch<Account>('/api/account', { lazy: true })
+const { data: settingsData } = useFetch<Settings>('/api/settings', { lazy: true })
 
 const notifications = [
-  { key: 'notifyExpiry' as const, label: 'Окончание подписки', hint: 'Напомним за 3 дня и в день окончания' },
+  {
+    key: 'notifySystem' as const,
+    label: 'Подписка и безопасность',
+    hint: 'Окончание подписки, входы в аккаунт, смена ссылки',
+  },
   { key: 'notifyNews' as const, label: 'Новости и акции', hint: 'Новые локации, тарифы и бонусы' },
-  { key: 'notifySecurity' as const, label: 'Безопасность', hint: 'Входы в аккаунт и смена ссылки подписки' },
 ]
 
 async function toggleNotify(key: (typeof notifications)[number]['key'], value: boolean) {
@@ -63,7 +63,7 @@ async function applyPromo() {
   }
 }
 
-const soon = () => push('Появится после подключения общего бэкенда')
+
 </script>
 
 <template>
@@ -73,27 +73,20 @@ const soon = () => push('Появится после подключения об
       <h1>Настройки входа</h1>
     </div>
 
+    <!-- Загрузка -->
+    <section v-if="status === 'pending'" class="panel" aria-hidden="true">
+      <div class="panel--pad stack">
+        <div class="skel" style="height: 15px; width: 50%" />
+        <div class="skel" style="height: 12px; width: 35%" />
+        <div class="skel" style="height: 44px" />
+        <div class="skel" style="height: 12px; width: 60%" />
+      </div>
+    </section>
+
+    <template v-else>
     <!-- Данные аккаунта -->
     <section class="panel">
       <div class="row-line" style="border-top: 0">
-        <span class="row-line__icon"><Mail :size="15" /></span>
-        <span class="row-line__body">
-          <span class="row-line__label">Email</span>
-          <span class="row-line__hint">{{ data?.email ?? 'Почта не привязана' }}</span>
-        </span>
-        <button class="btn btn--ghost btn--sm" @click="soon">Добавить почту</button>
-      </div>
-      <div class="row-line">
-        <span class="row-line__icon"><KeyRound :size="15" /></span>
-        <span class="row-line__body">
-          <span class="row-line__label">Пароль</span>
-          <span class="row-line__hint">
-            {{ data?.email ? 'Пароль не задан' : 'Сначала подтвердите почту' }}
-          </span>
-        </span>
-        <button class="btn btn--ghost btn--sm" :disabled="!data?.email" @click="soon">Задать пароль</button>
-      </div>
-      <div class="row-line">
         <span class="row-line__icon"><Send :size="15" /></span>
         <span class="row-line__body">
           <span class="row-line__label">Telegram</span>
@@ -103,18 +96,6 @@ const soon = () => push('Появится после подключения об
           </span>
         </span>
         <span class="badge badge--green"><Check :size="11" />Подключён</span>
-      </div>
-      <div class="row-line">
-        <span class="row-line__icon"><ShieldCheck :size="15" /></span>
-        <span class="row-line__body">
-          <span class="row-line__label">Двухфакторная аутентификация</span>
-          <span class="row-line__hint">
-            {{ data?.hasPassword ? 'Выключена' : 'Сначала задайте пароль' }}
-          </span>
-        </span>
-        <button class="btn btn--ghost btn--sm" :disabled="!data?.hasPassword" @click="soon">
-          Включить
-        </button>
       </div>
     </section>
 
@@ -174,5 +155,6 @@ const soon = () => push('Появится после подключения об
         </span>
       </button>
     </section>
+    </template>
   </div>
 </template>

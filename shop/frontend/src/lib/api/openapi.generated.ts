@@ -4249,6 +4249,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/referral/exchange": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Referral Exchange */
+    post: operations["post_referral_exchange_route"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/referral/welcome-bonus/claim": {
     parameters: {
       query?: never;
@@ -11575,6 +11592,11 @@ export interface components {
       traffic_limit_strategy: ("NO_RESET" | "DAY" | "WEEK" | "MONTH" | "MONTH_ROLLING") | null;
       /** @default null */
       traffic_packages: components["schemas"]["PackageSet"] | null;
+      /**
+       * Traffic Rollover
+       * @default false
+       */
+      traffic_rollover: boolean;
       /** @default null */
       tribute: components["schemas"]["TributeTariffConfig"] | null;
     };
@@ -12736,6 +12758,11 @@ export interface components {
     WebAppQrLoginRequestPayload: {
       /** Request Id */
       request_id: string;
+    };
+    /** WebAppReferralExchangePayload */
+    WebAppReferralExchangePayload: {
+      /** Days */
+      days: number;
     };
     /** WebAppSetPasswordPayload */
     WebAppSetPasswordPayload: {
@@ -20826,6 +20853,8 @@ export interface operations {
               }[];
               bot_link?: string | null;
               code?: string | null;
+              exchange_day_price?: number | null;
+              friend_discount_percent?: number;
               invited_count?: number;
               one_bonus_per_referee?: boolean;
               purchased_count?: number;
@@ -21646,6 +21675,36 @@ export interface operations {
             regular_traffic_gb?: number;
             status: string;
             traffic_multiplier?: number | null;
+          };
+        };
+      };
+    };
+  };
+  post_referral_exchange_route: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["WebAppReferralExchangePayload"];
+      };
+    };
+    responses: {
+      /** @description JSON response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            days: number;
+            end_date: string | null;
+            end_date_text: string | null;
+            /** @constant */
+            ok: true;
           };
         };
       };

@@ -9,7 +9,7 @@
 
 | Файл | Куда попадает | Что задаёт |
 |------|---------------|-----------|
-| `tariffs.json` | `/app/data/tariffs.json` (volume `shop-data`) | каталог: 1 тариф `proliv` - 179 ₽/30 дн, 90/180/365 дн со скидкой, 1 ТБ, 5 устройств, топ-апы |
+| `tariffs.json` | `/app/data/tariffs.json` (volume `shop-data`) | каталог: 1 тариф `proliv` - 179 ₽/30 дн, 90/180/365 дн со скидкой, 300 ГБ/мес с переносом остатка (MONTH_ROLLING), 3 устройства, топ-апы |
 | `locales-overrides.json` | `/app/data/locales-overrides.json` | тексты бота: приветствие, кнопки, реф-сообщения (ru+en) |
 | `settings.sql` | БД `app_setting_overrides` | `WEBAPP_TITLE`, `START_COMMAND_DESCRIPTION`, `WEBAPP_PRIMARY_COLOR=#7dd3fc`, `TRIAL_ENABLED=false`, `SUPPORT_LINK` и пр. |
 | `seed.ps1` | - | копирует файлы через `docker cp`, прогоняет SQL, рестартует backend+worker |
@@ -30,8 +30,8 @@ pwsh -File infra/seed/seed.ps1
   `GET /api/admin/panel/internal-squads`; редактор тарифов в админке умеет
   подгружать их списком.
 - `settings.sql` → `SUPPORT_LINK`: реальный канал/бот поддержки.
-- Цены 3/6/12 мес (`499/949/1799`), топ-апы и цена +1 устройства (29 ₽) -
-  плейсхолдеры, утвердить финальные.
+- Цены финальные (утверждены 2026-10-26): `30/90/180/365` дн = `179/499/949/1799 ₽`,
+  топ-апы 100/500 ГБ = 49/149 ₽, +1 устройство = 29 ₽/30 дн.
 
 ## Что сид НЕ покрывает (только админка/руками)
 

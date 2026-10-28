@@ -13,6 +13,7 @@
   import type { ApiClient } from "../lib/webapp/publicApi.js";
   import type { WebappDataClient } from "../lib/webapp/dataClient.js";
   import AppLaunchScreen from "./screens/AppLaunchScreen.svelte";
+  import { StatusMessage } from "$components/patterns/webapp/index.js";
   import AuthenticatedDialogs from "./AuthenticatedDialogs.svelte";
   import TrialCaptchaDialog from "./security/TrialCaptchaDialog.svelte";
   import { lazyScreen } from "$lib/webapp/lazyScreen.svelte.js";
@@ -433,6 +434,20 @@
       {:else}
         <ScreenLoading screen={installGuideScreen} {t} />
       {/if}
+    </div>
+  {:else if mode === "login" && cfg.adminPanelOnly}
+    <div class="phone-screen auth-screen">
+      <div class="auth-card-wrap">
+        <div class="login-brand login-brand-auth">
+          <BrandMark {brand} size="xl" />
+          <h1>{brandTitle}</h1>
+        </div>
+        <section class="card auth-card">
+          <StatusMessage class="auth-login-status" role="status">
+            {t("wa_admin_open_in_telegram")}
+          </StatusMessage>
+        </section>
+      </div>
     </div>
   {:else if mode === "login" && checkoutEntryRequested && emailAuthEnabled}
     <CheckoutEntryScreen

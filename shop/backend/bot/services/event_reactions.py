@@ -754,7 +754,7 @@ class CoreEventReactions(PartnerEventReactionsMixin):
             message_key,
             days=inviter_bonus_days,
             referee_name=payload.get("referee_name") or f"User {payload.get('referee_user_id')}",
-            new_end_date=end_date.strftime("%Y-%m-%d") if end_date else "",
+            new_end_date=end_date.strftime("%d.%m.%Y") if end_date else "",
         )
         chat_id = telegram_recipient(inviter, inviter_user_id)
         plan = user_notification_delivery_plan(

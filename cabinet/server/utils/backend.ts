@@ -39,12 +39,23 @@ export interface ShopMe {
     bot_link?: string | null
     webapp_link?: string | null
     code?: string | null
+    welcome_bonus_days?: number
+    friend_discount_percent?: number
+    exchange_day_price?: number | null
+    received_bonus_days?: number | null
+    bonus_details?: {
+      title?: string
+      duration_days?: number
+      inviter_days?: number
+      friend_days?: number
+    }[]
   }
   plans?: ShopPlan[]
   balance?: { amount?: string; amount_minor?: number; currency?: string; history?: unknown[] }
   settings?: Record<string, unknown>
   payment_methods?: { id?: string; name?: string; icon?: string; currency?: string }[]
   pending_payment?: { payment_id?: number; payment_url?: string; status?: string } | null
+  suggested_promo_code?: string | null
   support_unread_count?: number
 }
 
@@ -135,6 +146,11 @@ export interface ShopPartnerOverview {
   program_enabled?: boolean
   withdrawals_enabled?: boolean
   balance_payment_enabled?: boolean
+  profile?: {
+    partner_id?: number
+    status?: string
+    commission_bps?: number
+  } | null
   balances?: {
     currency?: string
     currency_scale?: number
@@ -285,15 +301,16 @@ export function mapTicket(t: ShopTicketOut) {
   }
 }
 
+// У бэкенда только две юзерские настройки для Telegram: system (окончание
+// подписки, входы в аккаунт, смена ссылки и прочие сервисные уведомления) и
+// marketing (новости/акции). Email-канал у нас не используется.
 export function mapSettings(prefs: Record<string, boolean> | undefined): {
-  notifyExpiry: boolean
+  notifySystem: boolean
   notifyNews: boolean
-  notifySecurity: boolean
 } {
   return {
-    notifyExpiry: prefs?.system_telegram ?? true,
+    notifySystem: prefs?.system_telegram ?? true,
     notifyNews: prefs?.marketing_telegram ?? true,
-    notifySecurity: prefs?.system_email ?? true,
   }
 }
 

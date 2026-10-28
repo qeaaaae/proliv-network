@@ -6,14 +6,24 @@
     "dev": "nuxt dev",
     "build": "nuxt build",
     "generate": "nuxt generate",
-    "preview": "nuxt preview"
+    "preview": "nuxt preview",
+    "typecheck": "nuxt typecheck"
   },
   "dependencies": {
-    "@fontsource-variable/onest": "^5.2.5",
+    "@fontsource-variable/manrope": "^5.2.5",
     "@fontsource-variable/unbounded": "^5.2.5",
-    "animejs": "^4.5.0",
+    "@iconify-icons/iconoir": "^2.0.0",
+    "@iconify/vue": "^5.0.1",
     "nuxt": "^4.1.0",
+    "three": "^0.186.1",
     "vue": "^3.5.0",
+    "vue-i18n": "^11.4.10",
     "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/three": "^0.186.0",
+    "typescript": "^5.9.3",
+    "vue-tsc": "^3.3.11"
   }
 }

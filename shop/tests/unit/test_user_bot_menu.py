@@ -28,6 +28,7 @@ from bot.keyboards.inline.user_keyboards import (
 )
 from bot.middlewares.i18n import LOCALE_KEY_ALIASES, JsonI18n
 from bot.utils.install_links import bot_install_guides_enabled, install_guide_share_links_enabled
+from bot.utils.referral_links import build_webapp_referral_link
 from config.tariffs_config import TariffsConfig
 from tests.support.settings_stub import settings_stub
 
@@ -345,7 +346,7 @@ class UserBotMenuTests(unittest.TestCase):
 
         callbacks = self._callback_data(markup)
 
-        self.assertIn("main_action:bot_subscribe", callbacks)
+        self.assertIn("main_action:purchases", callbacks)
         self.assertIn("main_action:bot_my_subscription", callbacks)
         self.assertIn("main_action:bot_referral", callbacks)
         self.assertIn("main_action:bot_info", callbacks)
@@ -386,7 +387,8 @@ class UserBotMenuTests(unittest.TestCase):
         callbacks = self._callback_data(markup)
 
         self.assertNotIn("main_action:bot_referral", callbacks)
-        self.assertIn("main_action:bot_apply_promo", callbacks)
+        # Промокод живёт внутри хаба покупок - хаб остаётся и при выключенной рефералке
+        self.assertIn("main_action:purchases", callbacks)
 
     def test_connect_keyboard_uses_subscription_url_when_bot_guides_disabled(self):
         markup = get_connect_and_main_keyboard(
@@ -717,7 +719,7 @@ class UserBotMenuTests(unittest.TestCase):
         self.assertFalse(any("promo" in str(button.callback_data) for button in buttons))
 
     def test_webapp_referral_link_uses_ref_query_and_is_normalized(self):
-        link = referral._build_webapp_referral_link(
+        link = build_webapp_referral_link(
             "https://app.example.com/invite?utm=channel",
             "AbC123xYz",
         )
@@ -731,23 +733,27 @@ class UserBotMenuTests(unittest.TestCase):
             subscription_webapp._normalize_referral_param("ref_uAbC123xYz"), "ABC123XYZ"
         )
 
-    def test_referral_text_places_web_link_after_telegram_link(self):
+    def test_referral_text_has_no_raw_links_and_copy_button_copies_link(self):
         text = self.i18n.gettext(
             "en",
             "referral_program_info_new",
-            referral_link="https://t.me/bot?start=ref_uABC123XYZ",
-            webapp_link_section=self.i18n.gettext(
-                "en",
-                "referral_webapp_link_line",
-                webapp_referral_link="https://app.example.com/?ref=uABC123XYZ",
-            ),
             bonus_details="bonus",
             invited_count=1,
             purchased_count=0,
         )
+        self.assertNotIn("Telegram link:", text)
+        self.assertNotIn("Web link:", text)
 
-        self.assertLess(text.index("Telegram link:"), text.index("Web link:"))
-        self.assertLess(text.index("Web link:"), text.index("Invitation bonuses:"))
+        markup = get_referral_link_keyboard(
+            "en",
+            self.i18n,
+            referral_link="https://t.me/bot?start=ref_uABC123XYZ",
+        )
+        buttons = [button for row in markup.inline_keyboard for button in row]
+        copy_button = next(button for button in buttons if button.copy_text)
+        self.assertEqual(
+            copy_button.copy_text.text, "https://t.me/bot?start=ref_uABC123XYZ"
+        )
 
     def test_single_tariff_referral_text_uses_period_rows_without_tariff_name(self):
         settings = SimpleNamespace(
@@ -783,8 +789,8 @@ class UserBotMenuTests(unittest.TestCase):
             "en",
         )
 
-        self.assertIn("For a friend's 2-month subscription", text)
-        self.assertIn("For a friend's 4-month subscription", text)
+        self.assertIn("For a friend's 2 months subscription", text)
+        self.assertIn("For a friend's 4 months subscription", text)
         self.assertNotIn("Standard", text)
 
     def test_multiple_tariff_referral_text_uses_tariff_ranges(self):

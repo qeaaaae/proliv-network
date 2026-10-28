@@ -239,7 +239,7 @@ class NotificationService(NotificationPartnerMixin, NotificationSupportMixin):
             user_id=hd.quote(public_id),
             user_display=user_display,
             referral_text=referral_text,
-            timestamp=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            timestamp=datetime.now(UTC).strftime("%d.%m.%Y %H:%M"),
         )
 
         # Send to log channel
@@ -277,7 +277,7 @@ class NotificationService(NotificationPartnerMixin, NotificationSupportMixin):
             user_display=user_display,
             email=hd.quote(email),
             referral_text=referral_text,
-            timestamp=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            timestamp=datetime.now(UTC).strftime("%d.%m.%Y %H:%M"),
         )
 
         await self._send_to_log_channel(message, reply_markup=profile_keyboard)
@@ -317,7 +317,7 @@ class NotificationService(NotificationPartnerMixin, NotificationSupportMixin):
             provider=self._external_auth_provider_label(_, provider),
             email=hd.quote(email),
             referral_text=referral_text,
-            timestamp=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            timestamp=datetime.now(UTC).strftime("%d.%m.%Y %H:%M"),
         )
         await self._send_to_log_channel(message, reply_markup=profile_keyboard)
 
@@ -353,7 +353,7 @@ class NotificationService(NotificationPartnerMixin, NotificationSupportMixin):
             telegram_id=telegram_id or "—",
             user_display=user_display,
             email=hd.quote(email),
-            timestamp=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            timestamp=datetime.now(UTC).strftime("%d.%m.%Y %H:%M"),
         )
 
         await self._send_to_log_channel(message, reply_markup=profile_keyboard)
@@ -390,7 +390,7 @@ class NotificationService(NotificationPartnerMixin, NotificationSupportMixin):
             telegram_id=telegram_id,
             user_display=user_display,
             email=hd.quote(email or ""),
-            timestamp=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            timestamp=datetime.now(UTC).strftime("%d.%m.%Y %H:%M"),
         )
 
         await self._send_to_log_channel(message, reply_markup=profile_keyboard)
@@ -434,7 +434,7 @@ class NotificationService(NotificationPartnerMixin, NotificationSupportMixin):
             link_source=hd.quote(_(source_key)),
             user_display=user_display,
             email=hd.quote(email or ""),
-            timestamp=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            timestamp=datetime.now(UTC).strftime("%d.%m.%Y %H:%M"),
         )
         await self._send_to_log_channel(message, reply_markup=profile_keyboard)
 
@@ -516,7 +516,7 @@ class NotificationService(NotificationPartnerMixin, NotificationSupportMixin):
             final_end_date=hd.quote(final_end_date_text or ""),
             panel_operation=panel_operation,
             merge_source=merge_source,
-            timestamp=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            timestamp=datetime.now(UTC).strftime("%d.%m.%Y %H:%M"),
         )
 
         await self._send_to_log_channel(message, reply_markup=profile_keyboard)
@@ -609,7 +609,7 @@ class NotificationService(NotificationPartnerMixin, NotificationSupportMixin):
                 currency=currency,
                 payment_provider=payment_provider,
                 payment_id=payment_id if payment_id is not None else "—",
-                timestamp=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+                timestamp=datetime.now(UTC).strftime("%d.%m.%Y %H:%M"),
             )
         elif sale_mode_base(sale_mode) == "tariff_upgrade":
             tariff_name = self._tariff_display_for_log(tariff_key)
@@ -629,7 +629,7 @@ class NotificationService(NotificationPartnerMixin, NotificationSupportMixin):
                 else "",
                 payment_provider=payment_provider,
                 payment_id=payment_id if payment_id is not None else "—",
-                timestamp=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+                timestamp=datetime.now(UTC).strftime("%d.%m.%Y %H:%M"),
             )
         elif has_traffic_purchase:
             traffic_purchase = next(
@@ -659,7 +659,7 @@ class NotificationService(NotificationPartnerMixin, NotificationSupportMixin):
                 traffic_summary=purchase_summary,
                 tariff_line=tariff_line,
                 payment_provider=payment_provider,
-                timestamp=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+                timestamp=datetime.now(UTC).strftime("%d.%m.%Y %H:%M"),
             )
         elif effective_purchases:
             tariff_name = self._tariff_display_for_log(tariff_key)
@@ -690,7 +690,7 @@ class NotificationService(NotificationPartnerMixin, NotificationSupportMixin):
                 purchase_summary_line=purchase_summary_line,
                 tariff_line=tariff_line,
                 payment_provider=payment_provider,
-                timestamp=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+                timestamp=datetime.now(UTC).strftime("%d.%m.%Y %H:%M"),
             )
         else:
             message = _(
@@ -702,7 +702,7 @@ class NotificationService(NotificationPartnerMixin, NotificationSupportMixin):
                 months=months,
                 period=format_duration_days(duration_days, _, admin_lang) if duration_days else "",
                 payment_provider=payment_provider,
-                timestamp=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+                timestamp=datetime.now(UTC).strftime("%d.%m.%Y %H:%M"),
             )
 
         payment_detail_lines: list[str] = []
@@ -815,7 +815,7 @@ class NotificationService(NotificationPartnerMixin, NotificationSupportMixin):
             user_display=user_display,
             promo_code=promo_code,
             bonus=", ".join(bonus_parts) or "-",
-            timestamp=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            timestamp=datetime.now(UTC).strftime("%d.%m.%Y %H:%M"),
         )
 
         # Send to log channel
@@ -846,8 +846,8 @@ class NotificationService(NotificationPartnerMixin, NotificationSupportMixin):
         message = _(
             "log_trial_activation",
             user_display=user_display,
-            end_date=end_date.strftime("%Y-%m-%d %H:%M"),
-            timestamp=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            end_date=end_date.strftime("%d.%m.%Y %H:%M"),
+            timestamp=datetime.now(UTC).strftime("%d.%m.%Y %H:%M"),
         )
 
         # Send to log channel
@@ -879,7 +879,7 @@ class NotificationService(NotificationPartnerMixin, NotificationSupportMixin):
             status=status,
             users_processed=users_processed,
             subs_synced=subs_synced,
-            timestamp=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S %Z"),
+            timestamp=datetime.now(UTC).strftime("%d.%m.%Y %H:%M"),
             details=details,
         )
 
@@ -912,7 +912,7 @@ class NotificationService(NotificationPartnerMixin, NotificationSupportMixin):
             user_display=user_display,
             user_id=hd.quote(public_id),
             suspicious_input=hd.quote(suspicious_input),
-            timestamp=datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S %Z"),
+            timestamp=datetime.now(UTC).strftime("%d.%m.%Y %H:%M"),
         )
 
         # Send to log channel

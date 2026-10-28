@@ -271,10 +271,7 @@ def traffic_period_starts_match(
 
 def format_traffic_reset_date(value: datetime, user_lang: str) -> str:
     reset_at = aware_utc(value) or value
-    lang = str(user_lang or "").lower()
-    if lang.startswith("ru"):
-        return reset_at.strftime("%d.%m.%Y")
-    return reset_at.date().isoformat()
+    return reset_at.strftime("%d.%m.%Y")
 
 
 def _first_not_after(current: datetime, *values: datetime | None) -> datetime | None:

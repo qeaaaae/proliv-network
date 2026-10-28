@@ -17,6 +17,10 @@ services:
       WEBAPP_SESSION_SECRET: ${WEBAPP_SESSION_SECRET:?set in shop/.env}
       MY_DEVICES_SECTION_ENABLED: 'True'
       SUBSCRIPTION_REISSUE_ENABLED: 'True'
+      # Админ-панель Mini App на отдельном origin (admin.<domain> -> backend:8081
+      # в infra/Caddyfile). Кабинет на app.<domain> не знает /admin/* маршруты,
+      # поэтому бот шлёт админские ссылки (тикеты, карточки юзеров) сюда.
+      WEBAPP_ADMIN_URL: 'https://admin.proliv-network.xyz'
 
   bot:
     environment:
@@ -24,3 +28,11 @@ services:
       QA_AUTH_ENABLED: 'False'
       EMAIL_LOGIN_ENABLED: 'False'
       WEBAPP_SESSION_SECRET: ${WEBAPP_SESSION_SECRET:?set in shop/.env}
+      WEBAPP_ADMIN_URL: 'https://admin.proliv-network.xyz'
+    volumes:
+      # read-only доступ к status.json для админ-команды /nodes
+      - /opt/proliv/status:/status:ro
+
+  worker:
+    environment:
+      WEBAPP_ADMIN_URL: 'https://admin.proliv-network.xyz'

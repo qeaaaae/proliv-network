@@ -125,6 +125,7 @@ class SettingsValidationMixin:
         "REFERRAL_INFO_URL",
         "SUBSCRIPTION_MINI_APP_URL",
         "PUBLIC_APP_URL",
+        "WEBAPP_ADMIN_URL",
         "EMAIL_AUTH_SECRET",
         "WEBAPP_LOGO_URL",
         "TELEGRAM_OAUTH_CLIENT_SECRET",

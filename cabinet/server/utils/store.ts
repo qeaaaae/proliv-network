@@ -1,6 +1,6 @@
-// Типы контракта API кабинета + локальные предпочтения, которых нет
-// на общем бэкенде (выбор локации - наша фича, маппинг на squad'ы
-// Remnawave через бэкенд планируется отдельно).
+// Типы контракта API кабинета. Подписка отдаёт все локации сразу -
+// точку выхода юзер выбирает в VPN-клиенте, поэтому переключателя
+// локации в кабинете нет.
 
 export interface Device {
   id: string
@@ -19,7 +19,6 @@ export interface Subscription {
   devices: Device[]
   deviceLimit: number
   locations: string[]
-  location: string
   subscriptionUrl: string
 }
 
@@ -56,19 +55,8 @@ export interface BonusEntry {
   at: string
 }
 
-// Выбранная локация юзера (in-memory; при рестарте сбрасывается на дефолт).
-// TODO: переключение internal squad через бэкенд.
-const locations = new Map<number, string>()
-
+// Локации, которые есть в подписке (флаги в UI).
 export const LOCATION_IDS = ['gb', 'ee', 'de'] as const
-
-export function getLocation(userId: number): string {
-  return locations.get(userId) ?? 'ee'
-}
-
-export function setLocation(userId: number, location: string): void {
-  if ((LOCATION_IDS as readonly string[]).includes(location)) locations.set(userId, location)
-}
 
 export function fmtNow(): string {
   return new Date().toISOString()

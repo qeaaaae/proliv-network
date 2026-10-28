@@ -18,7 +18,7 @@ def _serialize_tariff_period_referral_bonus_details(tariff: Any, lang: str) -> l
     for months in sorted(int(month) for month in tariff.enabled_periods):
         inviter_days = tariff.referral_inviter_bonus_days(months)
         friend_days = tariff.referral_referee_bonus_days(months)
-        if inviter_days is None and friend_days is None:
+        if not inviter_days and not friend_days:
             continue
         details.append(
             {
@@ -105,7 +105,7 @@ def _serialize_referral_bonus_details(settings: Settings, lang: str) -> list[dic
     for months in _legacy_referral_bonus_periods(settings):
         inviter_days = settings.referral_bonus_inviter.get(months)
         friend_days = settings.referral_bonus_referee.get(months)
-        if inviter_days is None and friend_days is None:
+        if not inviter_days and not friend_days:
             continue
         details.append(
             {

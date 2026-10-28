@@ -53,7 +53,7 @@ def format_payment_text(payment: Payment, i18n: JsonI18n, lang: str, settings: S
     elif payment.user and payment.user.first_name:
         user_info += f" ({payment.user.first_name})"
 
-    payment_date = payment.created_at.strftime("%Y-%m-%d %H:%M") if payment.created_at else "N/A"
+    payment_date = payment.created_at.strftime("%d.%m.%Y %H:%M") if payment.created_at else "N/A"
 
     provider_text = provider_label_map(settings, lang).get(
         payment.provider,
@@ -263,7 +263,7 @@ async def export_payments_csv_handler(
                     payment.sale_mode or "",
                     payment.tariff_key or "",
                     payment.purchased_gb or "",
-                    payment.created_at.strftime("%Y-%m-%d %H:%M:%S") if payment.created_at else "",
+                    payment.created_at.strftime("%d.%m.%Y %H:%M") if payment.created_at else "",
                     payment.provider_payment_id or "",
                 ]
             )

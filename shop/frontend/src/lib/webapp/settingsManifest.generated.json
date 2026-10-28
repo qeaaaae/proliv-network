@@ -16041,6 +16041,27 @@
         "updated_at": null
       },
       {
+        "key": "REFERRAL_FRIEND_DISCOUNT_PERCENT",
+        "type": "float",
+        "section": "pricing",
+        "section_order": 11,
+        "subsection": "referral",
+        "label": "Friend discount percent",
+        "description": "Checkout discount percent for an invited user's first subscription purchase via a personal single-use promo code. 0 disables the suggestion.",
+        "i18n_label_key": "admin_settings_field_referral_friend_discount_percent_label",
+        "i18n_description_key": "admin_settings_field_referral_friend_discount_percent_description",
+        "i18n_subsection_key": "admin_settings_subsection_referral",
+        "i18n_placeholder_key": null,
+        "placeholder": "",
+        "optional": true,
+        "secret": false,
+        "min": 0,
+        "max": 100,
+        "value": "",
+        "overridden": false,
+        "updated_at": null
+      },
+      {
         "key": "REFERRAL_WELCOME_BONUS_ADDS_TO_TRIAL",
         "type": "bool",
         "section": "pricing",

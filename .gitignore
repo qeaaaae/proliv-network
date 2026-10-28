@@ -12,3 +12,13 @@ dist/
 .refcss/
 *.bak.*
 infra/tools/
+
+# runtime/junk
+backups/
+.status-state.json
+status/geoip.dat
+status/geosite.dat
+status/known_hosts
+__pycache__/
+Caddyfile.bak
+Caddyfile.new

@@ -637,6 +637,19 @@ SETTINGS_MANIFEST: list[SettingField] = [
         subsection="referral",
     ),
     SettingField(
+        "REFERRAL_FRIEND_DISCOUNT_PERCENT",
+        "float",
+        "pricing",
+        "Friend discount percent",
+        (
+            "Checkout discount percent for an invited user's first subscription purchase "
+            "via a personal single-use promo code. 0 disables the suggestion."
+        ),
+        min=0,
+        max=100,
+        subsection="referral",
+    ),
+    SettingField(
         "REFERRAL_WELCOME_BONUS_ADDS_TO_TRIAL",
         "bool",
         "pricing",

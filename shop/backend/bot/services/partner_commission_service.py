@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import secrets
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -14,6 +15,7 @@ from bot.infra import events
 from bot.infra.event_payloads import (
     PartnerBalanceAdjustedPayload,
     PartnerBalanceSpentPayload,
+    PartnerClientAttributedPayload,
     PartnerCommissionAvailablePayload,
     PartnerCommissionRecordedPayload,
     PartnerCommissionReversedPayload,
@@ -22,14 +24,21 @@ from bot.infra.payment_events import sale_mode_base
 from bot.services.partner_common import (
     PartnerError,
     amount_to_minor,
+    as_utc,
     commission_minor,
     compact_json,
     currency_scale,
+    safe_user_label,
 )
 from config.settings import Settings
 from db.dal import partner_dal
-from db.models import Payment
-from db.partner_models import PartnerCommission, PartnerLedgerEntry, PartnerProfile
+from db.models import Payment, User
+from db.partner_models import (
+    PartnerClient,
+    PartnerCommission,
+    PartnerLedgerEntry,
+    PartnerProfile,
+)
 
 
 class PartnerCommissionService:
@@ -84,6 +93,8 @@ class PartnerCommissionService:
             int(payment.user_id),
             for_update=True,
         )
+        if not attribution:
+            attribution = await self._attribute_referred_payer(session, payment)
         if not attribution:
             return None
         client, profile = attribution
@@ -142,6 +153,79 @@ class PartnerCommissionService:
                 return existing
             raise
         return decision
+
+    async def _attribute_referred_payer(
+        self,
+        session: AsyncSession,
+        payment: Payment,
+    ) -> tuple[PartnerClient, PartnerProfile] | None:
+        """Backfill partner attribution for a payer linked via a referral code.
+
+        Plain referral links set ``users.referred_by_id`` without creating a
+        ``partner_clients`` row; when the referrer is an active partner the
+        attribution is created lazily so referral payments still commission.
+        """
+        if not self.config.enabled:
+            return None
+        payer = await session.get(User, int(payment.user_id))
+        if payer is None or payer.referred_by_id is None:
+            return None
+        referrer_id = int(payer.referred_by_id)
+        if referrer_id == int(payment.user_id):
+            return None
+        profile = await partner_dal.get_profile_by_user_id(
+            session,
+            referrer_id,
+            for_update=True,
+        )
+        if profile is None or profile.user_id is None or str(profile.status) != "active":
+            return None
+        eligible_from = (
+            as_utc(payer.registration_date) if payer.registration_date else datetime.now(UTC)
+        )
+        activated_at = as_utc(profile.activated_at) if profile.activated_at else None
+        if activated_at is not None and activated_at > eligible_from:
+            eligible_from = activated_at
+        try:
+            async with session.begin_nested():
+                client = await partner_dal.create_client_attribution(
+                    session,
+                    partner_id=int(profile.partner_id),
+                    client_user_id=int(payment.user_id),
+                    public_client_id=secrets.token_hex(8),
+                    public_label=safe_user_label(payer, "Client"),
+                    source="referral_import",
+                    eligible_from=eligible_from,
+                )
+                await partner_dal.create_audit_event(
+                    session,
+                    event_type="client_attributed",
+                    actor_type="system",
+                    partner_id=int(profile.partner_id),
+                    actor_user_id=int(payment.user_id),
+                    new_values_json=compact_json(
+                        {
+                            "partner_client_id": int(client.partner_client_id),
+                            "source": "referral_import",
+                        }
+                    ),
+                )
+        except IntegrityError:
+            return await partner_dal.get_client_with_profile_for_user(
+                session,
+                int(payment.user_id),
+                for_update=True,
+            )
+        await events.emit_model(
+            PartnerClientAttributedPayload(
+                partner_id=int(profile.partner_id),
+                partner_client_id=int(client.partner_client_id),
+                client_user_id=int(payment.user_id),
+                source="referral_import",
+                attributed_at=client.attributed_at or datetime.now(UTC),
+            )
+        )
+        return client, profile
 
     @staticmethod
     async def emit_recorded(decision: PartnerCommission | None) -> None:

@@ -14,3 +14,9 @@ async def require_telegram_account_id(session: AsyncSession, telegram_id: int) -
     if user is None:
         raise TelegramAccountRequiredError("Start the bot before using account features")
     return int(user.user_id)
+
+
+async def resolve_telegram_account_id(session: AsyncSession, telegram_id: int) -> int | None:
+    """Resolve a Telegram identity to a linked account id, or ``None`` when absent."""
+    user = await user_dal.get_user_by_telegram_id(session, int(telegram_id))
+    return int(user.user_id) if user else None

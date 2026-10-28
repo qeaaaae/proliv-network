@@ -128,7 +128,7 @@ reconciliation-worker за ~1-2 минуты, но webhook будет 500-кат
 Для самозанятого правильный путь - (2). Чек НПД создаётся в "Мой налог"
 независимо от того, что ЮKassa делает со своим receipt.
 
-## 5. Тариф Proliv Network (179 руб/мес, 5 устройств, 1 ТБ)
+## 5. Тариф Proliv Network (179 руб/мес, 3 устройства, 300 ГБ)
 
 Цены живут НЕ в env: каталог тарифов - JSON `/app/data/tariffs.json`
 (volume `shop-data`), путь из `TARIFFS_CONFIG_PATH` (дефолт
@@ -148,16 +148,17 @@ reconciliation-worker за ~1-2 минуты, но webhook будет 500-кат
       "key": "proliv_network",
       "names": { "ru": "Proliv Network", "en": "Proliv Network" },
       "descriptions": {
-        "ru": "Универсальный Network: 5 устройств, 1 ТБ/мес",
-        "en": "Universal Network: 5 devices, 1 TB/mo"
+        "ru": "Универсальный Network: 3 устройства, 300 ГБ/мес с переносом остатка",
+        "en": "Universal Network: 3 devices, 300 GB/mo with rollover"
       },
       "billing_model": "period",
       "enabled": true,
-      "monthly_gb": 1024,
-      "traffic_limit_strategy": "MONTH",
-      "hwid_device_limit": 5,
+      "monthly_gb": 300,
+      "traffic_limit_strategy": "MONTH_ROLLING",
+      "traffic_rollover": true,
+      "hwid_device_limit": 3,
       "enabled_periods": [1, 3, 6, 12],
-      "prices_rub": { "1": 179, "3": 537, "6": 1074, "12": 2148 },
+      "prices_rub": { "1": 179, "3": 499, "6": 949, "12": 1799 },
       "topup_packages": {
         "rub": [
           { "gb": 100, "price": 49 },

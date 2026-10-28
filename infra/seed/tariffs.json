@@ -1,6 +1,5 @@
 {
   "default_tariff": "proliv",
-  "referral_welcome_bonus_tariff": "proliv",
   "default_currency": "rub",
   "tariffs": [
     {
@@ -10,38 +9,40 @@
         "en": "Proliv Network"
       },
       "descriptions": {
-        "ru": "1 ТБ/мес, 5 устройств. Локации: UK, Эстония, Германия.",
-        "en": "1 TB/mo, 5 devices. Locations: UK, Estonia, Germany."
+        "ru": "300 ГБ/мес с переносом остатка, 3 устройства. Локации: UK, Эстония, Германия.",
+        "en": "300 GB/mo with rollover, 3 devices. Locations: UK, Estonia, Germany."
       },
       "squad_uuids": [
         "2b5f5dcd-0099-4f51-bc26-0ba04c240d63"
       ],
       "billing_model": "period",
-      "monthly_gb": 1024,
+      "monthly_gb": 300,
+      "traffic_limit_strategy": "MONTH_ROLLING",
+      "traffic_rollover": true,
       "topup_packages": {
         "rub": [
           {
             "gb": 100,
-            "price": 99
+            "price": 49
           },
           {
             "gb": 500,
-            "price": 299
+            "price": 149
           }
         ]
       },
-      "hwid_device_limit": 5,
+      "hwid_device_limit": 3,
       "hwid_device_packages": {
         "rub": [
           {
             "count": 1,
-            "price": 29,
+            "price": 39,
             "traffic_bonus_gb": 0,
             "prices": {
-              "30": 29.0,
-              "90": 87.0,
-              "180": 174.0,
-              "365": 348.0
+              "30": 39.0,
+              "90": 117.0,
+              "180": 234.0,
+              "365": 468.0
             },
             "period_unit": "day"
           }
@@ -50,7 +51,7 @@
       "checkout_addons": {
         "devices": {
           "enabled": true,
-          "max_extra_devices": 5,
+          "max_extra_devices": 2,
           "price_per_device": 29
         },
         "traffic": {
@@ -62,18 +63,6 @@
         "90": 499,
         "180": 949,
         "365": 1799
-      },
-      "referral_bonus_days_inviter": {
-        "30": 3,
-        "90": 7,
-        "180": 15,
-        "365": 30
-      },
-      "referral_bonus_days_referee": {
-        "30": 1,
-        "90": 3,
-        "180": 7,
-        "365": 15
       },
       "enabled_periods": [
         30,

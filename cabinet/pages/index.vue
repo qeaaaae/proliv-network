@@ -29,11 +29,17 @@ interface Overview {
   bonusBalance: number
   trialDays?: number
   trialAvailable?: boolean
+  trialPaymentEnabled?: boolean
+  trialPrice?: number
+  trialCurrency?: string
+  trialMethods?: string[]
 }
 
-const { data, refresh } = await useFetch<Overview>('/api/overview')
+const { data, status, refresh } = useFetch<Overview>('/api/overview', { lazy: true })
 
 const sub = computed(() => data.value?.subscription ?? null)
+// traffic_limit_bytes <= 0 у minishop = безлимит (как wa_unlimited_traffic в webapp)
+const trafficUnlimited = computed(() => (sub.value?.trafficLimitGb ?? 0) <= 0)
 const trafficPct = computed(() =>
   sub.value?.trafficLimitGb
     ? Math.min(100, Math.round((sub.value.trafficUsedGb / sub.value.trafficLimitGb) * 100))
@@ -69,31 +75,6 @@ const platforms = [
   },
 ]
 
-const LOCATION_NAMES: Record<string, string> = {
-  ee: 'Таллин',
-  gb: 'Лондон',
-  de: 'Франкфурт',
-}
-
-const locationPending = ref(false)
-
-async function setLocation(loc: string) {
-  if (loc === sub.value?.location || locationPending.value) return
-  locationPending.value = true
-  try {
-    const res = await $fetch<{ locationName: string }>('/api/location', {
-      method: 'POST',
-      body: { location: loc },
-    })
-    push(`Локация переключена: ${res.locationName}`)
-    await refresh()
-  } catch (e) {
-    push((e as { data?: { statusMessage?: string } }).data?.statusMessage ?? 'Не удалось переключить', 'error')
-  } finally {
-    locationPending.value = false
-  }
-}
-
 const DEVICE_ICONS: Record<Device['platform'], typeof Smartphone> = {
   ios: Smartphone,
   android: Smartphone,
@@ -115,6 +96,12 @@ async function reissueLink() {
     push('Ссылка перевыпущена, старые устройства отвязаны')
     reissueOpen.value = false
     await refresh()
+  } catch (e) {
+    push(
+      (e as { data?: { statusMessage?: string } }).data?.statusMessage ??
+        'Не удалось перевыпустить ссылку',
+      'error',
+    )
   } finally {
     reissuePending.value = false
   }
@@ -133,11 +120,30 @@ async function removeDevice(id: string) {
 const trialPending = ref(false)
 
 const trialDays = computed(() => data.value?.trialDays ?? 3)
+const trialPaid = computed(() => Boolean(data.value?.trialPaymentEnabled && (data.value?.trialPrice ?? 0) > 0))
+const trialPriceLabel = computed(() =>
+  trialPaid.value ? `${trialDays.value} ${fmt.plural(trialDays.value, 'день', 'дня', 'дней')} за ${data.value?.trialPrice} ₽` : '',
+)
 
 async function activateTrial() {
   if (trialPending.value) return
   trialPending.value = true
   try {
+    if (trialPaid.value) {
+      const res = await $fetch<{ paymentUrl?: string | null }>('/api/checkout', {
+        method: 'POST',
+        body: {
+          saleMode: 'trial',
+          method: data.value?.trialMethods?.[0] || 'yookassa',
+        },
+      })
+      if (res?.paymentUrl) {
+        window.location.href = res.paymentUrl
+        return
+      }
+      push('Не удалось создать платёж', 'error')
+      return
+    }
     await $fetch('/api/trial', { method: 'POST' })
     push(`Пробный период активирован - ${trialDays.value} ${fmt.plural(trialDays.value, 'день', 'дня', 'дней')} бесплатно`)
     await refresh()
@@ -156,13 +162,24 @@ async function activateTrial() {
       <h1>Добро пожаловать{{ user?.name ? `, ${user.name}` : '' }}</h1>
     </div>
 
+    <!-- Загрузка -->
+    <section v-if="status === 'pending'" class="panel" aria-hidden="true">
+      <div class="panel--pad stack">
+        <div class="skel" style="height: 20px; width: 45%" />
+        <div class="skel" style="height: 12px" />
+        <div class="skel" style="height: 12px; width: 65%" />
+        <div class="skel" style="height: 44px" />
+        <div class="skel" style="height: 12px; width: 55%" />
+      </div>
+    </section>
+
     <!-- Нет подписки -->
-    <section v-if="!sub" class="panel">
+    <section v-else-if="!sub" class="panel">
       <div class="empty">
         <div class="empty__icon"><Wifi :size="24" /></div>
         <h2>Активной подписки пока нет</h2>
         <p>
-          {{ data?.trialAvailable ? `Попробуйте ${trialDays} ${fmt.plural(trialDays, 'день', 'дня', 'дней')} бесплатно или выберите тариф` : 'Выберите тариф, чтобы начать' }}
+          {{ data?.trialAvailable ? (trialPaid ? `Попробуйте ${trialPriceLabel} или выберите тариф` : `Попробуйте ${trialDays} ${fmt.plural(trialDays, 'день', 'дня', 'дней')} бесплатно или выберите тариф`) : 'Выберите тариф, чтобы начать' }}
         </p>
         <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap">
           <button
@@ -173,7 +190,7 @@ async function activateTrial() {
           >
             <LoaderCircle v-if="trialPending" :size="16" class="spinner" />
             <Gift v-else :size="16" />
-            {{ trialDays }} {{ fmt.plural(trialDays, 'день', 'дня', 'дней') }} бесплатно
+            {{ trialPaid ? trialPriceLabel : `${trialDays} ${fmt.plural(trialDays, 'день', 'дня', 'дней')} бесплатно` }}
           </button>
           <NuxtLink to="/purchases" class="btn btn--ghost">
             Тарифы
@@ -203,11 +220,12 @@ async function activateTrial() {
             <div style="display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 8px">
               <span class="muted">Трафик</span>
               <span class="numeric">
-                {{ sub.trafficUsedGb }} / {{ sub.trafficLimitGb }} ГБ
+                <template v-if="trafficUnlimited">{{ sub.trafficUsedGb }} ГБ · безлимит</template>
+                <template v-else>{{ sub.trafficUsedGb }} / {{ sub.trafficLimitGb }} ГБ</template>
                 <span class="muted">· сброс {{ fmt.date(sub.resetAt) }}</span>
               </span>
             </div>
-            <div class="progress">
+            <div v-if="!trafficUnlimited" class="progress">
               <div class="progress__bar" :style="{ width: `${trafficPct}%` }" />
             </div>
           </div>
@@ -225,35 +243,13 @@ async function activateTrial() {
           </div>
         </div>
 
-        <!-- Локация -->
-        <div class="row-line row-line--loc">
-          <span class="row-line__icon"><Radio :size="15" /></span>
-          <span class="row-line__body">
-            <span class="row-line__label">Локация</span>
-            <span class="row-line__hint">Точка выхода в приложении</span>
-          </span>
-          <span class="pills" style="max-width: none; margin: 0">
-            <button
-              v-for="loc in sub.locations"
-              :key="loc"
-              class="pills__item pills__item--flag"
-              :class="{ 'is-active': sub.location === loc }"
-              :disabled="locationPending"
-              @click="setLocation(loc)"
-            >
-              <img :src="`/images/flags/${loc}.svg`" :alt="loc.toUpperCase()" width="18" height="13" />
-              {{ LOCATION_NAMES[loc] ?? loc.toUpperCase() }}
-            </button>
-          </span>
-        </div>
-
         <!-- Устройства -->
         <div class="panel--pad" style="border-top: 1px solid var(--line); padding-bottom: 14px">
           <div class="devices-head">
             <span class="devices-head__title">
               <Smartphone :size="15" />
               Устройства
-              <span class="muted numeric">{{ sub.devices.length }} / {{ sub.deviceLimit }}</span>
+              <span class="muted numeric">{{ fmt.deviceUsage(sub.devices.length, sub.deviceLimit) }}</span>
             </span>
             <button class="btn btn--ghost btn--sm" @click="reissueOpen = true">
               <RefreshCcw :size="13" />
@@ -283,11 +279,11 @@ async function activateTrial() {
         <div class="stat">
           <div class="stat__label"><Gauge :size="14" />Трафик</div>
           <div class="stat__value numeric">{{ sub.trafficUsedGb }} ГБ</div>
-          <div class="stat__sub">из {{ sub.trafficLimitGb }} ГБ в месяц</div>
+          <div class="stat__sub">{{ trafficUnlimited ? 'безлимит в месяц' : `из ${sub.trafficLimitGb} ГБ в месяц` }}</div>
         </div>
         <div class="stat">
           <div class="stat__label"><Smartphone :size="14" />Устройства</div>
-          <div class="stat__value numeric">{{ sub.devices.length }} / {{ sub.deviceLimit }}</div>
+          <div class="stat__value numeric">{{ fmt.deviceUsage(sub.devices.length, sub.deviceLimit) }}</div>
           <div class="stat__sub">
             <span v-for="(d, i) in sub.devices.slice(0, 2)" :key="d.id">
               {{ i ? ' · ' : '' }}{{ d.name }}

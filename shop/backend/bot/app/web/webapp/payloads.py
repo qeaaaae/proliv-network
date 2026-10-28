@@ -313,3 +313,9 @@ class WebAppQrLoginClaimPayload(BaseModel):
 
 class WebAppQrLoginApprovePayload(WebAppQrLoginRequestPayload):
     number: int = Field(ge=0, le=99)
+
+
+class WebAppReferralExchangePayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    days: int = Field(ge=1, le=3660)

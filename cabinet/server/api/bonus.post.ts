@@ -3,10 +3,10 @@ import { readBody } from 'h3'
 import { requireUser } from '../utils/session'
 import { hasShopBackend, shopFetch, type ShopMe, type ShopPartnerOverview } from '../utils/backend'
 
-// Балансовые операции. 'days' - покупка периода подписки целиком с внутреннего
-// баланса (method=balance); 'pay' - частичная оплата балансом в чекауте;
-// 'withdraw' - заявка на вывод партнёрского баланса (отдельная программа
-// /api/partner/*, требует включённой партнёрки и реквизитов).
+// Балансовые операции. 'days' - обмен бонусов на дни подписки
+// (/api/referral/exchange, 1 день = BONUS_EXCHANGE_DAY_PRICE); 'pay' - частичная
+// оплата балансом в чекауте; 'withdraw' - заявка на вывод партнёрского баланса
+// (отдельная программа /api/partner/*, требует включённой партнёрки и реквизитов).
 export default defineEventHandler(async (event) => {
   requireUser(event)
   if (!hasShopBackend(event)) {
@@ -15,6 +15,7 @@ export default defineEventHandler(async (event) => {
   const body = await readBody<{
     action?: string
     amount?: number
+    days?: number
     method?: string
     network?: string
     requisites?: Record<string, string>
@@ -23,38 +24,33 @@ export default defineEventHandler(async (event) => {
 
   switch (body?.action) {
     case 'days': {
-      // Балансом можно оплатить только сконфигурированный период - берём
-      // самый длинный период, который покрывает сумма (совпадает с превью
-      // на фронте).
-      const me = await shopFetch<ShopMe>(event, '/api/me')
-      const planDays = (p: { duration_days?: number; months?: number }) =>
-        p.duration_days ?? Math.round((p.months ?? 1) * 30)
-      const affordable = (me.plans ?? [])
-        .filter((p) => (p.sale_mode ?? 'subscription') === 'subscription' && (p.price ?? 0) > 0)
-        .sort((a, b) => planDays(b) - planDays(a))
-        .find((p) => (p.price ?? 0) <= amount)
-      if (!affordable) {
-        throw createError({ statusCode: 400, statusMessage: 'Недостаточно бонусов для обмена на дни' })
-      }
-      const days = planDays(affordable)
-      const payload: Record<string, unknown> = {
-        method: 'balance',
-        sale_mode: 'subscription',
-        duration_days: days,
-      }
-      if (affordable.tariff_key) payload.tariff_key = affordable.tariff_key
-      if (affordable.months) payload.months = affordable.months
-      const res = await shopFetch<{ ok?: boolean; paid?: boolean; payment_id?: number }>(
+      // Обмен бонусов на дни подписки - тот же механизм, что в боте:
+      // списание с баланса по цене дня + продление активной подписки.
+      const days = Math.max(1, Math.floor(Number(body?.days ?? body?.amount) || 0))
+      const res = await shopFetch<{ ok?: boolean; days?: number }>(
         event,
-        '/api/payments',
-        { method: 'POST', body: payload },
-      )
+        '/api/referral/exchange',
+        { method: 'POST', body: { days } },
+      ).catch((e) => {
+        const data = (e as { data?: { error?: string; message?: string } })?.data
+        const code = typeof data?.error === 'string' ? data.error : ''
+        const messages: Record<string, string> = {
+          bonus_exchange_unavailable: 'Обмен бонусов сейчас недоступен',
+          bonus_exchange_insufficient: 'Недостаточно бонусов для обмена',
+          bonus_exchange_failed: 'Обмен не удался, попробуйте позже',
+        }
+        throw createError({
+          statusCode: (e as { statusCode?: number })?.statusCode ?? 400,
+          statusMessage: messages[code] ?? data?.message ?? 'Обмен не удался',
+        })
+      })
       const after = await shopFetch<ShopMe>(event, '/api/me')
       return { ok: Boolean(res.ok), balance: Number(after.balance?.amount ?? 0), days }
     }
     case 'pay': {
-      // Частичная оплата покупки балансом делается в чекауте (balance_source)
-      throw createError({ statusCode: 400, statusMessage: 'Оплату балансом выбирайте при оформлении подписки' })
+      // Частичная оплата балансом - галочка «Списать бонусы» в чекауте
+      // (/api/checkout принимает balanceSource -> balance_source).
+      throw createError({ statusCode: 400, statusMessage: 'Включите списание бонусов галочкой при оформлении подписки' })
     }
     case 'withdraw': {
       // Вывод - заявка партнёрской программы (баланс partner, не бонусный).

@@ -315,3 +315,145 @@ def custom_emoji_unicode_html(value: str) -> str:
     parser.feed(value)
     parser.close()
     return "".join(parser.parts)
+
+
+# Icons used when a Unicode emoji in outgoing text has no direct counterpart in
+# the configured sticker sets. Keys/values are the Unicode fallbacks of icons;
+# values must resolve to a sticker in the library map.
+UNICODE_EMOJI_ALIASES = {
+    "🔐": "🔒",
+    "🆘": "❓",
+    "🟢": "✅",
+    "🟡": "ℹ️",
+    "🟠": "⚠️",
+    "🔵": "ℹ️",
+    "🟣": "❓",
+    "⚫": "🔴",
+}
+
+_KEYCAP_BASES = frozenset("0123456789#*")
+_VARIATION_SELECTORS = frozenset("\ufe0e\ufe0f")
+
+
+def _scan_emoji_sequence(text: str, start: int) -> int:
+    """Return the end offset of the emoji sequence starting at ``start`` or 0."""
+    length = len(text)
+    code = ord(text[start])
+    if 0x1F1E6 <= code <= 0x1F1FF:
+        if start + 1 < length and 0x1F1E6 <= ord(text[start + 1]) <= 0x1F1FF:
+            return start + 2
+        return 0
+    if text[start] in _KEYCAP_BASES:
+        end = start + 1
+        if end < length and text[end] == "\ufe0f":
+            end += 1
+        if end < length and text[end] == "\u20e3":
+            return end + 1
+        return 0
+    if not _emoji_base(code):
+        return 0
+    end = start + 1
+    if code == 0x1F3F4:
+        tag_end = end
+        while tag_end < length and 0xE0020 <= ord(text[tag_end]) <= 0xE007F:
+            tag_end += 1
+        if tag_end > end and text[tag_end - 1] == "\U000e007f":
+            return tag_end
+    while True:
+        if end < length and 0x1F3FB <= ord(text[end]) <= 0x1F3FF:
+            end += 1
+        if end < length and text[end] in _VARIATION_SELECTORS:
+            end += 1
+        if end + 1 < length and text[end] == "\u200d" and _emoji_base(ord(text[end + 1])):
+            end += 1
+            continue
+        return end
+
+
+def _lookup_emoji_id(emoji_map: dict[str, str], *keys: str) -> str | None:
+    for key in keys:
+        if key and emoji_map.get(key):
+            return emoji_map[key]
+    return None
+
+
+def _emoji_custom_id(sequence: str, emoji_map: dict[str, str]) -> str | None:
+    bare = sequence.rstrip("\ufe0e\ufe0f")
+    emoji_id = _lookup_emoji_id(emoji_map, sequence, bare, f"{bare}\ufe0f")
+    if emoji_id:
+        return emoji_id
+    alias = UNICODE_EMOJI_ALIASES.get(bare) or UNICODE_EMOJI_ALIASES.get(sequence)
+    if not alias:
+        return None
+    alias_bare = alias.rstrip("\ufe0e\ufe0f")
+    return _lookup_emoji_id(emoji_map, alias, alias_bare, f"{alias_bare}\ufe0f")
+
+
+def _wrap_text_emojis(text: str, emoji_map: dict[str, str]) -> str:
+    out: list[str] = []
+    cursor = 0
+    while cursor < len(text):
+        end = _scan_emoji_sequence(text, cursor)
+        if end:
+            sequence = text[cursor:end]
+            emoji_id = _emoji_custom_id(sequence, emoji_map)
+            if emoji_id:
+                out.append(f'<tg-emoji emoji-id="{emoji_id}">{sequence}</tg-emoji>')
+            else:
+                out.append(sequence)
+            cursor = end
+            continue
+        out.append(text[cursor])
+        cursor += 1
+    return "".join(out)
+
+
+class _UnicodeEmojiWrapper(HTMLParser):
+    _SKIP_TAGS = frozenset({"a", "code", "pre", "tg-emoji"})
+
+    def __init__(self, emoji_map: dict[str, str]) -> None:
+        super().__init__(convert_charrefs=False)
+        self.emoji_map = emoji_map
+        self.parts: list[str] = []
+        self.skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in self._SKIP_TAGS:
+            self.skip_depth += 1
+        self.parts.append(self.get_starttag_text() or "")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self._SKIP_TAGS and self.skip_depth:
+            self.skip_depth -= 1
+        self.parts.append(f"</{tag}>")
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.parts.append(self.get_starttag_text() or "")
+
+    def handle_data(self, data: str) -> None:
+        if self.skip_depth:
+            self.parts.append(data)
+            return
+        self.parts.append(_wrap_text_emojis(data, self.emoji_map))
+
+    def handle_entityref(self, name: str) -> None:
+        self.parts.append(f"&{name};")
+
+    def handle_charref(self, name: str) -> None:
+        self.parts.append(f"&#{name};")
+
+
+def unicode_emoji_to_custom_html(value: str, emoji_map: dict[str, str]) -> str:
+    """Wrap Unicode emoji sequences in ``<tg-emoji>`` markup.
+
+    Only sequences with a sticker in ``emoji_map`` (or an entry in
+    ``UNICODE_EMOJI_ALIASES`` resolving to one) are converted; everything else
+    is left untouched. Content inside ``<a>``, ``<code>``, ``<pre>`` and
+    existing ``<tg-emoji>`` tags is never modified.
+    """
+    if not value or not emoji_map:
+        return value
+    parser = _UnicodeEmojiWrapper(emoji_map)
+    parser.feed(value)
+    parser.close()
+    return "".join(parser.parts)

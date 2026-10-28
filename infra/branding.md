@@ -71,7 +71,7 @@ DB-оверрайды настроек и админку Web App.
 | `TRIAL_ENABLED` | кнопка триала | `false` — по SPEC триал только через промокод/рефералку (`referral_welcome_bonus_tariff` + `REFERRAL_WELCOME_BONUS_DAYS` в тарифном каталоге) |
 | `MY_DEVICES_SECTION_ENABLED` | раздел «Мои устройства» | `true` |
 | `SERVER_STATUS_ENABLED` | страница статуса серверов | `false`, пока статус-страницы нет |
-| `MENU_BUTTONS_JSON` | кастомные кнопки меню (внешние/TG/WebApp/page, локализованные подписи, эмодзи, видимость) — схема `backend/config/menu_buttons.py` | например кнопка «Сайт» на `https://proliv.net` |
+| `MENU_BUTTONS_JSON` | кастомные кнопки меню (внешние/TG/WebApp/page, локализованные подписи, эмодзи, видимость) — схема `backend/config/menu_buttons.py` | например кнопка «Сайт» на `https://proliv-network.xyz` |
 | `TELEGRAM_MENU_APPEARANCE_JSON` | порядок/вид кнопок TG-меню | по вкусу |
 | `TELEGRAM_CUSTOM_EMOJI_LIBRARY_JSON` | кастомные TG-эмодзи (id — десятичные строки) — `backend/config/telegram_menu.py` | если есть premium-эмодзи |
 
@@ -121,13 +121,15 @@ TG-аватар бота сюда не относится — только BotFa
 
 **Готовый каталог Proliv:** `infra/seed/tariffs.json`. Один тариф `proliv`:
 
-- `billing_model: "period"`, `monthly_gb: 1024` (= 1 ТиБ «1 ТБ»; конверсия
-  `* 1024**3` байт — `tariffs_config.py:713`), `hwid_device_limit: 5`.
+- `billing_model: "period"`, `monthly_gb: 300` (300 ГиБ; конверсия
+  `* 1024**3` байт — `tariffs_config.py`), `traffic_limit_strategy: "MONTH_ROLLING"`
+  (цикл от даты покупки), `traffic_rollover: true` (остаток копится),
+  `hwid_device_limit: 3`.
 - `enabled_periods: [30, 90, 180, 365]` = 1/3/6/12 мес.
 - `prices_rub`: `30 → 179`; скидка задаётся просто ценой ниже кратной месячной:
-  `90 → 499` (~166 ₽/мес), `180 → 949` (~158 ₽/мес), `365 → 1799` (~148 ₽/мес).
-  **Цены-плейсхолдеры — финальные значения утверждает Рафаэль.**
-- `topup_packages.rub`: докупка трафика (100 GB / 500 GB — цены плейсхолдеры).
+  `90 → 499` (~166 ₽/мес), `180 → 949` (~158 ₽/мес), `365 → 1799` (~150 ₽/мес).
+  **Цены финальные (утверждены 2026-10-26).**
+- `topup_packages.rub`: докупка трафика (100 GB = 49 ₽ / 500 GB = 149 ₽).
 - `hwid_device_packages.rub`: +1 устройство 29 ₽/30 дн (`prices` по периодам).
 - `checkout_addons.devices`: докупка устройств на чекауте (лимит/цена правятся).
 - `referral_bonus_days_*`: бонусные дни рефералки по периодам; welcome-бонус
@@ -178,7 +180,7 @@ Stars-платежей нет.
       `/start` и `/tg` (`START_COMMAND_DESCRIPTION` → `bot_command_*_description`),
       но **сам список команд и локализованные описания — в BotFather**
 - [ ] **Menu Button / Domain** — привязать Mini App URL
-      (`SUBSCRIPTION_MINI_APP_URL`, напр. `https://app.proliv.net`). При старте
+      (`SUBSCRIPTION_MINI_APP_URL`, напр. `https://app.proliv-network.xyz`). При старте
       backend делает `set_chat_menu_button(MenuButtonWebApp)` и сразу возвращает
       `MenuButtonDefault` — это только регистрация домена у Telegram
       (`backend/bot/main_bot.py:182-188`); постоянную кнопку меню задаёт BotFather.
@@ -235,7 +237,7 @@ docker compose -f shop/docker-compose.yml -f infra/minishop.compose.yml --env-fi
 4. Тексты оферты и политики ПД — managed-документы в админке.
 5. `SUPPORT_LINK` — реальный TG-канал/бот поддержки.
 6. BotFather-чек-лист (§5).
-7. Прода: `SUBSCRIPTION_MINI_APP_URL=https://app.proliv.net` в `shop/.env`
+7. Прода: `SUBSCRIPTION_MINI_APP_URL=https://app.proliv-network.xyz` в `shop/.env`
    (env-файлы правит только пользователь — см. AGENTS.md).
 8. После сида/правки файлов — рестарт `backend`+`worker`
    (`docker restart remnawave-minishop-backend remnawave-minishop-worker`).
