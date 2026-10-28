@@ -1,6 +1,6 @@
 export default {
   seo: {
-    description: 'Три локации с портом 10 Гбит/с, резервный LTE-доступ, 1 ТБ трафика в месяц и 5 устройств. Подключение от 179 ₽.',
+    description: 'Три локации с портом 10 Гбит/с, резервный LTE-доступ, 300 ГБ трафика в месяц с переносом остатка и 3 устройства. Подключение от 179 ₽.',
     imageAlt: 'Баннер Proliv Network с адресом proliv-network.xyz'
   },
   brand: {
@@ -11,7 +11,7 @@ export default {
   },
   actions: {
     cabinet: 'Кабинет',
-    startTrial: 'Попробовать бесплатно',
+    startTrial: 'Попробовать за 15 ₽',
     viewPricing: 'Выбрать срок',
     chooseInCabinet: 'Выбрать в кабинете'
   },
@@ -19,15 +19,15 @@ export default {
     back: 'На главную'
   },
   hero: {
-    titleBefore: 'Proliv network для',
+    titleBefore: 'Proliv Network для',
     titleAccent: 'всех устройств',
     description: 'Быстрая приватная сеть с резервным LTE-⁠доступом. Российские сервисы работают без отключения',
     facts: {
       priceLabel: 'за месяц',
       trialValue: '3 дня',
-      trialLabel: 'бесплатно, без карты',
-      trafficValue: '1 ТБ',
-      trafficLabel: 'трафика в месяц',
+      trialLabel: 'за 15 ₽',
+      trafficValue: '300 ГБ',
+      trafficLabel: 'трафика в месяц, остаток переносится',
       countriesValue: '3 страны',
       countriesLabel: 'порт 10 Гбит⁠/⁠с'
     }
@@ -101,10 +101,10 @@ export default {
       m12: '12 месяцев'
     },
     included: {
-      trafficValue: '1 ТБ',
-      trafficLabel: 'трафика в месяц',
-      devicesValue: '5',
-      devicesLabel: 'устройств',
+      trafficValue: '300 ГБ',
+      trafficLabel: 'трафика в месяц с переносом остатка',
+      devicesValue: '3',
+      devicesLabel: 'устройства',
       locationsValue: '3',
       locationsLabel: 'локации',
       lteValue: '1',
@@ -125,7 +125,7 @@ export default {
     steps: {
       trial: {
         title: 'Возьмите пробный период',
-        text: '3 дня бесплатно в личном кабинете или в Telegram-⁠боте. Карта не нужна'
+        text: '3 дня за 15 ₽ в личном кабинете или в Telegram-⁠боте'
       },
       app: {
         title: 'Установите приложение',
@@ -153,15 +153,15 @@ export default {
     items: {
       trial: {
         question: 'Как работает пробный период?',
-        answer: 'Пробный период длится 3 дня и подключается в личном кабинете без привязки банковской карты. Чтобы продолжить, выберите срок в кабинете'
+        answer: 'Пробный период длится 3 дня и стоит 15 ₽. Подключается в личном кабинете. Чтобы продолжить, выберите срок в кабинете'
       },
       devices: {
         question: 'Сколько устройств можно подключить?',
-        answer: 'В тариф входят 5 устройств. Каждое дополнительное устройство стоит 29 ₽ в месяц'
+        answer: 'В тариф входят 3 устройства. Каждое дополнительное устройство стоит 29 ₽ в месяц'
       },
       traffic: {
         question: 'Что будет, если закончится трафик?',
-        answer: 'В тариф входит 1 ТБ в месяц. Дополнительный трафик продаётся пакетами: 100 ГБ за 49 ₽ и 500 ГБ за 149 ₽'
+        answer: 'В тариф входит 300 ГБ в месяц, а неизрасходованный трафик переносится на следующий месяц. Дополнительный трафик продаётся пакетами: 100 ГБ за 49 ₽ и 500 ГБ за 149 ₽'
       },
       direct: {
         question: 'Нужно ли выключать Proliv для российских сайтов?',
@@ -179,23 +179,23 @@ export default {
   },
   invite: {
     tabTitle: 'Приглашение',
-    seoDescription: 'Приглашение в Proliv Network: 3 дня бесплатно и бонусные дни к первой покупке.',
+    seoDescription: 'Приглашение в Proliv Network: 3 дня за 15 ₽ и скидка на первую покупку.',
     about: 'О сервисе',
     titleBefore: 'Вас',
     titleAccent: 'пригласили',
     titleAfter: 'в Proliv',
-    description: 'Друг поделился с вами ссылкой. Попробуйте 3 дня бесплатно, а к первой покупке получите бонусные дни',
+    description: 'Друг поделился с вами ссылкой. Попробуйте 3 дня за 15 ₽, а к первой покупке получите скидку',
     passTitle: 'Приглашение в Proliv Network',
     passValue: '3 дня',
-    passValueNote: 'бесплатно',
+    passValueNote: 'за 15 ₽',
     passNote: 'Приветственный бонус по ссылке друга',
-    discountValue: 'до 15 дн.',
-    discountNote: 'к первой покупке',
+    discountValue: '10%',
+    discountNote: 'скидка на первую покупку',
     codeLabel: 'Код друга',
     openTelegram: 'Открыть в Telegram',
     benefitsTitleAccent: 'Что даёт',
     benefitsTitleAfter: 'Proliv',
-    benefitsLead: 'Один тариф: 1 ТБ трафика в месяц и 5 устройств',
+    benefitsLead: 'Один тариф: 300 ГБ трафика в месяц с переносом остатка и 3 устройства',
     benefits: {
       locations: {
         title: 'Три страны',
@@ -217,8 +217,8 @@ export default {
   },
   finalCta: {
     titleBefore: 'Попробуйте Proliv',
-    titleAccent: '3 дня бесплатно',
-    description: 'Пробный период подключается через личный кабинет без привязки банковской карты'
+    titleAccent: '3 дня за 15 ₽',
+    description: 'Пробный период подключается через личный кабинет'
   },
   footer: {
     description: 'Быстрая приватная сеть с LTE-⁠доступом для всех устройств',

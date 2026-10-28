@@ -6,8 +6,8 @@ export default defineNuxtConfig({
   ssr: true,
   runtimeConfig: {
     public: {
-      // локальный dev кабинета; в проде переопределяется NUXT_PUBLIC_CABINET_URL при сборке
-      cabinetUrl: process.env.NUXT_PUBLIC_CABINET_URL || 'http://localhost:3300',
+      // прод-кабинет; для локального dev переопределить NUXT_PUBLIC_CABINET_URL
+      cabinetUrl: process.env.NUXT_PUBLIC_CABINET_URL || 'https://app.proliv-network.xyz',
     },
   },
   css: ['@fontsource-variable/unbounded', '@fontsource-variable/manrope', '~/assets/css/main.css'],

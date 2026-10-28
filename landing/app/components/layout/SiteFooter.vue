@@ -44,7 +44,7 @@ const year = new Date().getFullYear()
             <h2>{{ t('footer.contactsLabel') }}</h2>
             <BaseButton class="footer-link" :href="telegramBotUrl" variant="telegram" size="small" trail="plane">{{ t('footer.links.bot') }}</BaseButton>
             <BaseButton class="footer-link" :href="supportUrl" variant="secondary" size="small" trail="arrow-up-right">{{ t('footer.links.support') }}</BaseButton>
-            <span class="footer-mail">{{ supportEmail }}</span>
+            <a class="footer-mail" :href="`mailto:${supportEmail}`">{{ supportEmail }}</a>
           </div>
         </div>
 
@@ -124,6 +124,7 @@ const year = new Date().getFullYear()
   color: var(--fg-tertiary);
   font-size: 13px;
   font-weight: 600;
+  text-decoration: none;
 }
 
 .footer-tax {

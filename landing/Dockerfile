@@ -1,6 +1,6 @@
 FROM node:24-alpine AS build
 WORKDIR /app
-ARG NUXT_PUBLIC_CABINET_URL=http://localhost:3300
+ARG NUXT_PUBLIC_CABINET_URL=https://app.proliv-network.xyz
 ENV NUXT_PUBLIC_CABINET_URL=$NUXT_PUBLIC_CABINET_URL
 COPY package*.json ./
 RUN npm ci --no-audit --no-fund
