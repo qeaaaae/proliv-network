@@ -108,10 +108,28 @@ export default defineEventHandler(async (event) => {
     Number.POSITIVE_INFINITY,
   )
 
+  // Реальные условия программы - из бэкенда:
+  // - процент с оплат друзей = commission_bps партнёрского профиля (1500 = 15%)
+  // - скидка другу = friend_discount_percent на первую покупку подписки
+  const commissionBps = partner?.profile?.commission_bps
+  const bonusDetails = (ref.bonus_details ?? [])
+    .map((d) => ({
+      title: d.title || '',
+      inviterDays: Number(d.inviter_days ?? 0),
+      friendDays: Number(d.friend_days ?? 0),
+    }))
+    .filter((d) => d.inviterDays > 0 || d.friendDays > 0)
+
   return {
     link: ref.bot_link || ref.webapp_link || '',
-    percent: 15,
-    friendDiscount: 20,
+    percent: commissionBps != null ? commissionBps / 100 : null,
+    friendWelcomeDays: Number(ref.welcome_bonus_days ?? 0),
+    friendDiscountPercent: Number(ref.friend_discount_percent ?? 0),
+    exchangeDayPrice:
+      ref.exchange_day_price != null && ref.exchange_day_price > 0
+        ? Number(ref.exchange_day_price)
+        : null,
+    bonusDetails,
     invited: ref.invited_count ?? 0,
     earned,
     bonusBalance: Number(me.balance?.amount ?? 0),
@@ -126,8 +144,6 @@ export default defineEventHandler(async (event) => {
       methods,
     },
     rates: {
-      dayPrice: 7,
-      maxPayShare: 50,
       withdrawMin: Number.isFinite(withdrawMin) ? withdrawMin : 500,
     },
   }

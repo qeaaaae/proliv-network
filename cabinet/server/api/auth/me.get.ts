@@ -1,4 +1,4 @@
-import { getCabinetSession } from '../../utils/session'
+import { clearCabinetSession, getCabinetSession } from '../../utils/session'
 import { shopFetch, type ShopMe } from '../../utils/backend'
 
 // Сессионный юзер. Если есть токен бэкенда - дотягиваем /api/me, чтобы имя и
@@ -25,7 +25,13 @@ export default defineEventHandler(async (event) => {
           : '/api/account/avatar'
         : safe.photoUrl,
     }
-  } catch {
+  } catch (e) {
+    // Токен бэкенда протух - сбрасываем куку, чтобы юзер мог перелогиниться
+    // (иначе middleware считает сессию живой, а все запросы идут в 401)
+    if ((e as { statusCode?: number }).statusCode === 401) {
+      clearCabinetSession(event)
+      throw createError({ statusCode: 401, statusMessage: 'Backend session expired' })
+    }
     return safe
   }
 })

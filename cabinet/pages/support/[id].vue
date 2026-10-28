@@ -18,7 +18,7 @@ const {
   refresh,
   status,
   error,
-} = await useFetch<Ticket>(`/api/tickets/${route.params.id}`)
+} = useFetch<Ticket>(`/api/tickets/${route.params.id}`, { lazy: true })
 
 const reply = ref('')
 const pending = ref(false)
@@ -47,6 +47,7 @@ async function send() {
 }
 
 onMounted(scrollDown)
+watch(() => ticket.value?.messages?.length, scrollDown)
 </script>
 
 <template>
@@ -106,4 +107,13 @@ onMounted(scrollDown)
       <NuxtLink to="/support" class="btn btn--primary">Все обращения</NuxtLink>
     </div>
   </div>
+
+  <section v-else class="panel" aria-hidden="true">
+    <div class="panel--pad stack">
+      <div class="skel" style="height: 15px; width: 55%" />
+      <div class="skel" style="height: 44px; width: 75%" />
+      <div class="skel" style="height: 34px; width: 60%; margin-left: auto" />
+      <div class="skel" style="height: 44px; width: 70%" />
+    </div>
+  </section>
 </template>

@@ -7,6 +7,12 @@ import {
   type ShopTopupOptions,
 } from '../utils/backend'
 
+interface ShopBalance {
+  enabled?: boolean
+  currency_scale?: number
+  sources?: { id?: string; available?: boolean; amount_minor?: number }[]
+}
+
 function planDays(p: ShopPlan): number {
   return p.duration_days ?? Math.round((p.months ?? 1) * 30)
 }
@@ -21,10 +27,11 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 503, statusMessage: 'Backend is not configured' })
   }
 
-  const [me, trafficOpts, deviceOpts] = await Promise.all([
+  const [me, trafficOpts, deviceOpts, balance] = await Promise.all([
     shopFetch<ShopMe>(event, '/api/me'),
     shopFetch<ShopTopupOptions>(event, '/api/tariffs/topup-options').catch(() => null),
     shopFetch<ShopTopupOptions>(event, '/api/devices/topup-options').catch(() => null),
+    shopFetch<ShopBalance>(event, '/api/balance').catch(() => null),
   ])
   const plans = me.plans ?? []
   const main =
@@ -88,10 +95,20 @@ export default defineEventHandler(async (event) => {
     }
   }
 
+  // minishop в icon шлёт lucide-имя для своего webapp, а не URL - поэтому
+  // логотипы мапим по id провайдера на локальные svg; абсолютный URL
+  // (если админ задал свой) пропускаем как есть.
+  const METHOD_ICONS: Record<string, string> = {
+    yookassa: '/images/payments/yookassa.svg',
+    cryptobot: '/images/payments/cryptobot.svg',
+    heleket: '/images/payments/heleket.svg',
+  }
   const methods = (me.payment_methods ?? []).map((m) => ({
     id: m.id || '',
     title: m.name || m.id || '',
-    icon: m.icon || (m.id === 'yookassa' ? '/images/payments/yookassa.svg' : ''),
+    icon:
+      METHOD_ICONS[m.id ?? ''] ??
+      (m.icon && /^https?:\/\//.test(m.icon) ? m.icon : ''),
   }))
 
   const specParts: string[] = []
@@ -101,13 +118,27 @@ export default defineEventHandler(async (event) => {
     specParts.push(`${main.device_count ?? main.hwid_device_limit} устройств`)
   }
 
+  // Балансы для галочки «списать бонусы» в чекауте: user = бонусный счёт,
+  // partner = комиссии партнёрки. available флаг уже учитывает enabled и
+  // ненулевой остаток; партнёр - ещё и balance_payment_enabled.
+  const scale = balance?.currency_scale ?? 2
+  const srcAmount = (id: string) => {
+    if (balance?.enabled === false) return 0
+    const s = balance?.sources?.find((x) => x.id === id)
+    return s?.available ? (s.amount_minor ?? 0) / 10 ** scale : 0
+  }
+
   return {
     plan: {
       name: me.subscription?.tariff_name || main?.tariff_name || 'Proliv Network',
       spec: specParts.join(', ') || main?.description || '',
+      devices: main?.device_count ?? main?.hwid_device_limit ?? 0,
     },
     periods,
     extras,
     methods,
+    balances: { user: srcAmount('user'), partner: srcAmount('partner') },
+    suggestedPromoCode: me.suggested_promo_code ?? null,
+    friendDiscountPercent: Number(me.referral?.friend_discount_percent ?? 0),
   }
 })

@@ -17,6 +17,7 @@ const isActive = (to: string) =>
 
 const linkEls = ref<unknown[]>([])
 const pill = ref({ x: 0, w: 0, ready: false })
+let remeasureTimer: ReturnType<typeof setTimeout> | undefined
 
 async function syncPill() {
   await nextTick()
@@ -28,12 +29,25 @@ async function syncPill() {
   pill.value = { x: el.offsetLeft, w: el.offsetWidth, ready: true }
 }
 
+function syncPillDeferred() {
+  void syncPill()
+  // padding/лейбл активной ссылки анимируются 0.3с - перемеряем после,
+  // иначе пилюля останавливается на промежуточной геометрии
+  clearTimeout(remeasureTimer)
+  remeasureTimer = setTimeout(() => void syncPill(), 340)
+}
+
 onMounted(() => {
-  syncPill()
+  syncPillDeferred()
+  // перемер после подгрузки шрифтов - лейбл меняет ширину ссылки
+  document.fonts?.ready.then(() => void syncPill())
   window.addEventListener('resize', syncPill)
 })
-onBeforeUnmount(() => window.removeEventListener('resize', syncPill))
-watch(() => route.path, syncPill)
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', syncPill)
+  clearTimeout(remeasureTimer)
+})
+watch(() => route.path, syncPillDeferred)
 </script>
 
 <template>

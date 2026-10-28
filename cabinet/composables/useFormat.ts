@@ -1,20 +1,34 @@
 export function useFormat() {
   const rub = (n: number) => `${new Intl.NumberFormat('ru-RU').format(n)} ₽`
 
-  const date = (iso: string) =>
-    new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })
+  const parseDate = (iso: string | null | undefined): number | null => {
+    const t = new Date(iso || '').getTime()
+    return Number.isFinite(t) ? t : null
+  }
 
-  const dateTime = (iso: string) =>
-    new Date(iso).toLocaleString('ru-RU', {
-      day: 'numeric',
-      month: 'long',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
+  const date = (iso: string) => {
+    const t = parseDate(iso)
+    return t === null
+      ? '—'
+      : new Date(t).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })
+  }
+
+  const dateTime = (iso: string) => {
+    const t = parseDate(iso)
+    return t === null
+      ? '—'
+      : new Date(t).toLocaleString('ru-RU', {
+          day: 'numeric',
+          month: 'long',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+  }
 
   const daysLeft = (iso: string) => {
-    const ms = new Date(iso).getTime() - Date.now()
-    return Math.max(0, Math.ceil(ms / 86400_000))
+    const t = parseDate(iso)
+    if (t === null) return 0
+    return Math.max(0, Math.ceil((t - Date.now()) / 86400_000))
   }
 
   // 0/пусто в контракте бэкенда = безлимит устройств; показываем словами, не значком

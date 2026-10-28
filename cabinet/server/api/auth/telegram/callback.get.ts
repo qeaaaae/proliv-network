@@ -13,6 +13,8 @@ interface StatePayload {
   state: string
   verifier: string
   nonce: string
+  ref?: string
+  next?: string
   exp: number
 }
 
@@ -116,7 +118,11 @@ export default defineEventHandler(async (event) => {
     shopRes = await ofetch(`${backend}/api/auth/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept-Encoding': 'identity' },
-      body: JSON.stringify({ id_token: idToken, nonce: saved.nonce }),
+      body: JSON.stringify({
+        id_token: idToken,
+        nonce: saved.nonce,
+        referral_code: saved.ref || undefined,
+      }),
       timeout: 15000,
     })
   } catch (err) {
@@ -135,5 +141,6 @@ export default defineEventHandler(async (event) => {
     apiToken: shopRes.token,
     apiCsrf: shopRes.csrf_token,
   })
-  return sendRedirect(event, '/', 302)
+  const next = saved.next && saved.next.startsWith('/') && !saved.next.startsWith('//') ? saved.next : '/'
+  return sendRedirect(event, next, 302)
 })

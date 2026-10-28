@@ -14,6 +14,12 @@ interface ShopTokenResponse {
 // Вход по email+паролю: upstream POST /api/auth/email/password выдаёт
 // Bearer-токен, после чего дотягиваем профиль из /api/me для сессии.
 export default defineEventHandler(async (event) => {
+  const config = useRuntimeConfig(event)
+  // Вход в проде - только через Telegram. Email-логин нужен локальному
+  // стенду - открываем его тем же флагом, что и /api/auth/dev.
+  if (String(config.public.devAuth) !== '1' && !import.meta.dev) {
+    throw createError({ statusCode: 404, statusMessage: 'Not found' })
+  }
   const base = shopApiUrl(event)
   if (!base) {
     throw createError({ statusCode: 503, statusMessage: 'Backend is not configured' })

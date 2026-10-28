@@ -20,7 +20,7 @@ export default defineNuxtConfig({
     },
   },
   app: {
-    pageTransition: { name: 'page', mode: 'out-in' },
+    pageTransition: { name: 'page', mode: 'default' },
     head: {
       htmlAttrs: { lang: 'ru' },
       title: 'Личный кабинет - Proliv Network',

@@ -1,4 +1,7 @@
 export default defineNuxtRouteMiddleware(async (to) => {
+  // ?ref=u<code> с лендинга/рефералки - захватываем до редиректа на /auth
+  useReferral().capture(to.query)
+
   const { user, ensure } = useAuth()
   await ensure()
 
