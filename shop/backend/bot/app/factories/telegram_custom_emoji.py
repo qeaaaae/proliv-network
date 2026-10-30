@@ -258,7 +258,9 @@ class CustomEmojiFallbackMiddleware(BaseRequestMiddleware):
             if not isinstance(value, str):
                 continue
             converted = unicode_emoji_to_custom_html(value, emoji_map)
-            if converted != value and len(converted) <= limit:
+            # Telegram enforces the limit on the visible text; tg-emoji markup
+            # around the same fallback glyph does not add visible characters.
+            if converted != value and len(value) <= limit:
                 update[key] = converted
         if not update:
             return method

@@ -13702,6 +13702,18 @@
       },
       "PromoOut": {
         "properties": {
+          "app_link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "App Link"
+          },
           "applies_to": {
             "title": "Applies To",
             "type": "string"

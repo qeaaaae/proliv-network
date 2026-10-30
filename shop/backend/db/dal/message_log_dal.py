@@ -164,6 +164,24 @@ async def has_target_event_content(
     return result.scalar_one_or_none() is not None
 
 
+async def has_event_content(
+    session: AsyncSession,
+    *,
+    event_type: str,
+    content_fragment: str,
+) -> bool:
+    stmt = (
+        select(MessageLog.log_id)
+        .where(
+            MessageLog.event_type == event_type,
+            MessageLog.content.contains(content_fragment),
+        )
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none() is not None
+
+
 async def create_message_log_no_commit(session: AsyncSession, log_data: dict) -> MessageLog:
 
     if log_data.get("target_user_id"):

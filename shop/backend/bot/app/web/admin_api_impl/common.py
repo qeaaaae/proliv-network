@@ -8,7 +8,11 @@ from aiohttp import web
 
 from bot.app.web.response_helpers import json_response
 from bot.services import panel_activity as _panel_activity
-from bot.services.message_composition import promo_bot_deeplink, promo_webapp_link
+from bot.services.message_composition import (
+    promo_bot_deeplink,
+    promo_startapp_deeplink,
+    promo_webapp_link,
+)
 from config.settings import Settings
 from config.tariffs_config import TariffsConfig
 from config.traffic_strategy import normalize_traffic_limit_strategy
@@ -453,3 +457,8 @@ def _build_admin_promo_bot_link(bot_username: str | None, code: str | None) -> s
 def _build_admin_promo_webapp_link(base_url: str | None, code: str | None) -> str | None:
     """Admin-facing alias of the shared Mini App promo-link builder."""
     return promo_webapp_link(base_url, code)
+
+
+def _build_admin_promo_app_link(bot_username: str | None, code: str | None) -> str | None:
+    """``t.me`` link that opens the Mini App with the promo code prefilled."""
+    return promo_startapp_deeplink(bot_username, code)

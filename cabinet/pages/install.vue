@@ -8,7 +8,7 @@ interface Overview {
   subscription: { subscriptionUrl?: string } | null
 }
 
-const { data, status } = useFetch<Overview>('/api/overview', { lazy: true })
+const { data, status, refresh } = useFetch<Overview>('/api/overview', { lazy: true })
 const subscriptionUrl = computed(() => data.value?.subscription?.subscriptionUrl ?? '')
 
 const qrSrc = ref('')
@@ -60,6 +60,10 @@ const platforms = [
         <div class="skel" style="height: 44px" />
         <div class="skel" style="height: 12px; width: 60%" />
       </div>
+    </section>
+
+    <section v-else-if="status === 'error'" class="panel">
+      <FetchError @retry="refresh" />
     </section>
 
     <section v-else-if="!subscriptionUrl" class="panel">

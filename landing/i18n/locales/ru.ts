@@ -19,7 +19,7 @@ export default {
     back: 'На главную'
   },
   hero: {
-    titleBefore: 'Proliv network для',
+    titleBefore: 'Proliv Network для',
     titleAccent: 'всех устройств',
     description: 'Быстрая приватная сеть с резервным LTE-⁠доступом. Российские сервисы работают без отключения',
     facts: {
@@ -232,8 +232,6 @@ export default {
     legalLabel: 'Документы',
     contactsLabel: 'Связь',
     paymentsLabel: 'Способы оплаты',
-    companyName: 'Саткевич Рафаэль Владимирович',
-    taxId: 'ИНН 730102011151',
     links: {
       bot: 'Telegram-бот',
       support: 'Поддержка'

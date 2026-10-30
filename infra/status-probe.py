@@ -31,6 +31,8 @@ TARGETS = [
      "flag": "gb", "host": "31.76.60.63", "port": 443},
     {"id": "de", "kind": "location", "group": "locations", "name": "Германия · Франкфурт",
      "flag": "de", "host": "13.143.192.49", "port": 443},
+    {"id": "fi", "kind": "location", "group": "locations", "name": "Финляндия · Хельсинки",
+     "flag": "fi", "host": "179.253.82.201", "port": 443},
     {"id": "bot", "kind": "service", "group": "services", "name": "Telegram-бот",
      "icon": "tg", "url": "http://127.0.0.1:8088/healthz"},
     {"id": "cabinet", "kind": "service", "group": "services", "name": "Личный кабинет",

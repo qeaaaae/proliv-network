@@ -50,7 +50,7 @@ export default defineNuxtConfig({
   nitro: {
     prerender: {
       ignore: ['/200.html', '/404.html'],
-      routes: ['/', '/terms', '/privacy', '/offer', '/personal-data', '/invite', '/status']
+      routes: ['/', '/terms', '/privacy', '/offer', '/personal-data', '/invite', '/status', '/pay/igor']
     }
   },
   typescript: {

@@ -23,10 +23,12 @@ import type { Device, Subscription } from '~/server/utils/store'
 const { push } = useToast()
 const fmt = useFormat()
 const { user } = useAuth()
+const config = useRuntimeConfig()
 
 interface Overview {
   subscription: Subscription | null
   bonusBalance: number
+  partnerBalance?: number
   trialDays?: number
   trialAvailable?: boolean
   trialPaymentEnabled?: boolean
@@ -51,7 +53,7 @@ const qrOpen = ref(false)
 const qrSrc = ref('')
 
 async function showQr() {
-  if (!sub.value) return
+  if (!sub.value?.subscriptionUrl) return
   qrSrc.value = await QRCode.toDataURL(sub.value.subscriptionUrl, {
     margin: 1,
     width: 200,
@@ -107,13 +109,22 @@ async function reissueLink() {
   }
 }
 
-async function removeDevice(id: string) {
+const removeTarget = ref<Device | null>(null)
+const removePending = ref(false)
+
+async function removeDevice() {
+  const target = removeTarget.value
+  if (!target || removePending.value) return
+  removePending.value = true
   try {
-    await $fetch(`/api/devices/${id}/delete`, { method: 'POST' })
+    await $fetch(`/api/devices/${target.id}/delete`, { method: 'POST' })
     push('Устройство отвязано')
+    removeTarget.value = null
     await refresh()
   } catch (e) {
     push((e as { data?: { statusMessage?: string } }).data?.statusMessage ?? 'Не удалось отвязать', 'error')
+  } finally {
+    removePending.value = false
   }
 }
 
@@ -173,6 +184,11 @@ async function activateTrial() {
       </div>
     </section>
 
+    <!-- Ошибка загрузки -->
+    <section v-else-if="status === 'error'" class="panel">
+      <FetchError @retry="refresh" />
+    </section>
+
     <!-- Нет подписки -->
     <section v-else-if="!sub" class="panel">
       <div class="empty">
@@ -197,9 +213,14 @@ async function activateTrial() {
             <ArrowRight :size="16" />
           </NuxtLink>
         </div>
-        <div style="margin-top: 18px">
-          <a class="link" href="https://t.me/prolivnet_bot" target="_blank" rel="noopener">
-            Прокси для Telegram - подключить
+        <div v-if="config.public.botUsername" style="margin-top: 18px">
+          <a
+            class="link"
+            :href="`https://t.me/${config.public.botUsername}`"
+            target="_blank"
+            rel="noopener"
+          >
+            Наш Telegram-бот - уведомления и управление подпиской
           </a>
         </div>
       </div>
@@ -263,7 +284,7 @@ async function activateTrial() {
                 <span class="device-row__name">{{ d.name }}</span>
                 <span class="device-row__hint">HWID {{ d.hwid }} · {{ fmt.date(d.lastSeen) }}</span>
               </span>
-              <button class="device-row__del" title="Отвязать" @click="removeDevice(d.id)">
+              <button class="device-row__del" title="Отвязать" @click="removeTarget = d">
                 <Trash2 :size="14" />
               </button>
             </div>
@@ -309,7 +330,7 @@ async function activateTrial() {
             <span class="row-line__label">Бонусный счёт</span>
             <span class="row-line__hint">Приглашайте друзей и получайте 15% с их оплат</span>
           </span>
-          <span class="row-line__value numeric">{{ fmt.rub(data?.bonusBalance ?? 0) }}</span>
+          <span class="row-line__value numeric">{{ fmt.rub((data?.bonusBalance ?? 0) + (data?.partnerBalance ?? 0)) }}</span>
         </NuxtLink>
       </section>
     </template>
@@ -344,6 +365,20 @@ async function activateTrial() {
       <p class="muted" style="margin-top: 14px; font-size: 12px; text-align: center">
         Отсканируйте из приложения Happ или аналогичного клиента
       </p>
+    </AppModal>
+
+    <!-- Модалка отвязки устройства -->
+    <AppModal :open="!!removeTarget" title="Отвязать устройство" @close="removeTarget = null">
+      <div class="stack">
+        <p class="muted" style="font-size: 13px">
+          «{{ removeTarget?.name }}» перестанет работать через эту подписку.
+          Подключить его заново можно будет в приложении.
+        </p>
+        <button class="btn btn--primary btn--block" :disabled="removePending" @click="removeDevice">
+          <LoaderCircle v-if="removePending" :size="15" class="spinner" />
+          Отвязать
+        </button>
+      </div>
     </AppModal>
 
     <!-- Модалка перевыпуска ссылки -->

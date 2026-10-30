@@ -9,7 +9,8 @@ import AccentMark from '~/components/ui/AccentMark.vue'
 import BaseButton from '~/components/ui/BaseButton.vue'
 import BlueprintLayer from '~/components/ui/BlueprintLayer.vue'
 
-const REFERRAL_PATTERN = /^[A-Za-z0-9_-]{3,64}$/
+// до 59: диплинк ?start=ref_u<code> не должен превысить лимит Telegram в 64 символа
+const REFERRAL_PATTERN = /^[A-Za-z0-9_-]{3,59}$/
 const benefits = [
   { title: 'invite.benefits.locations.title', text: 'invite.benefits.locations.text' },
   { title: 'invite.benefits.lte.title', text: 'invite.benefits.lte.text' },

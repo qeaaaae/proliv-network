@@ -11,10 +11,21 @@ export default defineEventHandler(async (event) => {
   const code = (body?.code || '').trim()
   if (!code) throw createError({ statusCode: 400, statusMessage: 'Введите промокод' })
 
-  const res = await shopFetch<{ ok?: boolean; effect_summary?: string; detail?: string }>(
-    event,
-    '/api/promo/apply',
-    { method: 'POST', body: { code } },
-  )
-  return { ok: Boolean(res.ok), message: res.effect_summary || 'Промокод применён' }
+  const res = await shopFetch<{
+    ok?: boolean
+    requires_checkout?: boolean
+    code?: string
+    effect_summary?: string
+    discount_percent?: number
+    detail?: string
+  }>(event, '/api/promo/apply', { method: 'POST', body: { code } })
+  // requires_checkout: код-скидка не потребляется здесь - фронт ведёт юзера
+  // на /purchases и прикладывает код при создании платежа.
+  return {
+    ok: Boolean(res.ok),
+    requiresCheckout: res.requires_checkout === true,
+    code: res.code || code,
+    discountPercent: typeof res.discount_percent === 'number' ? res.discount_percent : null,
+    message: res.effect_summary || 'Промокод применён',
+  }
 })

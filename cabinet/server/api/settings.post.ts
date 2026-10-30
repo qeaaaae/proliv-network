@@ -17,7 +17,7 @@ export default defineEventHandler(async (event) => {
   const patch = {
     system_telegram: body?.notifySystem ?? prefs.system_telegram ?? true,
     marketing_telegram: body?.notifyNews ?? prefs.marketing_telegram ?? true,
-    system_email: prefs.system_email ?? true,
+    system_email: prefs.system_email ?? false,
     marketing_email: prefs.marketing_email ?? false,
   }
 

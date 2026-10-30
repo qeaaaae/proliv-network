@@ -175,7 +175,8 @@ Minishop к нодам напрямую не привязывается - ник
   в `PANEL_WEBHOOK_SECRET` в `shop/.env`.
 - в `shop/.env` выровнять базу для отображения в админке:
   `WEBHOOK_BASE_URL=http://remnawave-minishop-backend:8080`
-  (для прода это будет публичный HTTPS `https://app.<domain>` + прокси на backend:8080).
+  (для прода это публичный HTTPS `https://api.<domain>` - Caddy проксирует
+  `/webhook/*` на backend:8080 и `/tg/webhook` на bot:8080).
 - пересоздать панель: `docker compose --env-file proliv.env up -d remnawave`
   (recreate контейнера панели, БД не трогаем).
 
@@ -230,7 +231,7 @@ minishop+subpage, либо узкий со скоупами metadata/subscriptio
 | `PANEL_API_URL` | `https://panel.<domain>/api` |
 | `PANEL_PUBLIC_URL` | `https://panel.<domain>` |
 | `PANEL_API_KEY` | отдельный прод-токен; можно сузить скоупы под список п.2 |
-| `WEBHOOK_BASE_URL` | `https://app.<domain>` (прокси -> backend:8080) |
+| `WEBHOOK_BASE_URL` | `https://api.<domain>` (прокси -> backend:8080) |
 | `PANEL_WEBHOOK_SECRET` | = `WEBHOOK_SECRET_HEADER` прод-панели (64 hex) |
 | `PANEL_WRITE_MODE` | не задавать: `APP_RUNTIME_MODE=production` -> live автоматически |
 | `SUBSCRIPTION_LINK_MODE` | `minishop` (шлюз `/s/`) или `panel` + поднятая subpage на `sub.<domain>` |

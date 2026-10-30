@@ -326,9 +326,9 @@ export const legalDocuments: Record<LegalDocumentId, LegalDocument> = {
         id: 'requisites',
         title: '13. Реквизиты Исполнителя',
         bullets: [
-          'Саткевич Рафаэль Владимирович',
+          'Смирнов Алексей Игоревич',
           'Статус: плательщик налога на профессиональный доход',
-          'ИНН: 730102011151',
+          'ИНН: 771941016907',
           'Email: info@proliv-network.xyz',
           'Сайт: proliv-network.xyz'
         ]

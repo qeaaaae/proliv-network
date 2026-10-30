@@ -14,6 +14,7 @@ interface StatePayload {
   verifier: string
   nonce: string
   ref?: string
+  next?: string
   exp: number
 }
 
@@ -140,5 +141,6 @@ export default defineEventHandler(async (event) => {
     apiToken: shopRes.token,
     apiCsrf: shopRes.csrf_token,
   })
-  return sendRedirect(event, '/', 302)
+  const next = saved.next && saved.next.startsWith('/') && !saved.next.startsWith('//') ? saved.next : '/'
+  return sendRedirect(event, next, 302)
 })

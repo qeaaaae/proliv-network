@@ -44,13 +44,12 @@ const year = new Date().getFullYear()
             <h2>{{ t('footer.contactsLabel') }}</h2>
             <BaseButton class="footer-link" :href="telegramBotUrl" variant="telegram" size="small" trail="plane">{{ t('footer.links.bot') }}</BaseButton>
             <BaseButton class="footer-link" :href="supportUrl" variant="secondary" size="small" trail="arrow-up-right">{{ t('footer.links.support') }}</BaseButton>
-            <span class="footer-mail">{{ supportEmail }}</span>
+            <a class="footer-mail" :href="`mailto:${supportEmail}`">{{ supportEmail }}</a>
           </div>
         </div>
 
         <div class="footer-bottom">
           <div class="footer-legal">
-            <span>{{ t('footer.companyName') }}, <span class="footer-tax">{{ t('footer.taxId') }}</span></span>
             <span>© {{ year }} {{ t('brand.name') }}</span>
           </div>
           <ul class="payment-marks" :aria-label="t('footer.paymentsLabel')">
@@ -124,10 +123,7 @@ const year = new Date().getFullYear()
   color: var(--fg-tertiary);
   font-size: 13px;
   font-weight: 600;
-}
-
-.footer-tax {
-  white-space: nowrap;
+  text-decoration: none;
 }
 
 .footer-bottom {

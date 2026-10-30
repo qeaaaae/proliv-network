@@ -62,6 +62,10 @@ async function createTicket() {
         <div class="skel" style="height: 12px; width: 70%" />
       </div>
 
+      <div v-else-if="status === 'error'" class="panel--pad">
+        <FetchError @retry="refresh" />
+      </div>
+
       <template v-else>
       <!-- Форма нового обращения -->
       <div v-if="formOpen || !tickets?.length" class="panel--pad stack" style="border-bottom: 1px solid var(--line)">

@@ -1,6 +1,7 @@
 """Telegram rendering for the same challenge/proof used by Mini App."""
 
 import base64
+import logging
 
 from aiogram import F, Router, types
 from aiogram.fsm.context import FSMContext
@@ -18,6 +19,8 @@ from bot.services.trial_captcha import (
 from config.settings import Settings
 
 router = Router(name="trial_captcha")
+
+logger = logging.getLogger(__name__)
 
 
 class TrialCaptchaState(StatesGroup):
@@ -87,7 +90,13 @@ async def answer_trial_captcha(
     i18n: JsonI18n = i18n_data["i18n_instance"]
     language = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
     data = await state.get_data()
-    user_id = await require_telegram_account_id(session, message.from_user.id)
+    try:
+        user_id = await require_telegram_account_id(session, message.from_user.id)
+    except Exception:
+        logger.exception("Failed to resolve account for captcha answer")
+        await state.clear()
+        await message.answer(i18n.gettext(language, "error_occurred_try_again"))
+        return
     await state.clear()
     try:
         if user_id != data.get("trial_user_id"):
@@ -98,6 +107,9 @@ async def answer_trial_captcha(
         key = "trial_captcha_bot_success"
     except TrialCaptchaError as exc:
         key = exc.code
+    except Exception:
+        logger.exception("Unexpected captcha verification error")
+        key = "error_occurred_try_again"
     await message.answer(
         i18n.gettext(language, key),
         reply_markup=types.InlineKeyboardMarkup(

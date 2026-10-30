@@ -82,8 +82,10 @@ export default defineEventHandler(async (event) => {
       price: p.price ?? 0,
     })
   }
-  if (!extras.length) {
-    // Фолбэк: пакеты устройств из карточки тарифа (/api/me -> plans)
+  if (!deviceOpts?.plans?.length && me.subscription?.can_topup_devices === true) {
+    // Фолбэк: пакеты устройств из карточки тарифа (/api/me -> plans).
+    // Только когда бэкенд подтвердил право на докупку (can_topup_devices) -
+    // иначе карточка ведёт на заведомо падающий платёж.
     for (const p of main?.hwid_device_packages ?? []) {
       const count = Number(p.device_count ?? 0)
       extras.push({

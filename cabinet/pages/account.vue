@@ -10,6 +10,7 @@ import {
 
 const { push } = useToast()
 const { user, logout } = useAuth()
+const route = useRoute()
 
 interface Account {
   email: string | null
@@ -22,7 +23,7 @@ interface Settings {
   settings: { notifySystem: boolean; notifyNews: boolean }
 }
 
-const { data, status } = useFetch<Account>('/api/account', { lazy: true })
+const { data, status, refresh } = useFetch<Account>('/api/account', { lazy: true })
 const { data: settingsData } = useFetch<Settings>('/api/settings', { lazy: true })
 
 const notifications = [
@@ -34,11 +35,17 @@ const notifications = [
   { key: 'notifyNews' as const, label: 'Новости и акции', hint: 'Новые локации, тарифы и бонусы' },
 ]
 
-async function toggleNotify(key: (typeof notifications)[number]['key'], value: boolean) {
+async function toggleNotify(
+  key: (typeof notifications)[number]['key'],
+  value: boolean,
+  ev: Event,
+) {
   try {
     await $fetch('/api/settings', { method: 'POST', body: { [key]: value } })
     push('Настройка сохранена')
   } catch {
+    // откатываем чекбокс - иначе визуально "включено", а в БД "выключено"
+    ;(ev.target as HTMLInputElement).checked = !value
     push('Не удалось сохранить', 'error')
   }
 }
@@ -46,14 +53,40 @@ async function toggleNotify(key: (typeof notifications)[number]['key'], value: b
 const promo = ref('')
 const promoPending = ref(false)
 
+// Промо-диплинк из Mini App (?startapp=promo_<code>): код ждёт в поле,
+// активируем его только по кнопке.
+onMounted(() => {
+  const value = Array.isArray(route.query.promo) ? route.query.promo[0] : route.query.promo
+  if (typeof value === 'string' && /^[A-Za-z0-9_-]{1,59}$/.test(value)) {
+    promo.value = value
+    push('Промокод подставлен - нажмите «Применить»')
+  }
+})
+
 async function applyPromo() {
   if (!promo.value.trim() || promoPending.value) return
   promoPending.value = true
   try {
-    const res = await $fetch<{ message: string }>('/api/promocode', {
+    const res = await $fetch<{
+      message: string
+      requiresCheckout?: boolean
+      code?: string
+      discountPercent?: number | null
+    }>('/api/promocode', {
       method: 'POST',
       body: { code: promo.value },
     })
+    if (res.requiresCheckout && res.code) {
+      // Код-скидка: применяется на оплате - ведём на покупки с кодом в чекауте
+      push(res.message || 'Промокод применится при оплате')
+      return navigateTo({
+        path: '/purchases',
+        query: {
+          promo: res.code,
+          ...(res.discountPercent ? { pd: String(res.discountPercent) } : {}),
+        },
+      })
+    }
     push(res.message)
     promo.value = ''
   } catch (e) {
@@ -83,6 +116,10 @@ async function applyPromo() {
       </div>
     </section>
 
+    <section v-else-if="status === 'error'" class="panel">
+      <FetchError @retry="refresh" />
+    </section>
+
     <template v-else>
     <!-- Данные аккаунта -->
     <section class="panel">
@@ -91,8 +128,8 @@ async function applyPromo() {
         <span class="row-line__body">
           <span class="row-line__label">Telegram</span>
           <span class="row-line__hint">
-            {{ data?.telegram.username ? `@${data.telegram.username}` : 'Привязан' }} ·
-            {{ data?.telegram.id }}
+            {{ data?.telegram.username ? `@${data.telegram.username}` : 'Привязан'
+            }}{{ data?.telegram.id ? ` · ${data.telegram.id}` : '' }}
           </span>
         </span>
         <span class="badge badge--green"><Check :size="11" />Подключён</span>
@@ -138,7 +175,7 @@ async function applyPromo() {
           <input
             type="checkbox"
             :checked="settingsData?.settings[n.key]"
-            @change="toggleNotify(n.key, ($event.target as HTMLInputElement).checked)"
+            @change="toggleNotify(n.key, ($event.target as HTMLInputElement).checked, $event)"
           />
           <span class="check__box"><Check :size="13" :stroke-width="3" /></span>
         </label>

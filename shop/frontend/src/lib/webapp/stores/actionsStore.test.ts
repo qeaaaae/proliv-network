@@ -10,7 +10,7 @@ function makeActionsStore(overrides: TestOverrides = {}) {
     maybeShowActivationSuccessDialog: vi.fn(),
     showToast: vi.fn(),
     startCheckoutPromo: vi.fn(),
-    prefillCheckoutPromo: vi.fn(),
+    openPromoEntry: vi.fn(),
     t: (key: string, params: Record<string, unknown> = {}, fallback = "") =>
       String(fallback || key).replace(/\{(\w+)\}/g, (_, name) =>
         String(params[name] ?? `{${name}}`)
@@ -69,7 +69,7 @@ describe("actionsStore", () => {
     });
   });
 
-  it("opens checkout from a deeplink when the code applies at checkout", async () => {
+  it("lands on the promo field with the code filled for checkout-only deeplinks", async () => {
     const { deps, store } = makeActionsStore({
       api: vi.fn().mockResolvedValue({
         ok: true,
@@ -81,11 +81,13 @@ describe("actionsStore", () => {
 
     await store.handlePromoDeeplink("save10");
 
-    expect(deps.startCheckoutPromo).toHaveBeenCalledWith("SAVE10");
+    expect(store.promoCode).toBe("SAVE10");
+    expect(deps.openPromoEntry).toHaveBeenCalledOnce();
+    expect(deps.startCheckoutPromo).not.toHaveBeenCalled();
     expect(store.promoDeeplinkOpen).toBe(false);
   });
 
-  it("only prefills the code when another deeplink modal is already open", async () => {
+  it("lands on the promo field even when another deeplink modal is open", async () => {
     const { deps, store } = makeActionsStore({
       api: vi.fn().mockResolvedValue({
         ok: true,
@@ -97,7 +99,8 @@ describe("actionsStore", () => {
 
     await store.handlePromoDeeplink("save10", { modalOpened: true });
 
-    expect(deps.prefillCheckoutPromo).toHaveBeenCalledWith("SAVE10");
+    expect(store.promoCode).toBe("SAVE10");
+    expect(deps.openPromoEntry).toHaveBeenCalledOnce();
     expect(deps.startCheckoutPromo).not.toHaveBeenCalled();
   });
 

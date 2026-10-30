@@ -81,13 +81,17 @@ export default defineEventHandler(async (event) => {
       payload.sale_mode = topup?.sale_mode || saleMode
     }
     const tariffKey = topup?.tariff_key ?? me.subscription?.tariff_key ?? plans.find((p) => p.tariff_key)?.tariff_key
-    if (tariffKey) payload.tariff_key = tariffKey
-    if (kind === 'device' && !topup && !tariffKey) {
-      throw createError({ statusCode: 400, statusMessage: 'Пакет устройств недоступен' })
-    }
-    if (kind !== 'device' && !topup && !tariffKey) {
+    if (kind === 'device') {
+      // Пакет должен прийти из /api/devices/topup-options: если его там нет
+      // (эндпоинт отказал или плана нет) - постить на /api/payments бессмысленно,
+      // бэкенд вернёт 400 с английским "Device top-up is not available".
+      if (!topup) {
+        throw createError({ statusCode: 400, statusMessage: 'Докупка устройств недоступна' })
+      }
+    } else if (!topup && !tariffKey) {
       throw createError({ statusCode: 400, statusMessage: 'Пакет трафика недоступен' })
     }
+    if (tariffKey) payload.tariff_key = tariffKey
   } else {
     // Подписка: сначала по точному planId, затем по длительности
     const plan =

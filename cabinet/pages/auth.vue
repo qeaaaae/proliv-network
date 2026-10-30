@@ -12,12 +12,18 @@ const referral = useReferral()
 
 const pending = ref(false)
 
+// next принимаем только локальный - иначе open redirect после логина
+function safeNext(): string {
+  const next = route.query.next
+  return typeof next === 'string' && next.startsWith('/') && !next.startsWith('//') ? next : '/'
+}
+
 async function goNext() {
   // сессия поставилась только что - сбрасываем кэш и подтягиваем /me до перехода
   loaded.value = false
   await ensure()
   referral.clear()
-  return navigateTo(typeof route.query.next === 'string' ? route.query.next : '/')
+  return navigateTo(safeNext())
 }
 
 async function onTelegramAuth(user: Record<string, unknown>) {
@@ -42,7 +48,11 @@ async function onTelegramAuth(user: Record<string, unknown>) {
 // и сам ставит сессию (всё серверно, в браузере секрета нет).
 function onTelegramOAuth() {
   const ref = referral.code()
-  window.location.href = `/api/auth/telegram/start${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`
+  const params = new URLSearchParams()
+  if (ref) params.set('ref', ref)
+  const next = safeNext()
+  if (next !== '/') params.set('next', next)
+  window.location.href = `/api/auth/telegram/start${params.size ? `?${params}` : ''}`
 }
 
 const isMiniApp = ref(false)

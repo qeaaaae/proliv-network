@@ -197,6 +197,10 @@ async function bonus(action: string, amount: number | null, method?: string) {
       </div>
     </section>
 
+    <section v-else-if="status === 'error'" class="panel">
+      <FetchError @retry="refresh" />
+    </section>
+
     <div v-else class="grid-2">
       <!-- Ссылка и условия -->
       <section class="panel link-panel">
@@ -259,7 +263,11 @@ async function bonus(action: string, amount: number | null, method?: string) {
         </div>
         <div class="panel--pad" style="text-align: center">
           <div class="price-now numeric" style="font-size: 34px">
-            {{ fmt.rub(data?.bonusBalance ?? 0) }}
+            {{ fmt.rub(payableBalance) }}
+          </div>
+          <div v-if="(data?.partner?.balanceAvailable ?? 0) > 0" class="muted" style="font-size: 12px; margin-top: 4px">
+            бонусы {{ fmt.rub(data?.bonusBalance ?? 0) }} · партнёрские
+            {{ fmt.rub(data?.partner?.balanceAvailable ?? 0) }}
           </div>
         </div>
         <button
@@ -276,7 +284,7 @@ async function bonus(action: string, amount: number | null, method?: string) {
                 data?.exchangeDayPrice
                   ? maxExchangeDays > 0
                     ? `1 день = ${fmt.rub(data.exchangeDayPrice)} · хватит на ${maxExchangeDays} дн.`
-                    : `1 день = ${fmt.rub(data.exchangeDayPrice)} · не хватает бонусов`
+                    : `1 день = ${fmt.rub(data.exchangeDayPrice)} · не хватает на бонусном балансе`
                   : 'обмен временно недоступен'
               }}
             </span>

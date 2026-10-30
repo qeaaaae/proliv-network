@@ -840,6 +840,35 @@ class Settings(
     )
     LOG_SUPPORT: bool = Field(default=True, description="Send support ticket notifications")
 
+    # Admin alert for heavy per-user traffic on watched (LTE) nodes.
+    LTE_TRAFFIC_ALERT_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Alert admins when a user exceeds the daily traffic threshold on watched nodes."
+        ),
+    )
+    LTE_TRAFFIC_ALERT_GB_PER_DAY: float = Field(
+        default=20.0,
+        gt=0,
+        allow_inf_nan=False,
+        description=(
+            "Traffic in GB per calendar day on watched nodes that triggers an admin alert."
+        ),
+    )
+    LTE_TRAFFIC_ALERT_NODE_UUIDS: str = Field(
+        default="",
+        description=(
+            "Comma-separated Remnawave node UUIDs watched for heavy usage (e.g. LTE nodes). "
+            "Empty disables the check."
+        ),
+    )
+    LTE_TRAFFIC_ALERT_TICK_SECONDS: int = Field(
+        default=3600,
+        ge=60,
+        le=86400,
+        description="How often the LTE traffic alert worker polls panel bandwidth stats.",
+    )
+
     # Anonymous install telemetry (self-hosted friendly, opt-out).
     TELEMETRY_ENABLED: bool = Field(
         default=True,

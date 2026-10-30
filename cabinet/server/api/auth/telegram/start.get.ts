@@ -43,15 +43,20 @@ export default defineEventHandler(async (event) => {
   ).toString('base64url')
   const state = base64url(randomBytes(16))
 
-  // Реферальный код из ?ref= проносим через подписанный state - в callback
-  // уйдёт в /api/auth/token как referral_code (лендинг терял его раньше)
-  const ref = String(getQuery(event).ref || '').slice(0, 64)
+  // Реферальный код из ?ref= и целевой путь из ?next= проносим через
+  // подписанный state - в callback ref уйдёт в /api/auth/token как
+  // referral_code, next - в редирект после логина (диплинки /trial и т.п.)
+  const q = getQuery(event)
+  const ref = String(q.ref || '').slice(0, 64)
+  const rawNext = String(q.next || '')
+  const next = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext.slice(0, 200) : ''
 
   const statePayload = base64url(Buffer.from(JSON.stringify({
     state,
     verifier: codeVerifier,
     nonce: nonceRes.nonce,
     ref: ref || undefined,
+    next: next || undefined,
     exp: Date.now() + STATE_TTL * 1000,
   })))
   const sessionSecret = config.sessionSecret || config.botToken || 'dev-insecure-secret'

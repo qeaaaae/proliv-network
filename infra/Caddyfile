@@ -28,7 +28,12 @@ app.${DOMAIN} {
 	# темы и публичный гайд-API с того же origin, поэтому whitelist повторяет
 	# набор статических путей из блока admin.${DOMAIN}. Для VPN-клиентов /s/<token>
 	# отдаёт саму подписку (SUBSCRIPTION_GATEWAY) - прокси обязан быть полным.
-	@minishop path /s/* /api/subscription-guides/public/* /api/bootstrap /api/i18n /subscription_webapp* /webapp-* /provider-logos/* /fonts/* /favicon.ico /apple-touch-icon* /icon-* /robots.txt
+	# Также на minishop: /open-app (кнопки "открыть в приложении" на стр. подписки),
+	# /unsubscribe + /api/notification-preferences/* (отписка из email),
+	# /docs/* + /legal/* + /api/pages/* + /api/documents* (легал-доки и инфо-страницы,
+	# на которые ссылается бот), /api/theme-effects* (темы SPA).
+	# Пути кабинета (/support, /trial, /install и т.п.) сюда НЕ добавлять.
+	@minishop path /s/* /api/subscription-guides/public/* /api/bootstrap /api/i18n /api/documents* /api/pages/* /api/theme-effects* /api/notification-preferences/* /open-app /unsubscribe /docs/* /legal/* /subscription_webapp* /webapp-* /provider-logos/* /fonts/* /favicon.ico /apple-touch-icon* /icon-* /robots.txt
 	handle @minishop {
 		reverse_proxy remnawave-minishop-backend:8081 {
 			header_up X-Forwarded-Proto https
@@ -44,7 +49,7 @@ app.${DOMAIN} {
 # Всё остальное (юзерские страницы, webauth/oauth-флоу, health) - 404.
 admin.${DOMAIN} {
 	encode
-	@blocked not path /admin* /api/* /subscription_webapp* /webapp-* /provider-logos/* /fonts/* /favicon.ico /apple-touch-icon* /icon-* /robots.txt
+	@blocked not path /admin* /api/* /open-app /docs/* /legal/* /subscription_webapp* /webapp-* /provider-logos/* /fonts/* /favicon.ico /apple-touch-icon* /icon-* /robots.txt
 	respond @blocked 404
 	reverse_proxy remnawave-minishop-backend:8081 {
 		header_up X-Forwarded-Proto https

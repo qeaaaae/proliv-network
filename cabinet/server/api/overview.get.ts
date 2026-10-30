@@ -1,5 +1,5 @@
 import { requireUser } from '../utils/session'
-import { bytesToGb, hasShopBackend, mapDevice, shopFetch, type ShopDevice, type ShopMe } from '../utils/backend'
+import { bytesToGb, hasShopBackend, mapDevice, shopFetch, type ShopDevice, type ShopMe, type ShopPartnerOverview } from '../utils/backend'
 import { LOCATION_IDS } from '../utils/store'
 
 export default defineEventHandler(async (event) => {
@@ -8,9 +8,10 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 503, statusMessage: 'Backend is not configured' })
   }
 
-  const [me, dev] = await Promise.all([
+  const [me, dev, partner] = await Promise.all([
     shopFetch<ShopMe>(event, '/api/me'),
     shopFetch<{ devices?: ShopDevice[]; max_devices?: number | null }>(event, '/api/devices').catch(() => null),
+    shopFetch<ShopPartnerOverview>(event, '/api/partner/overview').catch(() => null),
   ])
 
   // Подписка считается только при active=true: upstream присылает объект и для
@@ -40,6 +41,12 @@ export default defineEventHandler(async (event) => {
     },
     subscription,
     bonusBalance: Number(me.balance?.amount ?? 0),
+    // Партнёрский кошелёк складываем с бонусным - на главной и в боте
+    // «Бонусы» показывают сумму обоих, как на странице рефералки.
+    partnerBalance: (() => {
+      const b = partner?.balances?.[0]
+      return b ? (b.available_minor ?? 0) / 10 ** (b.currency_scale ?? 2) : 0
+    })(),
     trialDays: Number(me.settings?.trial_duration_days ?? 3) || 3,
     trialAvailable: Boolean(me.settings?.trial_available),
     trialPaymentEnabled: Boolean(me.settings?.trial_payment_enabled),

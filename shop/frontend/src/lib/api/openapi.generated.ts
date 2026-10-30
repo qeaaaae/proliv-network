@@ -10768,6 +10768,11 @@ export interface components {
     };
     /** PromoOut */
     PromoOut: {
+      /**
+       * App Link
+       * @default null
+       */
+      app_link: string | null;
       /** Applies To */
       applies_to: string;
       /** Bonus Days */

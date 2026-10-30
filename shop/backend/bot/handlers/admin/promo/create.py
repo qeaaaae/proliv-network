@@ -1,5 +1,8 @@
 import logging
+import re
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from aiogram import F, Router, types
 from aiogram.filters import StateFilter
@@ -22,6 +25,14 @@ from db.dal import promo_code_dal
 logger = logging.getLogger(__name__)
 
 router = Router(name="promo_create_router")
+
+_PROMO_CODE_RE = re.compile(r"[A-Za-z0-9_-]{3,30}")
+
+
+def _promo_effect_label(gettext: Callable[..., str], data: dict[str, Any]) -> str:
+    if data.get("discount_percent") is not None:
+        return gettext("admin_promo_effect_discount_value", value=data["discount_percent"])
+    return gettext("admin_promo_effect_bonus_days_value", value=data.get("bonus_days") or 0)
 
 
 async def create_promo_prompt_handler(
@@ -76,7 +87,7 @@ async def process_promo_code_handler(
 
     try:
         code_str = (message.text or "").strip().upper()
-        if not (3 <= len(code_str) <= 30 and code_str.isalnum()):
+        if not _PROMO_CODE_RE.fullmatch(code_str):
             await message.answer(_("admin_promo_invalid_code_format"))
             return
 
@@ -92,22 +103,100 @@ async def process_promo_code_handler(
 
         await state.update_data(promo_code=code_str)
 
-        # Step 2: Ask for bonus days
-        prompt_text = _("admin_promo_step2_bonus_days", code=code_str)
+        # Step 2: Choose promo type
+        prompt_text = _("admin_promo_step2_type", code=code_str)
 
-        await message.answer(
-            prompt_text,
-            reply_markup=get_back_to_admin_panel_keyboard(current_lang, i18n),
-            parse_mode="HTML",
+        builder = InlineKeyboardBuilder()
+        builder.row(
+            InlineKeyboardButton(
+                text=_("admin_promo_type_bonus_days_button"),
+                callback_data="promo_type:bonus_days",
+            ),
+            InlineKeyboardButton(
+                text=_("admin_promo_type_discount_button"),
+                callback_data="promo_type:discount",
+            ),
         )
-        await state.set_state(AdminStates.waiting_for_promo_bonus_days)
+        builder.row(
+            InlineKeyboardButton(text=_("admin_back_to_panel"), callback_data="admin_action:main")
+        )
+
+        await message.answer(prompt_text, reply_markup=builder.as_markup(), parse_mode="HTML")
+        await state.set_state(AdminStates.waiting_for_promo_type)
 
     except Exception as e:
         logger.error("Error processing promo code: %s", e)
         await message.answer(_("error_occurred_try_again"))
 
 
-# Step 2: Process bonus days
+# Step 2: Process type selection
+@router.callback_query(
+    F.data == "promo_type:bonus_days", StateFilter(AdminStates.waiting_for_promo_type)
+)
+async def process_promo_type_bonus_days(
+    callback: types.CallbackQuery, state: FSMContext, i18n_data: dict, settings: Settings
+) -> None:
+    current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
+    i18n: JsonI18n | None = i18n_data.get("i18n_instance")
+    if not i18n or not callback.message:
+        await callback.answer("Error processing promo type.", show_alert=True)
+        return
+    _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs)
+
+    await state.update_data(promo_type="bonus_days", discount_percent=None)
+    data = await state.get_data()
+    prompt_text = _("admin_promo_step3_bonus_days", code=data.get("promo_code"))
+
+    try:
+        await callback_message(callback).edit_text(
+            prompt_text,
+            reply_markup=get_back_to_admin_panel_keyboard(current_lang, i18n),
+            parse_mode="HTML",
+        )
+    except Exception:
+        await callback_message(callback).answer(
+            prompt_text,
+            reply_markup=get_back_to_admin_panel_keyboard(current_lang, i18n),
+            parse_mode="HTML",
+        )
+    await callback.answer()
+    await state.set_state(AdminStates.waiting_for_promo_bonus_days)
+
+
+@router.callback_query(
+    F.data == "promo_type:discount", StateFilter(AdminStates.waiting_for_promo_type)
+)
+async def process_promo_type_discount(
+    callback: types.CallbackQuery, state: FSMContext, i18n_data: dict, settings: Settings
+) -> None:
+    current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
+    i18n: JsonI18n | None = i18n_data.get("i18n_instance")
+    if not i18n or not callback.message:
+        await callback.answer("Error processing promo type.", show_alert=True)
+        return
+    _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs)
+
+    await state.update_data(promo_type="discount", bonus_days=0)
+    data = await state.get_data()
+    prompt_text = _("admin_promo_step3_discount", code=data.get("promo_code"))
+
+    try:
+        await callback_message(callback).edit_text(
+            prompt_text,
+            reply_markup=get_back_to_admin_panel_keyboard(current_lang, i18n),
+            parse_mode="HTML",
+        )
+    except Exception:
+        await callback_message(callback).answer(
+            prompt_text,
+            reply_markup=get_back_to_admin_panel_keyboard(current_lang, i18n),
+            parse_mode="HTML",
+        )
+    await callback.answer()
+    await state.set_state(AdminStates.waiting_for_promo_discount)
+
+
+# Step 3: Process bonus days
 @router.message(AdminStates.waiting_for_promo_bonus_days, F.text)
 async def process_promo_bonus_days_handler(
     message: types.Message, state: FSMContext, i18n_data: dict, settings: Settings
@@ -126,19 +215,7 @@ async def process_promo_bonus_days_handler(
             return
 
         await state.update_data(bonus_days=bonus_days)
-
-        # Step 3: Ask for max activations
-        data = await state.get_data()
-        prompt_text = _(
-            "admin_promo_step3_max_activations", code=data.get("promo_code"), bonus_days=bonus_days
-        )
-
-        await message.answer(
-            prompt_text,
-            reply_markup=get_back_to_admin_panel_keyboard(current_lang, i18n),
-            parse_mode="HTML",
-        )
-        await state.set_state(AdminStates.waiting_for_promo_max_activations)
+        await _prompt_max_activations(message, state, i18n_data, settings)
 
     except ValueError:
         await message.answer(_("admin_promo_invalid_number"))
@@ -147,7 +224,62 @@ async def process_promo_bonus_days_handler(
         await message.answer(_("error_occurred_try_again"))
 
 
-# Step 3: Process max activations
+# Step 3: Process discount percent
+@router.message(AdminStates.waiting_for_promo_discount, F.text)
+async def process_promo_discount_handler(
+    message: types.Message, state: FSMContext, i18n_data: dict, settings: Settings
+) -> None:
+    current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
+    i18n: JsonI18n | None = i18n_data.get("i18n_instance")
+    if not i18n:
+        await message.reply("Language service error.")
+        return
+    _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs)
+
+    try:
+        discount = float((message.text or "").strip().replace(",", "."))
+        if not (0 < discount <= 100):
+            await message.answer(_("admin_promo_invalid_discount"))
+            return
+        if discount.is_integer():
+            discount = int(discount)
+
+        await state.update_data(discount_percent=discount)
+        await _prompt_max_activations(message, state, i18n_data, settings)
+
+    except ValueError:
+        await message.answer(_("admin_promo_invalid_discount"))
+    except Exception as e:
+        logger.error("Error processing promo discount: %s", e)
+        await message.answer(_("error_occurred_try_again"))
+
+
+async def _prompt_max_activations(
+    message: types.Message, state: FSMContext, i18n_data: dict, settings: Settings
+) -> None:
+    """Step 4: ask for max activations (shared by bonus-days and discount paths)."""
+    current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
+    i18n: JsonI18n | None = i18n_data.get("i18n_instance")
+    if not i18n:
+        return
+    _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs)
+
+    data = await state.get_data()
+    prompt_text = _(
+        "admin_promo_step4_max_activations",
+        code=data.get("promo_code"),
+        effect=_promo_effect_label(_, data),
+    )
+
+    await message.answer(
+        prompt_text,
+        reply_markup=get_back_to_admin_panel_keyboard(current_lang, i18n),
+        parse_mode="HTML",
+    )
+    await state.set_state(AdminStates.waiting_for_promo_max_activations)
+
+
+# Step 4: Process max activations
 @router.message(AdminStates.waiting_for_promo_max_activations, F.text)
 async def process_promo_max_activations_handler(
     message: types.Message, state: FSMContext, i18n_data: dict, settings: Settings
@@ -167,12 +299,12 @@ async def process_promo_max_activations_handler(
 
         await state.update_data(max_activations=max_activations)
 
-        # Step 4: Ask for validity
+        # Step 5: Ask for validity
         data = await state.get_data()
         prompt_text = _(
-            "admin_promo_step4_validity",
+            "admin_promo_step5_validity",
             code=data.get("promo_code"),
-            bonus_days=data.get("bonus_days"),
+            effect=_promo_effect_label(_, data),
             max_activations=max_activations,
         )
 
@@ -202,7 +334,7 @@ async def process_promo_max_activations_handler(
         await message.answer(_("error_occurred_try_again"))
 
 
-# Step 4: Handle unlimited validity
+# Step 5: Handle unlimited validity
 @router.callback_query(
     F.data == "promo_unlimited_validity", StateFilter(AdminStates.waiting_for_promo_validity_days)
 )
@@ -217,7 +349,7 @@ async def process_promo_unlimited_validity(
     await create_promo_code_final(callback, state, i18n_data, settings, session)
 
 
-# Step 4: Handle set validity
+# Step 5: Handle set validity
 @router.callback_query(
     F.data == "promo_set_validity", StateFilter(AdminStates.waiting_for_promo_validity_days)
 )
@@ -235,7 +367,7 @@ async def process_promo_set_validity(
     prompt_text = _(
         "admin_promo_enter_validity_days",
         code=data.get("promo_code"),
-        bonus_days=data.get("bonus_days"),
+        effect=_promo_effect_label(_, data),
         max_activations=data.get("max_activations"),
     )
 
@@ -254,7 +386,7 @@ async def process_promo_set_validity(
     await callback.answer()
 
 
-# Step 4: Process validity days
+# Step 5: Process validity days
 @router.message(AdminStates.waiting_for_promo_validity_days, F.text)
 async def process_promo_validity_days_handler(
     message: types.Message,
@@ -315,7 +447,12 @@ async def create_promo_code_final(
         created_promo = await PromoCodeService.issue_code(
             session,
             effects=PromoEffects(
-                bonus_days=int(data["bonus_days"]),
+                bonus_days=int(data.get("bonus_days") or 0),
+                discount_percent=(
+                    float(data["discount_percent"])
+                    if data.get("discount_percent") is not None
+                    else None
+                ),
                 applies_to=PROMO_APPLIES_TO_SUBSCRIPTION,
             ),
             code=str(data["promo_code"]),
@@ -342,7 +479,7 @@ async def create_promo_code_final(
         success_text = _(
             "admin_promo_created_success",
             code=data["promo_code"],
-            bonus_days=data["bonus_days"],
+            effect=_promo_effect_label(_, data),
             max_activations=data["max_activations"],
             valid_until_str=valid_until_str,
         )
@@ -389,7 +526,9 @@ async def create_promo_code_final(
     F.data == "admin_action:main",
     StateFilter(
         AdminStates.waiting_for_promo_code,
+        AdminStates.waiting_for_promo_type,
         AdminStates.waiting_for_promo_bonus_days,
+        AdminStates.waiting_for_promo_discount,
         AdminStates.waiting_for_promo_max_activations,
         AdminStates.waiting_for_promo_validity_days,
     ),

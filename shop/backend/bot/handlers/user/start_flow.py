@@ -331,6 +331,12 @@ async def start_command_handler(
                 reply_markup=keyboard,
             )
             return
+        await message.answer(
+            i18n.gettext(current_lang, "ticket_open_unavailable")
+            if i18n
+            else "Ticket link is unavailable right now - open Support from the menu.",
+        )
+        return
 
     if not db_user:
         user_data_to_create = {

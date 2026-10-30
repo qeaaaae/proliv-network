@@ -3,7 +3,6 @@ import {
   Check,
   CreditCard,
   Gauge,
-  Globe,
   LoaderCircle,
   Plus,
   ReceiptText,
@@ -26,7 +25,7 @@ interface Tariffs {
   friendDiscountPercent?: number
 }
 
-const { data, status } = useFetch<Tariffs>('/api/tariffs', { lazy: true })
+const { data, status, refresh } = useFetch<Tariffs>('/api/tariffs', { lazy: true })
 const { data: ordersData, refresh: refreshOrders } = useFetch<{ orders: Order[] }>(
   '/api/orders',
   { lazy: true },
@@ -73,8 +72,24 @@ const friendDiscountAmount = computed(() => {
   const price = selectedPeriod.value?.price ?? 0
   return data.value?.suggestedPromoCode && pct > 0 ? (price * pct) / 100 : 0
 })
+
+// Код-скидка из промо-диплинка (/account -> /purchases?promo=<code>&pd=<percent>):
+// код идёт в чекаут, скидку показываем заранее как реферальную.
+const promoCode = computed(() => {
+  const raw = Array.isArray(route.query.promo) ? route.query.promo[0] : route.query.promo
+  return typeof raw === 'string' && /^[A-Za-z0-9_-]{1,59}$/.test(raw) ? raw : ''
+})
+const promoDiscountAmount = computed(() => {
+  const pct = Number(Array.isArray(route.query.pd) ? route.query.pd[0] : route.query.pd)
+  const price = selectedPeriod.value?.price ?? 0
+  return promoCode.value && pct > 0 && pct <= 100 ? (price * pct) / 100 : 0
+})
 const finalPrice = computed(
-  () => Math.max(0, (selectedPeriod.value?.price ?? 0) - friendDiscountAmount.value),
+  () =>
+    Math.max(
+      0,
+      (selectedPeriod.value?.price ?? 0) - friendDiscountAmount.value - promoDiscountAmount.value,
+    ),
 )
 
 // ?balance=1 (кнопка «Оплатить бонусами» в рефералке) - сразу включаем
@@ -103,6 +118,7 @@ function goToPayment(res: { paymentUrl?: string | null; paid?: boolean }) {
 }
 
 async function checkout() {
+  if (pending.value) return
   pending.value = true
   try {
     const res = await $fetch<{ paymentUrl: string | null; paid?: boolean }>('/api/checkout', {
@@ -111,6 +127,7 @@ async function checkout() {
         planId: selectedPeriod.value?.id,
         periodDays: selectedPeriod.value?.days,
         method: method.value,
+        promo: promoCode.value || undefined,
         balanceSource: balanceSource.value || undefined,
       },
     })
@@ -128,6 +145,8 @@ async function checkout() {
 }
 
 async function buyExtra(id: string) {
+  if (pending.value) return
+  pending.value = true
   try {
     const res = await $fetch<{ paymentUrl: string | null; paid?: boolean }>('/api/checkout', {
       method: 'POST',
@@ -141,6 +160,8 @@ async function buyExtra(id: string) {
     await refreshOrders()
   } catch (e) {
     push((e as { data?: { statusMessage?: string } }).data?.statusMessage ?? 'Не удалось создать платёж', 'error')
+  } finally {
+    pending.value = false
   }
 }
 
@@ -185,6 +206,10 @@ const ORDER_STATUS: Record<Order['status'], string> = {
       </div>
     </section>
 
+    <section v-else-if="status === 'error'" class="panel">
+      <FetchError @retry="refresh" />
+    </section>
+
     <div v-else class="grid-2">
       <!-- Тариф -->
       <section class="panel">
@@ -198,12 +223,10 @@ const ORDER_STATUS: Record<Order['status'], string> = {
           </div>
 
           <div class="plan-feats">
-            <span class="plan-feat"><Gauge :size="13" />1000 ГБ/мес</span>
             <span class="plan-feat">
               <Smartphone :size="13" />{{ data?.plan.devices ?? 0 }}
               {{ fmt.plural(data?.plan.devices ?? 0, 'устройство', 'устройства', 'устройств') }}
             </span>
-            <span class="plan-feat"><Globe :size="13" />3 локации</span>
             <span class="plan-feat"><ShieldCheck :size="13" />VLESS Reality</span>
           </div>
 
@@ -252,6 +275,11 @@ const ORDER_STATUS: Record<Order['status'], string> = {
             <div v-if="friendDiscountAmount > 0" class="sum-line">
               <span class="muted">Скидка по приглашению</span>
               <span class="numeric accent">−{{ fmt.rub(friendDiscountAmount) }}</span>
+            </div>
+            <div v-if="promoCode" class="sum-line">
+              <span class="muted">Промокод {{ promoCode }}</span>
+              <span v-if="promoDiscountAmount > 0" class="numeric accent">−{{ fmt.rub(promoDiscountAmount) }}</span>
+              <span v-else class="muted">применится на оплате</span>
             </div>
             <div v-if="(data?.methods?.length ?? 0) === 1" class="sum-line">
               <span class="muted">Способ оплаты</span>
@@ -343,7 +371,7 @@ const ORDER_STATUS: Record<Order['status'], string> = {
           <span class="row-line__hint">{{ e.kind === 'device' ? 'Доп. устройства к подписке' : 'Доп. трафик на месяц' }}</span>
         </span>
         <span class="row-line__value numeric" style="font-size: 14px">{{ fmt.rub(e.price) }}</span>
-        <button class="btn btn--ghost btn--sm" @click="buyExtra(e.id)">Купить</button>
+        <button class="btn btn--ghost btn--sm" :disabled="pending" @click="buyExtra(e.id)">Купить</button>
       </div>
     </section>
 

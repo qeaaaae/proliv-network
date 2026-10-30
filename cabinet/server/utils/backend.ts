@@ -19,6 +19,7 @@ export interface ShopMeSubscription {
   tariff_name?: string | null
   status?: string
   days_left?: number
+  can_topup_devices?: boolean
 }
 
 export interface ShopMe {
@@ -234,7 +235,8 @@ export async function shopFetch<T = Record<string, unknown>>(
     const e = err as { statusCode?: number; data?: { detail?: string; message?: string }; message?: string }
     const status = e.statusCode ?? 502
     const detail = e.data?.detail || e.data?.message || 'Backend request failed'
-    throw createError({ statusCode: status, statusMessage: String(detail) })
+    // data пробрасываем дальше - вызывающие читают код ошибки (e.data.error)
+    throw createError({ statusCode: status, statusMessage: String(detail), data: e.data })
   }
   return res as T
 }
