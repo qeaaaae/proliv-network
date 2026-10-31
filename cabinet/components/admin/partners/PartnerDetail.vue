@@ -478,11 +478,13 @@ watch(() => props.partnerId, load, { immediate: true })
           · с {{ fmtDate(partner.created_at) }}
         </p>
       </div>
-      <div class="admin-row">
+      <div class="admin-row partner-badges">
         <AdminBadge :tone="statusTones[partner.status] || 'default'">
           {{ statusLabels[partner.status] || partner.status }}
         </AdminBadge>
-        <AdminBadge>{{ kindLabels[partner.kind] || partner.kind }}</AdminBadge>
+        <span v-if="partner.kind === 'streamer'" class="badge-streamer">Стример</span>
+        <AdminBadge v-else-if="partner.kind === 'clipper'">Нарезчик</AdminBadge>
+        <AdminBadge v-else>{{ kindLabels[partner.kind] || partner.kind }}</AdminBadge>
         <AdminBadge v-if="partner.banner_below_stream" tone="warning">Баннер под стримом</AdminBadge>
         <AdminBadge v-if="partner.banner_on_stream" tone="warning">Баннер на стриме</AdminBadge>
       </div>
@@ -839,7 +841,55 @@ watch(() => props.partnerId, load, { immediate: true })
 }
 .partner-head {
   align-items: flex-start;
-  justify-content: space-between;
+  gap: 12px;
+}
+.partner-title {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+.partner-badges {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.badge-streamer {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(120deg, #772ce8, #9146ff 45%, #5c16c5);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.badge-streamer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    115deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.45) 50%,
+    transparent 70%
+  );
+  background-size: 250% 100%;
+  animation: streamer-shine 2.6s ease-in-out infinite;
+}
+@keyframes streamer-shine {
+  0% {
+    background-position: 120% 0;
+  }
+  60%,
+  100% {
+    background-position: -130% 0;
+  }
 }
 .partner-title h2 {
   margin: 0;
