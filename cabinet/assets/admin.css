@@ -176,3 +176,48 @@
   font-size: 12px;
   color: var(--adm-muted);
 }
+
+/* Адаптив: на узком экране таблица -> карточки. Подписи полей берутся из
+   data-label (ставит plugins/admTableLabels.client.ts по заголовкам thead). */
+@media (max-width: 720px) {
+  .admin-table thead {
+    display: none;
+  }
+  .admin-table,
+  .admin-table tbody {
+    display: block;
+    width: 100%;
+  }
+  .admin-table tbody > tr {
+    display: grid;
+    gap: 6px;
+    padding: 12px;
+    margin-bottom: 10px;
+    border: 1px solid var(--adm-border);
+    border-radius: var(--radius-card);
+    background: var(--adm-card-2);
+  }
+  .admin-table td {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    border: 0;
+    padding: 2px 0;
+    text-align: right;
+  }
+  .admin-table td::before {
+    content: attr(data-label);
+    flex-shrink: 0;
+    font-size: 11px;
+    color: var(--adm-muted);
+    text-align: left;
+  }
+  .admin-table td[colspan] {
+    display: block;
+    text-align: center;
+  }
+  .admin-table td[colspan]::before {
+    content: none;
+  }
+}
