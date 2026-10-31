@@ -60,7 +60,7 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-control, 14px);
   border: 1px solid var(--adm-border, #232c3d);
   background: var(--adm-bg, #0b0f17);
   color: inherit;
@@ -81,7 +81,7 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
   display: grid;
   gap: 2px;
   padding: 6px;
-  border-radius: 12px;
+  border-radius: var(--radius-card, 20px);
   border: 1px solid var(--adm-border, #232c3d);
   background: var(--adm-card, #141a26);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
@@ -89,7 +89,7 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
 .adm-select-option {
   padding: 9px 10px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 10px;
   background: transparent;
   color: inherit;
   font-size: 13px;

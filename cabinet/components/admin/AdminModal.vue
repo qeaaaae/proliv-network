@@ -42,7 +42,7 @@ onUnmounted(() => document.removeEventListener('keydown', onKey))
   display: grid;
   gap: 14px;
   padding: 18px;
-  border-radius: 16px;
+  border-radius: var(--radius-card, 20px);
   border: 1px solid var(--adm-border, #232c3d);
   background: var(--adm-card, #141a26);
 }

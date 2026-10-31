@@ -1,33 +1,43 @@
-/* Общие токены и классы веб-админки (подключается только в /admin оболочке). */
+/* Общие токены и классы веб-админки - мапимся на палитру ЛК (main.css),
+   чтобы админка выглядела как продолжение кабинета: те же фон, карточки,
+   радиусы, акцент. */
 .admin-shell {
-  --adm-bg: #0b0f17;
-  --adm-card: #141a26;
-  --adm-card-2: #1a2231;
-  --adm-border: #232c3d;
-  --adm-text: #e8ecf4;
-  --adm-muted: #8b95a8;
-  --adm-accent: #3b82f6;
-  --adm-accent-soft: rgba(59, 130, 246, 0.14);
-  --adm-danger: #f87171;
-  --adm-warning: #fbbf24;
-  --adm-success: #34d399;
+  --adm-bg: var(--bg);
+  --adm-card: var(--card);
+  --adm-card-2: var(--card-hover);
+  --adm-border: var(--border);
+  --adm-border-strong: var(--border-strong);
+  --adm-text: var(--text);
+  --adm-muted: var(--fg-secondary);
+  --adm-accent: var(--accent);
+  --adm-accent-soft: var(--accent-soft);
+  --adm-accent-ink: var(--accent-ink);
+  --adm-danger: var(--red);
+  --adm-warning: var(--amber);
+  --adm-success: var(--green);
   min-height: 100dvh;
   background: var(--adm-bg);
   color: var(--adm-text);
   font-size: 14px;
+  font-family: var(--font-body);
 }
 .admin-page {
-  max-width: 920px;
+  max-width: var(--frame);
   margin: 0 auto;
-  padding: 20px 16px 64px;
+  padding: 20px var(--gutter) 96px;
   display: grid;
   gap: 16px;
+}
+.admin-page h1,
+.admin-page h2,
+.admin-page h3 {
+  font-family: var(--font-display);
 }
 .admin-card {
   display: grid;
   gap: 12px;
-  padding: 16px;
-  border-radius: 14px;
+  padding: 18px;
+  border-radius: var(--radius-card);
   background: var(--adm-card);
   border: 1px solid var(--adm-border);
 }
@@ -62,7 +72,7 @@
 }
 .admin-kpi {
   padding: 14px 16px;
-  border-radius: 12px;
+  border-radius: var(--radius-card);
   background: var(--adm-card);
   border: 1px solid var(--adm-border);
   display: grid;
@@ -74,26 +84,29 @@
 }
 .admin-kpi strong {
   font-size: 20px;
+  font-family: var(--font-display);
 }
 .admin-input,
 .admin-input select,
 .admin-input textarea {
   width: 100%;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-control);
   border: 1px solid var(--adm-border);
   background: var(--adm-bg);
   color: inherit;
   font-size: 14px;
+  font-family: var(--font-body);
 }
 .admin-btn {
   padding: 10px 16px;
-  border-radius: 10px;
+  border-radius: var(--radius-control);
   border: 1px solid transparent;
   background: var(--adm-accent);
-  color: #fff;
+  color: var(--adm-accent-ink);
   font-weight: 600;
   font-size: 13px;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: opacity 0.15s;
 }
@@ -103,7 +116,7 @@
 }
 .admin-btn.ghost {
   background: transparent;
-  border-color: var(--adm-border);
+  border-color: var(--adm-border-strong);
   color: var(--adm-text);
 }
 .admin-btn.danger {
@@ -147,15 +160,17 @@
   display: grid;
   gap: 2px;
   text-align: left;
-  padding: 10px 12px;
-  border-radius: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-control);
   border: 1px solid var(--adm-border);
-  background: transparent;
+  background: var(--adm-card);
   color: inherit;
   cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
 }
 .admin-list-item:hover {
   border-color: var(--adm-accent);
+  background: var(--adm-card-2);
 }
 .admin-list-item span {
   font-size: 12px;

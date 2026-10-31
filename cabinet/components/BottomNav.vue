@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { CircleUserRound, CreditCard, MessageCircle, Radio, Users } from '@lucide/vue'
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { CircleUserRound, CreditCard, MessageCircle, Radio, ShieldCheck, Users } from '@lucide/vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const route = useRoute()
+const { isAdmin, ensure: ensureAdmin } = useAdmin()
 
-const tabs = [
+const tabs = computed(() => [
   { to: '/', icon: Radio, label: 'Подписка' },
   { to: '/purchases', icon: CreditCard, label: 'Покупки' },
   { to: '/referrals', icon: Users, label: 'Рефералы' },
   { to: '/account', icon: CircleUserRound, label: 'Аккаунт' },
   { to: '/support', icon: MessageCircle, label: 'Поддержка' },
-]
+  ...(isAdmin.value ? [{ to: '/admin', icon: ShieldCheck, label: 'Панель' }] : []),
+])
 
 const isActive = (to: string) =>
   to === '/' ? route.path === '/' : route.path === to || route.path.startsWith(`${to}/`)
@@ -21,7 +23,7 @@ let remeasureTimer: ReturnType<typeof setTimeout> | undefined
 
 async function syncPill() {
   await nextTick()
-  const idx = tabs.findIndex((t) => isActive(t.to))
+  const idx = tabs.value.findIndex((t) => isActive(t.to))
   const raw = linkEls.value?.[idx]
   // ref на NuxtLink возвращает инстанс компонента - нужен $el
   const el = raw instanceof HTMLElement ? raw : (raw as { $el?: unknown })?.$el
@@ -38,6 +40,7 @@ function syncPillDeferred() {
 }
 
 onMounted(() => {
+  void ensureAdmin().then(syncPillDeferred)
   syncPillDeferred()
   // перемер после подгрузки шрифтов - лейбл меняет ширину ссылки
   document.fonts?.ready.then(() => void syncPill())

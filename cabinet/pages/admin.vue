@@ -59,22 +59,25 @@ onMounted(async () => {
   z-index: 30;
   display: flex;
   gap: 4px;
-  padding: 10px 12px;
+  padding: 10px var(--gutter);
   overflow-x: auto;
-  background: rgba(11, 15, 23, 0.92);
+  background: rgba(10, 12, 14, 0.92);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--adm-border);
 }
 .admin-nav-link {
   padding: 8px 14px;
-  border-radius: 10px;
+  border-radius: var(--radius-pill);
   color: var(--adm-muted);
   font-size: 13px;
+  font-family: var(--font-body);
   text-decoration: none;
   white-space: nowrap;
+  transition: color 0.15s, background 0.15s;
 }
 .admin-nav-link:hover {
   color: var(--adm-text);
+  background: var(--card-hover);
 }
 .admin-nav-link.active {
   color: var(--adm-accent);
