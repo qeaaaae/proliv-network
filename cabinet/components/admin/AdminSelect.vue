@@ -62,10 +62,11 @@ onUnmounted(() => document.removeEventListener('click', onDocClick))
   padding: 10px 12px;
   border-radius: var(--radius-control, 14px);
   border: 1px solid var(--adm-border, #232c3d);
-  background: var(--adm-bg, #0b0f17);
+  background: var(--control, #1d222a);
   color: inherit;
   font-size: 14px;
   cursor: pointer;
+  min-height: 46px;
 }
 .adm-select.open .adm-select-trigger {
   border-color: var(--adm-accent, #3b82f6);

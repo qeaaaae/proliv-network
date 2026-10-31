@@ -86,17 +86,109 @@
   font-size: 20px;
   font-family: var(--font-display);
 }
-.admin-input,
-.admin-input select,
-.admin-input textarea {
+/* Все формы админки - стиль полей ЛК: --control фон, radius-control,
+   фокус с accent-бордером и мягким кольцом. Стилизуем и голые элементы,
+   чтобы формы без явных классов выглядели одинаково. */
+.admin-shell input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']),
+.admin-shell textarea {
   width: 100%;
-  padding: 10px 12px;
+  min-height: 46px;
+  padding: 0 16px;
   border-radius: var(--radius-control);
   border: 1px solid var(--adm-border);
-  background: var(--adm-bg);
-  color: inherit;
+  background: var(--control, #1d222a);
+  color: var(--adm-text);
+  outline: none;
   font-size: 14px;
   font-family: var(--font-body);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.2s ease;
+}
+.admin-shell textarea {
+  min-height: 96px;
+  padding: 12px 16px;
+  resize: vertical;
+}
+.admin-shell input:focus,
+.admin-shell textarea:focus {
+  border-color: var(--adm-accent);
+  box-shadow: 0 0 0 3px var(--adm-accent-soft);
+}
+.admin-shell input::placeholder,
+.admin-shell textarea::placeholder {
+  color: var(--muted, #666d78);
+}
+.admin-shell input:disabled,
+.admin-shell textarea:disabled {
+  opacity: 0.5;
+}
+.admin-shell input[type='datetime-local'] {
+  min-width: 0;
+}
+
+/* Лейбл-обёртка: muted подпись над полем */
+.admin-shell label:has(> input:not([type='checkbox']):not([type='radio'])),
+.admin-shell label:has(> select),
+.admin-shell label:has(> textarea),
+.admin-field {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--adm-muted);
+}
+.admin-shell label > span,
+.admin-field > span {
+  font-size: 12px;
+  color: var(--adm-muted);
+}
+
+/* Кастомный чекбокс в стиле ЛК (.check__box): 20px, radius 7, accent fill */
+.admin-shell input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  margin: 0;
+  border-radius: 7px;
+  border: 1px solid var(--adm-border-strong, rgba(255, 255, 255, 0.17));
+  background: var(--control, #1d222a);
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+}
+.admin-shell input[type='checkbox']::after {
+  content: '✓';
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: transparent;
+}
+.admin-shell input[type='checkbox']:checked {
+  background: var(--adm-accent);
+  border-color: var(--adm-accent);
+}
+.admin-shell input[type='checkbox']:checked::after {
+  color: var(--adm-accent-ink);
+}
+.admin-shell label:has(> input[type='checkbox']) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--adm-text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.admin-input {
+  /* класс сохранён для совместимости - стиль задаёт правило выше */
 }
 .admin-btn {
   padding: 10px 16px;
