@@ -26,7 +26,7 @@ from bot.utils.custom_emoji import custom_emoji_unicode_html
 from bot.utils.subscription_periods import format_duration_days
 from config.settings import Settings
 from config.subscription_periods import legacy_months_to_days
-from db.dal import user_balance_dal, user_dal
+from db.dal import partner_dal, user_balance_dal, user_dal
 
 from .menu_card import render_card, send_card
 
@@ -122,7 +122,14 @@ async def referral_command_handler(
 
     referral_stats = await referral_service.get_referral_stats(session, inviter_user_id)
 
-    text = _(
+    streamer_line = ""
+    partner_profile = await partner_dal.get_profile_by_user_id(session, inviter_user_id)
+    if partner_profile is not None and str(
+        getattr(partner_profile, "kind", "standard") or "standard"
+    ) == "streamer":
+        streamer_line = f"{_('referral_streamer_badge')}\n\n"
+
+    text = streamer_line + _(
         "referral_program_info_new",
         bonus_details=bonus_details_str,
         invited_count=referral_stats["invited_count"],
