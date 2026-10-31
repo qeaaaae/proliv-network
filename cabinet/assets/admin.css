@@ -1,0 +1,163 @@
+/* Общие токены и классы веб-админки (подключается только в /admin оболочке). */
+.admin-shell {
+  --adm-bg: #0b0f17;
+  --adm-card: #141a26;
+  --adm-card-2: #1a2231;
+  --adm-border: #232c3d;
+  --adm-text: #e8ecf4;
+  --adm-muted: #8b95a8;
+  --adm-accent: #3b82f6;
+  --adm-accent-soft: rgba(59, 130, 246, 0.14);
+  --adm-danger: #f87171;
+  --adm-warning: #fbbf24;
+  --adm-success: #34d399;
+  min-height: 100dvh;
+  background: var(--adm-bg);
+  color: var(--adm-text);
+  font-size: 14px;
+}
+.admin-page {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 20px 16px 64px;
+  display: grid;
+  gap: 16px;
+}
+.admin-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: 14px;
+  background: var(--adm-card);
+  border: 1px solid var(--adm-border);
+}
+.admin-card > h2,
+.admin-card > h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.admin-note {
+  font-size: 12px;
+  color: var(--adm-muted);
+  margin: 0;
+}
+.admin-error {
+  color: var(--adm-danger);
+}
+.admin-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.admin-grid {
+  display: grid;
+  gap: 12px;
+}
+.admin-grid.cols-2 {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+.admin-grid.cols-3 {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+.admin-kpi {
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--adm-card);
+  border: 1px solid var(--adm-border);
+  display: grid;
+  gap: 4px;
+}
+.admin-kpi small {
+  color: var(--adm-muted);
+  font-size: 12px;
+}
+.admin-kpi strong {
+  font-size: 20px;
+}
+.admin-input,
+.admin-input select,
+.admin-input textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--adm-border);
+  background: var(--adm-bg);
+  color: inherit;
+  font-size: 14px;
+}
+.admin-btn {
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: var(--adm-accent);
+  color: #fff;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.admin-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.admin-btn.ghost {
+  background: transparent;
+  border-color: var(--adm-border);
+  color: var(--adm-text);
+}
+.admin-btn.danger {
+  background: var(--adm-danger);
+}
+.admin-check {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 14px;
+  cursor: pointer;
+}
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.admin-table th {
+  text-align: left;
+  color: var(--adm-muted);
+  font-weight: 500;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--adm-border);
+}
+.admin-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--adm-border);
+}
+.admin-table tr:last-child td {
+  border-bottom: 0;
+}
+.admin-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.admin-list-item {
+  width: 100%;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--adm-border);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.admin-list-item:hover {
+  border-color: var(--adm-accent);
+}
+.admin-list-item span {
+  font-size: 12px;
+  color: var(--adm-muted);
+}
