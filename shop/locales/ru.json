@@ -6401,5 +6401,6 @@
   "admin_partners_kind_rate_note": "Ставка пересчитается по размещениям и применится только к новым платежам.",
   "admin_partners_dialog_kind_title": "Тип и размещения",
   "admin_partners_action_kind": "Тип",
-  "wa_partner_kind_streamer": "Стример"
+  "wa_partner_kind_streamer": "Стример",
+  "main_menu_streamer_badge": "Стример"
 }

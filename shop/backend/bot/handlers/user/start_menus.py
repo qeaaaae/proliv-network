@@ -85,6 +85,7 @@ async def send_main_menu(
     balance_minor = await user_balance_dal.balance_minor(session, user_id, currency)
     # Vendored-патч: в главном меню «Бонусы» показываем сумму бонусного и
     # партнёрского кошельков - в кабинете карточка «Бонусный счёт» считает так же.
+    partner_profile = None
     if settings.partner_settings.enabled:
         partner_profile = await partner_dal.get_profile_by_user_id(session, user_id)
         if partner_profile is not None:
@@ -104,10 +105,22 @@ async def send_main_menu(
     else:
         status_block = _("main_menu_sub_expired")
 
+    streamer_line = (
+        f"\n\n{_('main_menu_streamer_badge')}"
+        if partner_profile is not None
+        and str(getattr(partner_profile, "kind", "standard") or "standard") == "streamer"
+        else ""
+    )
+    account_block = _(
+        "main_menu_account_block",
+        user_id=event_user.id,
+        balance=balance_text,
+        currency=currency_display,
+    )
     text = (
         f"{_(key='main_menu_greeting', user_name=user_full_name)}\n\n"
-        f"{_('main_menu_account_block', user_id=event_user.id, balance=balance_text, currency=currency_display)}\n\n"
-        f"{status_block}"
+        f"{account_block}\n\n"
+        f"{status_block}{streamer_line}"
     )
     reply_markup = get_main_menu_inline_keyboard(
         current_lang,
