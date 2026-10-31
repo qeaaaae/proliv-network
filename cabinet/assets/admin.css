@@ -249,6 +249,8 @@
 }
 .admin-list-item {
   width: 100%;
+  min-width: 0;
+  overflow: hidden;
   display: grid;
   gap: 2px;
   text-align: left;

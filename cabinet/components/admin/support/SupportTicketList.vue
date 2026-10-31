@@ -123,8 +123,10 @@ function fmtTime(iso: string | null): string {
   justify-content: space-between;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 .ticket-subject {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -132,8 +134,16 @@ function fmtTime(iso: string | null): string {
 .ticket-meta {
   display: flex;
   gap: 10px;
+  min-width: 0;
+  overflow: hidden;
   font-size: 12px;
   color: var(--adm-muted);
+}
+.ticket-meta > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ticket-prio {
   color: var(--adm-warning);

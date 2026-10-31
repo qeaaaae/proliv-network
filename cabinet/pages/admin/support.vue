@@ -255,12 +255,17 @@ onMounted(reloadAll)
 .support-split {
   display: grid;
   gap: 16px;
-  grid-template-columns: minmax(280px, 380px) 1fr;
+  grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
   align-items: start;
+}
+.list-card,
+.thread-card {
+  min-width: 0;
 }
 .list-card {
   max-height: 70dvh;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 @media (max-width: 860px) {
   .support-split {
