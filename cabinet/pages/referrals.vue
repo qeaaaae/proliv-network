@@ -221,6 +221,7 @@ async function bonus(action: string, amount: number | null, method?: string) {
           </span>
           <span class="row-line__value accent">
             <span v-if="data?.partner?.kind === 'streamer'" class="badge-streamer">Стример</span>
+            <span v-else-if="data?.partner?.kind === 'clipper'" class="badge-clipper">Нарезчик</span>
             {{ data?.percent ?? '—' }}%
           </span>
         </div>
@@ -497,6 +498,29 @@ async function bonus(action: string, amount: number | null, method?: string) {
   overflow: hidden;
   white-space: nowrap;
   vertical-align: middle;
+}
+.badge-clipper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  margin-right: 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(120deg, #e8613c, #ff8a4b 45%, #c94b1f);
+  overflow: hidden;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.badge-clipper::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, transparent 30%, rgba(255, 255, 255, 0.45) 50%, transparent 70%);
+  background-size: 250% 100%;
+  animation: streamer-shine 2.6s ease-in-out infinite;
 }
 .badge-streamer::after {
   content: '';

@@ -107,7 +107,7 @@ def test_update_kind_flags_clipper_clears_placements_and_rate(
     assert result.kind == "clipper"
     assert result.banner_below_stream is False
     assert result.banner_on_stream is False
-    assert result.commission_bps == 0
+    assert result.commission_bps == 2000
 
 
 def test_update_kind_flags_standard_keeps_rate(monkeypatch) -> None:

@@ -469,7 +469,7 @@ class PartnerCommissionService:
                 banner_on_stream=new_on,
             )
         elif new_kind == "clipper" and old["kind"] != "clipper":
-            new_bps = 0
+            new_bps = 2000
         else:
             new_bps = old["commission_bps"]
         if (

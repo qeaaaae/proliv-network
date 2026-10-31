@@ -124,10 +124,12 @@ async def referral_command_handler(
 
     streamer_line = ""
     partner_profile = await partner_dal.get_profile_by_user_id(session, inviter_user_id)
-    if partner_profile is not None and str(
-        getattr(partner_profile, "kind", "standard") or "standard"
-    ) == "streamer":
-        streamer_line = f"{_('referral_streamer_badge')}\n\n"
+    if partner_profile is not None:
+        p_kind = str(getattr(partner_profile, "kind", "standard") or "standard")
+        if p_kind == "streamer":
+            streamer_line = f"{_('referral_streamer_badge')}\n\n"
+        elif p_kind == "clipper":
+            streamer_line = f"{_('referral_clipper_badge')}\n\n"
 
     text = streamer_line + _(
         "referral_program_info_new",

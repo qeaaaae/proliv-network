@@ -260,7 +260,7 @@ class PartnerProgramService:
                 banner_on_stream=banner_on_stream,
             )
         elif kind == "clipper":
-            bps = 0  # clipper payouts are per-view manual adjustments, not rev-share
+            bps = 2000  # clipper rev-share 20%; per-view payouts stay manual adjustments
         else:
             bps = self.config.default_commission_bps
         if bps < 0 or bps > 10000:
