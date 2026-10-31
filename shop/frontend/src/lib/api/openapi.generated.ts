@@ -1747,6 +1747,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/admin/partners/{id}/kind": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Admin Partner Kind */
+    post: operations["post_admin_partner_kind_route"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/admin/partners/{id}/link/rotate": {
     parameters: {
       query?: never;
@@ -6729,10 +6746,26 @@ export interface components {
     /** AdminPartnerCreateIn */
     AdminPartnerCreateIn: {
       /**
+       * Banner Below Stream
+       * @default false
+       */
+      banner_below_stream: boolean;
+      /**
+       * Banner On Stream
+       * @default false
+       */
+      banner_on_stream: boolean;
+      /**
        * Commission Bps
        * @default null
        */
       commission_bps: number | null;
+      /**
+       * Kind
+       * @default standard
+       * @enum {string}
+       */
+      kind: "standard" | "streamer" | "clipper";
       /** User Id */
       user_id: number;
       /**
@@ -6740,6 +6773,29 @@ export interface components {
        * @default null
        */
       welcome_message: string | null;
+    };
+    /** AdminPartnerKindIn */
+    AdminPartnerKindIn: {
+      /**
+       * Banner Below Stream
+       * @default null
+       */
+      banner_below_stream: boolean | null;
+      /**
+       * Banner On Stream
+       * @default null
+       */
+      banner_on_stream: boolean | null;
+      /**
+       * Kind
+       * @default null
+       */
+      kind: ("standard" | "streamer" | "clipper") | null;
+      /**
+       * Reason
+       * @default null
+       */
+      reason: string | null;
     };
     /** AdminPartnerRateIn */
     AdminPartnerRateIn: {
@@ -9824,6 +9880,16 @@ export interface components {
        * @default null
        */
       avatar_url: string | null;
+      /**
+       * Banner Below Stream
+       * @default false
+       */
+      banner_below_stream: boolean;
+      /**
+       * Banner On Stream
+       * @default false
+       */
+      banner_on_stream: boolean;
       /** Commission Bps */
       commission_bps: number;
       /**
@@ -9833,6 +9899,11 @@ export interface components {
       created_at: string;
       /** Display Label */
       display_label: string;
+      /**
+       * Kind
+       * @default standard
+       */
+      kind: string;
       /** Partner Id */
       partner_id: number;
       /**
@@ -16271,6 +16342,36 @@ export interface operations {
     requestBody: {
       content: {
         "application/json": components["schemas"]["AdminPartnerRateIn"];
+      };
+    };
+    responses: {
+      /** @description JSON response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            /** @constant */
+            ok: true;
+            partner: components["schemas"]["PartnerProfileOut"];
+          };
+        };
+      };
+    };
+  };
+  post_admin_partner_kind_route: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        id: number;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AdminPartnerKindIn"];
       };
     };
     responses: {

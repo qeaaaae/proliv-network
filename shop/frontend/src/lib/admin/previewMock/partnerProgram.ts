@@ -40,6 +40,8 @@ export type WithdrawalStatus =
   "requested" | "processing" | "paid" | "rejected" | "failed" | "canceled";
 export type WithdrawalMethod = "bank_card" | "sbp" | "crypto";
 
+export type PartnerKind = "standard" | "streamer" | "clipper";
+
 export type PartnerRow = {
   id: string;
   userId: number;
@@ -48,6 +50,9 @@ export type PartnerRow = {
   avatarUrl: string;
   status: PartnerStatus;
   rate: number;
+  kind?: PartnerKind;
+  bannerBelow?: boolean;
+  bannerOn?: boolean;
   clients: number;
   payments: number;
   gross: number;

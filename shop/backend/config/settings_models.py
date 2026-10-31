@@ -240,6 +240,9 @@ class PartnerSettings(BaseModel):
     client_payment_bonus_enabled: bool = False
     one_bonus_per_client: bool = True
     default_commission_bps: int = Field(default=3000, ge=0, le=10000)
+    streamer_rate_below_bps: int = Field(default=4000, ge=0, le=10000)
+    streamer_rate_on_bps: int = Field(default=5000, ge=0, le=10000)
+    streamer_rate_both_bps: int = Field(default=6000, ge=0, le=10000)
     commission_hold_days: int = Field(default=0, ge=0, le=365)
     eligible_currencies: list[str] = Field(default_factory=lambda: ["RUB"])
     excluded_sale_modes: list[str] = Field(default_factory=list)

@@ -70,6 +70,7 @@ from .partners import (
     admin_partner_close_route,
     admin_partner_create_route,
     admin_partner_detail_route,
+    admin_partner_kind_route,
     admin_partner_link_rotate_route,
     admin_partner_overview_route,
     admin_partner_pause_route,
@@ -244,6 +245,10 @@ def setup_admin_routes(app: web.Application) -> None:
     router.add_post(
         "/api/admin/partners/{id:\\d+}/commission-rate",
         admin_partner_rate_route,
+    )
+    router.add_post(
+        "/api/admin/partners/{id:\\d+}/kind",
+        admin_partner_kind_route,
     )
     router.add_post(
         "/api/admin/partners/{id:\\d+}/balance-adjustments",

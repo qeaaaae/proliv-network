@@ -4382,6 +4382,16 @@
       "AdminPartnerCreateIn": {
         "additionalProperties": false,
         "properties": {
+          "banner_below_stream": {
+            "default": false,
+            "title": "Banner Below Stream",
+            "type": "boolean"
+          },
+          "banner_on_stream": {
+            "default": false,
+            "title": "Banner On Stream",
+            "type": "boolean"
+          },
           "commission_bps": {
             "anyOf": [
               {
@@ -4395,6 +4405,16 @@
             ],
             "default": null,
             "title": "Commission Bps"
+          },
+          "kind": {
+            "default": "standard",
+            "enum": [
+              "standard",
+              "streamer",
+              "clipper"
+            ],
+            "title": "Kind",
+            "type": "string"
           },
           "user_id": {
             "title": "User Id",
@@ -4418,6 +4438,67 @@
           "user_id"
         ],
         "title": "AdminPartnerCreateIn",
+        "type": "object"
+      },
+      "AdminPartnerKindIn": {
+        "additionalProperties": false,
+        "properties": {
+          "banner_below_stream": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Banner Below Stream"
+          },
+          "banner_on_stream": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Banner On Stream"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "standard",
+                  "streamer",
+                  "clipper"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Kind"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          }
+        },
+        "title": "AdminPartnerKindIn",
         "type": "object"
       },
       "AdminPartnerRateIn": {
@@ -11562,6 +11643,16 @@
             "default": null,
             "title": "Avatar Url"
           },
+          "banner_below_stream": {
+            "default": false,
+            "title": "Banner Below Stream",
+            "type": "boolean"
+          },
+          "banner_on_stream": {
+            "default": false,
+            "title": "Banner On Stream",
+            "type": "boolean"
+          },
           "commission_bps": {
             "title": "Commission Bps",
             "type": "integer"
@@ -11573,6 +11664,11 @@
           },
           "display_label": {
             "title": "Display Label",
+            "type": "string"
+          },
+          "kind": {
+            "default": "standard",
+            "title": "Kind",
             "type": "string"
           },
           "partner_id": {
@@ -25717,6 +25813,69 @@
           }
         ],
         "summary": "Admin Partner Rate",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/partners/{id}/kind": {
+      "post": {
+        "operationId": "post_admin_partner_kind_route",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminPartnerKindIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "partner": {
+                      "$ref": "#/components/schemas/PartnerProfileOut"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "partner"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "JSON response"
+          }
+        },
+        "security": [
+          {
+            "AdminSession": []
+          },
+          {
+            "AdminBearer": []
+          }
+        ],
+        "summary": "Admin Partner Kind",
         "tags": [
           "admin"
         ]

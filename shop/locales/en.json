@@ -6389,5 +6389,17 @@
   "admin_nodes_geo_blocked": "Unavailable: {items}",
   "admin_nodes_geo_checked": "checked {stamp} UTC",
   "admin_nodes_geo_reddit_guest": "Reddit without login",
-  "admin_nodes_geo_spotify_signup": "Spotify signup"
+  "admin_nodes_geo_spotify_signup": "Spotify signup",
+  "admin_partners_kind_label": "Partner kind",
+  "admin_partners_kind_standard": "Partner",
+  "admin_partners_kind_streamer": "Streamer",
+  "admin_partners_kind_clipper": "Clipper",
+  "admin_partners_banner_below": "Banner below the stream",
+  "admin_partners_banner_on": "Banner on the stream",
+  "admin_partners_streamer_rate_hint": "The commission rate is set automatically from the confirmed placements.",
+  "admin_partners_clipper_rate_hint": "Clipper payouts are credited manually per views; rev-share rate stays 0%.",
+  "admin_partners_kind_rate_note": "The rate follows the placements and applies only to future payments.",
+  "admin_partners_dialog_kind_title": "Kind and placements",
+  "admin_partners_action_kind": "Kind",
+  "wa_partner_kind_streamer": "Streamer"
 }

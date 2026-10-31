@@ -39,6 +39,9 @@ class PartnerProfileOut(PartnerModel):
     commission_bps: int
     welcome_message: str | None = None
     pause_reason: str | None = None
+    kind: str = "standard"
+    banner_below_stream: bool = False
+    banner_on_stream: bool = False
     activated_at: datetime
     created_at: datetime
 
@@ -172,10 +175,23 @@ class PartnerBalanceRenewIn(PartnerModel):
     idempotency_key: str = Field(min_length=8, max_length=128)
 
 
+PartnerKind = Literal["standard", "streamer", "clipper"]
+
+
 class AdminPartnerCreateIn(PartnerModel):
     user_id: int
     commission_bps: int | None = Field(default=None, ge=0, le=10000)
     welcome_message: str | None = Field(default=None, max_length=2000)
+    kind: PartnerKind = "standard"
+    banner_below_stream: bool = False
+    banner_on_stream: bool = False
+
+
+class AdminPartnerKindIn(PartnerModel):
+    kind: PartnerKind | None = None
+    banner_below_stream: bool | None = None
+    banner_on_stream: bool | None = None
+    reason: str | None = Field(default=None, max_length=2000)
 
 
 class AdminPartnerApplicationDecisionIn(PartnerModel):

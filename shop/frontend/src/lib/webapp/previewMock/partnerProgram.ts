@@ -74,6 +74,7 @@ export type PartnerProgramPreview = {
   decisionMessage: string;
   reapplyAllowed: boolean;
   profileState: PartnerProfileState | null;
+  partnerKind?: "standard" | "streamer" | "clipper";
   pauseReason: string;
   welcomeMessage: string;
   commissionBps: number;

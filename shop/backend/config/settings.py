@@ -477,6 +477,24 @@ class Settings(
     PARTNER_CLIENT_PAYMENT_BONUS_ENABLED: bool = False
     PARTNER_ONE_BONUS_PER_CLIENT: bool = True
     PARTNER_DEFAULT_COMMISSION_BPS: int = Field(default=1500, ge=0, le=10000)
+    PARTNER_STREAMER_RATE_BELOW_BPS: int = Field(
+        default=4000,
+        ge=0,
+        le=10000,
+        description="Streamer commission bps when only the below-stream banner is placed.",
+    )
+    PARTNER_STREAMER_RATE_ON_BPS: int = Field(
+        default=5000,
+        ge=0,
+        le=10000,
+        description="Streamer commission bps when only the on-stream banner is placed.",
+    )
+    PARTNER_STREAMER_RATE_BOTH_BPS: int = Field(
+        default=6000,
+        ge=0,
+        le=10000,
+        description="Streamer commission bps when both banner placements are confirmed.",
+    )
     PARTNER_COMMISSION_HOLD_DAYS: int = Field(default=0, ge=0, le=365)
     PARTNER_ELIGIBLE_CURRENCIES: str = Field(
         default='["RUB"]',

@@ -6389,5 +6389,17 @@
   "admin_nodes_geo_blocked": "Недоступно: {items}",
   "admin_nodes_geo_checked": "проверка {stamp} UTC",
   "admin_nodes_geo_reddit_guest": "Reddit без входа",
-  "admin_nodes_geo_spotify_signup": "регистрация Spotify"
+  "admin_nodes_geo_spotify_signup": "регистрация Spotify",
+  "admin_partners_kind_label": "Тип партнёра",
+  "admin_partners_kind_standard": "Партнёр",
+  "admin_partners_kind_streamer": "Стример",
+  "admin_partners_kind_clipper": "Нарезчик",
+  "admin_partners_banner_below": "Баннер под стримом",
+  "admin_partners_banner_on": "Баннер на стриме",
+  "admin_partners_streamer_rate_hint": "Ставка выставится автоматически по подтверждённым размещениям.",
+  "admin_partners_clipper_rate_hint": "Нарезчику выплаты начисляются вручную за просмотры; реферальная ставка остаётся 0%.",
+  "admin_partners_kind_rate_note": "Ставка пересчитается по размещениям и применится только к новым платежам.",
+  "admin_partners_dialog_kind_title": "Тип и размещения",
+  "admin_partners_action_kind": "Тип",
+  "wa_partner_kind_streamer": "Стример"
 }

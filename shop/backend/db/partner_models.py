@@ -1,5 +1,6 @@
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Column,
     DateTime,
@@ -45,6 +46,9 @@ class PartnerProfile(Base):
     display_label_snapshot = Column(String(255), nullable=False)
     welcome_message = Column(Text, nullable=True)
     pause_reason = Column(Text, nullable=True)
+    kind = Column(String(32), nullable=False, default="standard", server_default="standard")
+    banner_below_stream = Column(Boolean, nullable=False, default=False, server_default="false")
+    banner_on_stream = Column(Boolean, nullable=False, default=False, server_default="false")
     reapply_allowed_at = Column(DateTime(timezone=True), nullable=True)
     activated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     paused_at = Column(DateTime(timezone=True), nullable=True)

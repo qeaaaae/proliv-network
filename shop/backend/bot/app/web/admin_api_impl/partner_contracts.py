@@ -5,6 +5,7 @@ from bot.app.web.partner_schemas import (
     AdminPartnerBulkReferralImportPreviewOut,
     AdminPartnerBulkReferralImportResultOut,
     AdminPartnerCreateIn,
+    AdminPartnerKindIn,
     AdminPartnerRateIn,
     AdminPartnerReferralImportIn,
     AdminPartnerReferralImportPreviewOut,
@@ -62,6 +63,11 @@ PARTNER_ADMIN_ROUTE_CONTRACTS: dict[str, RouteContract] = {
         request_model=AdminPartnerRateIn,
         response_schema=ok_envelope_for(PartnerProfileOut, key="partner"),
         models=(AdminPartnerRateIn, PartnerProfileOut),
+    ),
+    "admin_partner_kind_route": RouteContract(
+        request_model=AdminPartnerKindIn,
+        response_schema=ok_envelope_for(PartnerProfileOut, key="partner"),
+        models=(AdminPartnerKindIn, PartnerProfileOut),
     ),
     "admin_partner_balance_adjustment_route": RouteContract(
         request_model=AdminPartnerBalanceAdjustmentIn,

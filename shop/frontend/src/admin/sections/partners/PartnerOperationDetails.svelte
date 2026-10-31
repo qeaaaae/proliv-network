@@ -5,6 +5,7 @@
     Copy,
     RefreshCw,
     Sliders,
+    Star,
     TriangleAlert,
     UserPlus,
     UserRound,
@@ -33,7 +34,7 @@
 
   type TranslateFn = (key: string, params?: Record<string, unknown>, fallback?: string) => string;
   type DetailView = "partner_detail" | "application_detail" | "withdrawal_detail";
-  type DialogKind = "" | "create" | "rate" | "balance" | "import" | "status" | "link";
+  type DialogKind = "" | "create" | "rate" | "balance" | "import" | "status" | "link" | "kind";
 
   let {
     routePrefix,
@@ -112,6 +113,7 @@
   } = $props();
 
   const partnerActions = [
+    { key: "kind" as const, icon: Star },
     { key: "rate" as const, icon: Sliders },
     { key: "balance" as const, icon: Coins },
     { key: "import" as const, icon: UserPlus },
@@ -146,6 +148,23 @@
         <AdminBadge variant={partnerStatusVariant(selectedPartner.status)}>
           {statusLabel(selectedPartner.status)}
         </AdminBadge>
+        {#if selectedPartner.kind && selectedPartner.kind !== "standard"}
+          <AdminBadge variant="muted">
+            {at(`partners_kind_${selectedPartner.kind}`, {}, selectedPartner.kind)}
+          </AdminBadge>
+        {/if}
+        {#if selectedPartner.kind === "streamer"}
+          {#if selectedPartner.bannerBelow}
+            <AdminBadge variant="muted"
+              >{at("partners_banner_below", {}, "Banner below the stream")}</AdminBadge
+            >
+          {/if}
+          {#if selectedPartner.bannerOn}
+            <AdminBadge variant="muted"
+              >{at("partners_banner_on", {}, "Banner on the stream")}</AdminBadge
+            >
+          {/if}
+        {/if}
         <AdminButton size="sm" onclick={() => onOpenUserCard(selectedPartner.userId)}>
           <UserRound size={14} />{at("partners_open_user_card", {}, "Open user card")}
         </AdminButton>

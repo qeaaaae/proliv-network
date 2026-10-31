@@ -2,11 +2,13 @@
   import { ArrowRight, TriangleAlert } from "$components/ui/icons.js";
   import { Checkbox, Input, Textarea } from "$components/ui/index.js";
   import Dialog from "$components/ui/dialog.svelte";
-  import { AdminButton, AdminField } from "$components/patterns/admin/index.js";
-  import type { PartnerRow } from "$lib/admin/previewMock/partnerProgram.js";
+  import { AdminButton, AdminField, AdminSelect } from "$components/patterns/admin/index.js";
+  import type { PartnerKind, PartnerRow } from "$lib/admin/previewMock/partnerProgram.js";
 
   type TranslateFn = (key: string, params?: Record<string, unknown>, fallback?: string) => string;
-  type DialogKind = "" | "create" | "rate" | "balance" | "import" | "status" | "link";
+  type DialogKind = "" | "create" | "rate" | "balance" | "import" | "status" | "link" | "kind";
+
+  const KIND_OPTIONS: PartnerKind[] = ["standard", "streamer", "clipper"];
   type BalanceMode = "add" | "subtract" | "set";
   type ImportPreview = { found: number; new_clients: number; existing: number; conflicts: number };
 
@@ -23,6 +25,12 @@
     dialog = $bindable(),
     createUserId = $bindable(),
     createRate = $bindable(),
+    createKind = $bindable(),
+    createBannerBelow = $bindable(),
+    createBannerOn = $bindable(),
+    kindKind = $bindable(),
+    kindBannerBelow = $bindable(),
+    kindBannerOn = $bindable(),
     importOnCreate = $bindable(),
     dialogRate = $bindable(),
     dialogReason = $bindable(),
@@ -41,6 +49,12 @@
     dialog: DialogKind;
     createUserId: string;
     createRate: string;
+    createKind: PartnerKind;
+    createBannerBelow: boolean;
+    createBannerOn: boolean;
+    kindKind: PartnerKind;
+    kindBannerBelow: boolean;
+    kindBannerOn: boolean;
     importOnCreate: boolean;
     dialogRate: string;
     dialogReason: string;
@@ -74,9 +88,27 @@
           bind:value={createUserId}
         />
       </AdminField>
-      <AdminField label={at("partners_rate_label", {}, "Commission rate, %")}>
-        <Input class="input" type="number" min="0" max="100" step="0.01" bind:value={createRate} />
-      </AdminField>
+      {#if createKind === "standard"}
+        <AdminField label={at("partners_rate_label", {}, "Commission rate, %")}>
+          <Input
+            class="input"
+            type="number"
+            min="0"
+            max="100"
+            step="0.01"
+            bind:value={createRate}
+          />
+        </AdminField>
+      {/if}
+      {#if createKind === "clipper"}
+        <p class="partners-auto-rate-hint">
+          {at(
+            "partners_clipper_rate_hint",
+            {},
+            "Clipper payouts are credited manually per views; rev-share rate stays 0%."
+          )}
+        </p>
+      {/if}
       <label class="partners-check">
         <Checkbox
           bind:checked={importOnCreate}
@@ -84,6 +116,78 @@
         />
         {at("partners_import_on_create", {}, "Import referrals as clients")}
       </label>
+      <AdminField label={at("partners_kind_label", {}, "Partner kind")}>
+        <AdminSelect
+          value={createKind}
+          items={KIND_OPTIONS.map((value) => ({
+            value,
+            label: at(`partners_kind_${value}`, {}, value),
+          }))}
+          ariaLabel={at("partners_kind_label", {}, "Partner kind")}
+          onValueChange={(value) => (createKind = value as PartnerKind)}
+        />
+      </AdminField>
+      {#if createKind === "streamer"}
+        <label class="partners-check">
+          <Checkbox
+            bind:checked={createBannerBelow}
+            ariaLabel={at("partners_banner_below", {}, "Banner below the stream")}
+          />
+          {at("partners_banner_below", {}, "Banner below the stream")}
+        </label>
+        <label class="partners-check">
+          <Checkbox
+            bind:checked={createBannerOn}
+            ariaLabel={at("partners_banner_on", {}, "Banner on the stream")}
+          />
+          {at("partners_banner_on", {}, "Banner on the stream")}
+        </label>
+        <p class="partners-auto-rate-hint">
+          {at(
+            "partners_streamer_rate_hint",
+            {},
+            "The commission rate is set automatically from the confirmed placements."
+          )}
+        </p>
+      {/if}
+    {:else if dialog === "kind"}
+      <AdminField label={at("partners_kind_label", {}, "Partner kind")}>
+        <AdminSelect
+          value={kindKind}
+          items={KIND_OPTIONS.map((value) => ({
+            value,
+            label: at(`partners_kind_${value}`, {}, value),
+          }))}
+          ariaLabel={at("partners_kind_label", {}, "Partner kind")}
+          onValueChange={(value) => (kindKind = value as PartnerKind)}
+        />
+      </AdminField>
+      {#if kindKind === "streamer"}
+        <label class="partners-check">
+          <Checkbox
+            bind:checked={kindBannerBelow}
+            ariaLabel={at("partners_banner_below", {}, "Banner below the stream")}
+          />
+          {at("partners_banner_below", {}, "Banner below the stream")}
+        </label>
+        <label class="partners-check">
+          <Checkbox
+            bind:checked={kindBannerOn}
+            ariaLabel={at("partners_banner_on", {}, "Banner on the stream")}
+          />
+          {at("partners_banner_on", {}, "Banner on the stream")}
+        </label>
+      {/if}
+      <AdminField
+        label={at("partners_reason", {}, "Reason")}
+        hint={at(
+          "partners_kind_rate_note",
+          {},
+          "The rate follows the placements and applies only to future payments."
+        )}
+      >
+        <Textarea bind:value={dialogReason} rows={3} />
+      </AdminField>
     {:else if dialog === "rate"}
       <AdminField
         label={at("partners_rate_label", {}, "Commission rate, %")}

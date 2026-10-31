@@ -197,6 +197,9 @@ class SettingsComputedMixin(_SettingsComputedMixinBase):
             client_payment_bonus_enabled=self.PARTNER_CLIENT_PAYMENT_BONUS_ENABLED,
             one_bonus_per_client=self.PARTNER_ONE_BONUS_PER_CLIENT,
             default_commission_bps=self.PARTNER_DEFAULT_COMMISSION_BPS,
+            streamer_rate_below_bps=self.PARTNER_STREAMER_RATE_BELOW_BPS,
+            streamer_rate_on_bps=self.PARTNER_STREAMER_RATE_ON_BPS,
+            streamer_rate_both_bps=self.PARTNER_STREAMER_RATE_BOTH_BPS,
             commission_hold_days=self.PARTNER_COMMISSION_HOLD_DAYS,
             eligible_currencies=_json_list(
                 self.PARTNER_ELIGIBLE_CURRENCIES,

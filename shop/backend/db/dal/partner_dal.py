@@ -128,6 +128,9 @@ async def create_profile(
     display_label: str,
     commission_bps: int,
     welcome_message: str | None = None,
+    kind: str = "standard",
+    banner_below_stream: bool = False,
+    banner_on_stream: bool = False,
 ) -> PartnerProfile:
     profile = PartnerProfile(
         user_id=user_id,
@@ -136,6 +139,9 @@ async def create_profile(
         commission_bps=commission_bps,
         welcome_message=welcome_message,
         status="active",
+        kind=kind,
+        banner_below_stream=banner_below_stream,
+        banner_on_stream=banner_on_stream,
         activated_at=utcnow(),
     )
     session.add(profile)

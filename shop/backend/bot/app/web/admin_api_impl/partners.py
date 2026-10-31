@@ -15,6 +15,7 @@ from bot.app.web.partner_schemas import (
     AdminPartnerApplicationDecisionIn,
     AdminPartnerBalanceAdjustmentIn,
     AdminPartnerCreateIn,
+    AdminPartnerKindIn,
     AdminPartnerRateIn,
     AdminPartnerReferralImportIn,
     AdminPartnerStatusIn,
@@ -407,6 +408,9 @@ async def admin_partner_create_route(request: web.Request) -> web.Response:
                 commission_bps=body.commission_bps,
                 welcome_message=body.welcome_message,
                 actor_admin_id=actor_id,
+                kind=body.kind,
+                banner_below_stream=body.banner_below_stream,
+                banner_on_stream=body.banner_on_stream,
             )
     except PartnerError as exc:
         return _partner_error(exc)
@@ -490,6 +494,27 @@ async def admin_partner_rate_route(request: web.Request) -> web.Response:
                 session,
                 partner_id=partner_id,
                 commission_bps=body.commission_bps,
+                actor_admin_id=actor_id,
+                reason=body.reason,
+            )
+    except PartnerError as exc:
+        return _partner_error(exc)
+    return _ok({"partner": _dump(profile_out(profile))})
+
+
+async def admin_partner_kind_route(request: web.Request) -> web.Response:
+    actor_id = _require_admin_user_id(request)
+    body = await parse_body_or_400(request, AdminPartnerKindIn)
+    partner_id = int(request.match_info["id"])
+    async_session_factory: sessionmaker = get_session_factory(request)
+    try:
+        async with async_session_factory() as session, session.begin():
+            profile = await PartnerCommissionService(get_settings(request)).update_kind_flags(
+                session,
+                partner_id=partner_id,
+                kind=body.kind,
+                banner_below_stream=body.banner_below_stream,
+                banner_on_stream=body.banner_on_stream,
                 actor_admin_id=actor_id,
                 reason=body.reason,
             )

@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
+from config.settings_models import PartnerSettings
 from db.models import User
 
 _ZERO_SCALE_CURRENCIES = {"CLP", "ISK", "JPY", "KRW", "PYG", "VND", "XTR"}
@@ -34,6 +35,22 @@ def currency_scale(currency: str) -> int:
 def amount_to_minor(amount: Any, *, scale: int) -> int:
     factor = Decimal(10) ** scale
     return int((Decimal(str(amount)) * factor).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def streamer_commission_bps(
+    config: PartnerSettings,
+    *,
+    banner_below_stream: bool,
+    banner_on_stream: bool,
+) -> int:
+    """Effective commission rate for a streamer profile from banner placements."""
+    if banner_below_stream and banner_on_stream:
+        return int(config.streamer_rate_both_bps)
+    if banner_on_stream:
+        return int(config.streamer_rate_on_bps)
+    if banner_below_stream:
+        return int(config.streamer_rate_below_bps)
+    return int(config.default_commission_bps)
 
 
 def commission_minor(gross_minor: int, commission_bps: int) -> int:

@@ -554,6 +554,11 @@
           <UsersRound size={34} />
           <div>
             <strong>{t("wa_partner_profile_title")}</strong>
+            {#if preview.partnerKind === "streamer"}
+              <span class="partner-status partner-status-available">
+                {t("wa_partner_kind_streamer")}
+              </span>
+            {/if}
             <span
               class="partner-status"
               class:partner-status-pending={partnerPaused}

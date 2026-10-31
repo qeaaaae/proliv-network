@@ -55,6 +55,7 @@
     type PartnerChartPoint,
     type PartnerClientRow,
     type PartnerCommissionRow,
+    type PartnerKind,
     type PartnerLedgerRow,
     type PartnerRow,
     type WithdrawalRow,
@@ -261,6 +262,12 @@
   let actionBusy = $state(false);
   let createUserId = $state("");
   let createRate = $state("30");
+  let createKind = $state<PartnerKind>("standard");
+  let createBannerBelow = $state(false);
+  let createBannerOn = $state(false);
+  let kindKind = $state<PartnerKind>("standard");
+  let kindBannerBelow = $state(false);
+  let kindBannerOn = $state(false);
   let dialogRate = $state("30");
   let importOnCreate = $state(false);
   let importPreview = $state({ found: 0, new_clients: 0, existing: 0, conflicts: 0 });
@@ -490,8 +497,11 @@
       if (dialog === "create") {
         const created = await post("/admin/partners", {
           user_id: Number(createUserId),
-          commission_bps: Math.round(Number(createRate) * 100),
+          commission_bps: createKind === "standard" ? Math.round(Number(createRate) * 100) : null,
           welcome_message: null,
+          kind: createKind,
+          banner_below_stream: createKind === "streamer" && createBannerBelow,
+          banner_on_stream: createKind === "streamer" && createBannerOn,
         });
         const createdProfile = created.partner as Record<string, unknown> | undefined;
         if (importOnCreate && createdProfile?.partner_id) {
@@ -515,6 +525,25 @@
         selectedPartner = { ...selectedPartner, rate: savedRate };
         partners = partners.map((partner) =>
           partner.id === selectedPartner.id ? { ...partner, rate: savedRate } : partner
+        );
+      } else if (dialog === "kind") {
+        const response = await post(`/admin/partners/${selectedPartner.id}/kind`, {
+          kind: kindKind,
+          banner_below_stream: kindKind === "streamer" ? kindBannerBelow : false,
+          banner_on_stream: kindKind === "streamer" ? kindBannerOn : false,
+          reason: dialogReason.trim() || null,
+        });
+        const savedProfile = (response.partner || {}) as Record<string, unknown>;
+        const savedRate = Number(savedProfile.commission_bps) / 100;
+        selectedPartner = {
+          ...selectedPartner,
+          kind: String(savedProfile.kind || "standard") as PartnerKind,
+          bannerBelow: savedProfile.banner_below_stream === true,
+          bannerOn: savedProfile.banner_on_stream === true,
+          rate: savedRate,
+        };
+        partners = partners.map((partner) =>
+          partner.id === selectedPartner.id ? { ...selectedPartner } : partner
         );
       } else if (dialog === "balance") {
         const scale = selectedPartner.currencyScale ?? 2;
@@ -684,6 +713,11 @@
     selectedPartner.id;
     if (dialog === "import") void loadImportPreview();
     if (dialog === "rate") dialogRate = String(selectedPartner.rate);
+    if (dialog === "kind") {
+      kindKind = selectedPartner.kind || "standard";
+      kindBannerBelow = Boolean(selectedPartner.bannerBelow);
+      kindBannerOn = Boolean(selectedPartner.bannerOn);
+    }
   });
 
   onMount(() => {
@@ -924,6 +958,12 @@
   bind:dialog
   bind:createUserId
   bind:createRate
+  bind:createKind
+  bind:createBannerBelow
+  bind:createBannerOn
+  bind:kindKind
+  bind:kindBannerBelow
+  bind:kindBannerOn
   bind:importOnCreate
   bind:dialogRate
   bind:dialogReason

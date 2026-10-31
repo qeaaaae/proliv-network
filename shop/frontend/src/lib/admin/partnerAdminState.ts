@@ -31,7 +31,8 @@ export type PartnerAdminView =
   | "partner_detail"
   | "application_detail"
   | "withdrawal_detail";
-export type PartnerDialogKind = "" | "create" | "rate" | "balance" | "import" | "status" | "link";
+export type PartnerDialogKind =
+  "" | "create" | "rate" | "balance" | "import" | "status" | "link" | "kind";
 
 export const emptyPartner: PartnerRow = {
   id: "",
@@ -41,6 +42,9 @@ export const emptyPartner: PartnerRow = {
   avatarUrl: "",
   status: "closed",
   rate: 0,
+  kind: "standard",
+  bannerBelow: false,
+  bannerOn: false,
   clients: 0,
   payments: 0,
   gross: 0,

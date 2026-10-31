@@ -135,6 +135,8 @@ export async function loadPartnerProgram(api: Api): Promise<PartnerProgramPrevie
       new Date(application.reapply_allowed_at).getTime() <= Date.now()
     ),
     profileState: profile ? (profile.status as PartnerProgramPreview["profileState"]) : null,
+    partnerKind:
+      (profile?.kind as PartnerProgramPreview["partnerKind"]) || (profile ? "standard" : undefined),
     pauseReason: profile?.pause_reason || "",
     welcomeMessage: profile?.welcome_message || "",
     commissionBps: profile?.commission_bps || 0,

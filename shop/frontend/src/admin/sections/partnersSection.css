@@ -520,6 +520,11 @@
   align-items: center;
   color: var(--admin-muted);
 }
+.partners-auto-rate-hint {
+  margin: 0;
+  color: var(--admin-muted);
+  font-size: 12px;
+}
 .partners-balance-preview {
   display: flex;
   align-items: center;

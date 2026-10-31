@@ -29,6 +29,7 @@ from bot.services.partner_common import (
     compact_json,
     currency_scale,
     safe_user_label,
+    streamer_commission_bps,
 )
 from config.settings import Settings
 from db.dal import partner_dal
@@ -417,6 +418,89 @@ class PartnerCommissionService:
             old_values_json=compact_json({"commission_bps": old}),
             new_values_json=compact_json({"commission_bps": commission_bps}),
             reason=reason.strip(),
+        )
+        return profile
+
+    async def update_kind_flags(
+        self,
+        session: AsyncSession,
+        *,
+        partner_id: int,
+        kind: str | None = None,
+        banner_below_stream: bool | None = None,
+        banner_on_stream: bool | None = None,
+        actor_admin_id: int,
+        reason: str | None = None,
+    ) -> PartnerProfile:
+        """Update partner kind/placements and recompute the commission rate.
+
+        Streamer rate always follows the placement checkboxes via the
+        configured streamer rates. Switching to 'clipper' zeroes the rev-share
+        rate (clipper payouts are per-view manual adjustments). Removing the
+        streamer kind clears placements and keeps the current commission_bps.
+        Only future payment decisions read the new rate - recorded commissions
+        keep their snapshot.
+        """
+        profile = await partner_dal.get_profile_by_id(session, partner_id, for_update=True)
+        if not profile:
+            raise PartnerError("partner_not_found", 404)
+        old = {
+            "kind": str(profile.kind),
+            "banner_below_stream": bool(profile.banner_below_stream),
+            "banner_on_stream": bool(profile.banner_on_stream),
+            "commission_bps": int(profile.commission_bps),
+        }
+        new_kind = old["kind"] if kind is None else str(kind).strip().lower()
+        new_below = (
+            old["banner_below_stream"]
+            if banner_below_stream is None
+            else bool(banner_below_stream)
+        )
+        new_on = (
+            old["banner_on_stream"] if banner_on_stream is None else bool(banner_on_stream)
+        )
+        if new_kind != "streamer":
+            new_below = False
+            new_on = False
+        if new_kind == "streamer":
+            new_bps = streamer_commission_bps(
+                self.config,
+                banner_below_stream=new_below,
+                banner_on_stream=new_on,
+            )
+        elif new_kind == "clipper" and old["kind"] != "clipper":
+            new_bps = 0
+        else:
+            new_bps = old["commission_bps"]
+        if (
+            new_kind == old["kind"]
+            and new_below == old["banner_below_stream"]
+            and new_on == old["banner_on_stream"]
+            and new_bps == old["commission_bps"]
+        ):
+            return profile
+        profile.kind = new_kind
+        profile.banner_below_stream = new_below
+        profile.banner_on_stream = new_on
+        profile.commission_bps = new_bps
+        profile.updated_at = datetime.now(UTC)
+        await session.flush()
+        await partner_dal.create_audit_event(
+            session,
+            event_type="partner_kind_changed",
+            actor_type="admin",
+            partner_id=partner_id,
+            actor_user_id=actor_admin_id,
+            old_values_json=compact_json(old),
+            new_values_json=compact_json(
+                {
+                    "kind": new_kind,
+                    "banner_below_stream": new_below,
+                    "banner_on_stream": new_on,
+                    "commission_bps": new_bps,
+                }
+            ),
+            reason=(reason or "").strip() or None,
         )
         return profile
 

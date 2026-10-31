@@ -49,6 +49,9 @@ def profile_out(profile: PartnerProfile) -> PartnerProfileOut:
         commission_bps=int(profile.commission_bps),
         welcome_message=profile.welcome_message,
         pause_reason=profile.pause_reason,
+        kind=str(getattr(profile, "kind", "standard") or "standard"),
+        banner_below_stream=bool(getattr(profile, "banner_below_stream", False)),
+        banner_on_stream=bool(getattr(profile, "banner_on_stream", False)),
         activated_at=profile.activated_at,
         created_at=profile.created_at,
     )

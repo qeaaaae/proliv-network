@@ -14,7 +14,13 @@ from bot.infra.event_payloads import (
     PartnerClientAttributedPayload,
     PartnerStatusChangedPayload,
 )
-from bot.services.partner_common import PartnerError, as_utc, compact_json, safe_user_label
+from bot.services.partner_common import (
+    PartnerError,
+    as_utc,
+    compact_json,
+    safe_user_label,
+    streamer_commission_bps,
+)
 from bot.services.registration_invite_gate import referral_program_enabled
 from bot.utils.partner_links import build_partner_bot_link, build_partner_webapp_link
 from config.settings import Settings
@@ -229,6 +235,9 @@ class PartnerProgramService:
         application_id: int | None = None,
         emit_status_event: bool = True,
         audit_reason: str | None = None,
+        kind: str = "standard",
+        banner_below_stream: bool = False,
+        banner_on_stream: bool = False,
     ) -> PartnerProfile:
         existing = await partner_dal.get_profile_by_user_id(
             session,
@@ -239,7 +248,21 @@ class PartnerProgramService:
             if existing.status == "closed":
                 raise PartnerError("partner_closed", 409)
             return existing
-        bps = self.config.default_commission_bps if commission_bps is None else commission_bps
+        if kind != "streamer":
+            banner_below_stream = False
+            banner_on_stream = False
+        if commission_bps is not None:
+            bps = commission_bps
+        elif kind == "streamer":
+            bps = streamer_commission_bps(
+                self.config,
+                banner_below_stream=banner_below_stream,
+                banner_on_stream=banner_on_stream,
+            )
+        elif kind == "clipper":
+            bps = 0  # clipper payouts are per-view manual adjustments, not rev-share
+        else:
+            bps = self.config.default_commission_bps
         if bps < 0 or bps > 10000:
             raise PartnerError("invalid_commission_rate", 400)
         for _ in range(5):
@@ -252,6 +275,9 @@ class PartnerProgramService:
                         display_label=safe_user_label(user),
                         commission_bps=bps,
                         welcome_message=(welcome_message or "").strip() or None,
+                        kind=kind,
+                        banner_below_stream=banner_below_stream,
+                        banner_on_stream=banner_on_stream,
                     )
                 break
             except IntegrityError:
@@ -268,6 +294,10 @@ class PartnerProgramService:
             "status": "active",
             "commission_bps": int(profile.commission_bps),
         }
+        if str(getattr(profile, "kind", "standard") or "standard") != "standard":
+            audit_values["kind"] = str(profile.kind)
+            audit_values["banner_below_stream"] = bool(profile.banner_below_stream)
+            audit_values["banner_on_stream"] = bool(profile.banner_on_stream)
         if audit_reason:
             audit_values["source"] = audit_reason
         await partner_dal.create_audit_event(
