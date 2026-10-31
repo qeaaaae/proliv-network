@@ -17,18 +17,24 @@ const total = computed(() => props.items.reduce((sum, item) => sum + item.count,
       <h2>Требует внимания</h2>
       <AdminBadge :tone="total ? 'warning' : 'success'">{{ total }}</AdminBadge>
     </div>
-    <template v-if="total">
+    <p class="admin-note">
+      Здесь появляется то, что ждёт твоего действия: заявки и выплаты партнёров,
+      непрочитанные тикеты, сбой синхронизации с панелью.
+    </p>
+    <div class="att-list">
       <NuxtLink
-        v-for="item in items.filter((i) => i.count > 0)"
+        v-for="item in items"
         :key="item.label"
         :to="item.to"
         class="att-row"
+        :class="{ empty: !item.count }"
       >
         <span>{{ item.label }}</span>
-        <AdminBadge :tone="item.tone || 'warning'">{{ item.count }}</AdminBadge>
+        <AdminBadge :tone="item.count ? item.tone || 'warning' : 'muted'">
+          {{ item.count }}
+        </AdminBadge>
       </NuxtLink>
-    </template>
-    <p v-else class="admin-note">Всё спокойно: заявок, выплат и тикетов нет.</p>
+    </div>
   </section>
 </template>
 
@@ -45,6 +51,10 @@ const total = computed(() => props.items.reduce((sum, item) => sum + item.count,
 .att-head h2 {
   margin: 0;
 }
+.att-list {
+  display: grid;
+  gap: 6px;
+}
 .att-row {
   display: flex;
   align-items: center;
@@ -58,5 +68,8 @@ const total = computed(() => props.items.reduce((sum, item) => sum + item.count,
 }
 .att-row:hover {
   outline: 1px solid var(--adm-accent);
+}
+.att-row.empty {
+  opacity: 0.55;
 }
 </style>

@@ -239,10 +239,10 @@ onMounted(load)
           <small>Пользователи</small>
           <strong>{{ fmtNum(users.total_users) }}</strong>
           <div class="kpi-sub">
-            <span class="t-pos">+{{ fmtNum(users.active_today) }} сег.</span>
-            <span class="t-acc">{{ fmtNum(users.referral_users) }} реф.</span>
+            <span class="t-pos">+{{ fmtNum(users.active_today) }} сегодня</span>
+            <span class="t-acc">{{ fmtNum(users.referral_users) }} рефералов</span>
             <span :class="Number(users.banned_users) ? 't-neg' : 't-mut'">
-              {{ fmtNum(users.banned_users) }} бан
+              {{ fmtNum(users.banned_users) }} заблок.
             </span>
           </div>
         </div>
@@ -250,9 +250,9 @@ onMounted(load)
           <small>Активные подписки</small>
           <strong>{{ fmtNum(users.active_subscriptions) }}</strong>
           <div class="kpi-sub">
-            <span class="t-pos">{{ fmtNum(users.paid_subscriptions) }} платн</span>
+            <span class="t-pos">{{ fmtNum(users.paid_subscriptions) }} платных</span>
             <span class="t-acc">{{ fmtNum(users.trial_users) }} триал</span>
-            <span class="t-mut">{{ fmtNum(users.free_subscription_users) }} беспл</span>
+            <span class="t-mut">{{ fmtNum(users.free_subscription_users) }} бесплатн.</span>
           </div>
         </div>
         <div class="admin-kpi">
@@ -336,5 +336,33 @@ onMounted(load)
 }
 .admin-kpi strong {
   font-variant-numeric: tabular-nums;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 22px;
+}
+.kpi-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.kpi-sub span {
+  white-space: nowrap;
+}
+.t-pos {
+  color: var(--adm-success);
+}
+.t-acc {
+  color: var(--adm-accent);
+}
+.t-mut {
+  color: var(--adm-muted);
+}
+.t-neg {
+  color: var(--adm-danger);
+}
+.t-warn {
+  color: var(--adm-warning);
 }
 </style>
