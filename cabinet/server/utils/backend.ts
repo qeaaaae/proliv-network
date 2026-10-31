@@ -151,6 +151,7 @@ export interface ShopPartnerOverview {
     partner_id?: number
     status?: string
     commission_bps?: number
+    kind?: string
   } | null
   balances?: {
     currency?: string

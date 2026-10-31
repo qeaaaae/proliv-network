@@ -42,6 +42,7 @@ interface ReferralData {
   bonusHistory: { id: string; kind: 'in' | 'out'; title: string; amount: number; at: string }[]
   partner: {
     enabled: boolean
+    kind: string | null
     withdrawalsEnabled: boolean
     balanceAvailable: number | null
     balanceCurrency: string
@@ -218,7 +219,10 @@ async function bonus(action: string, amount: number | null, method?: string) {
             <span class="row-line__label">Вы получаете</span>
             <span class="row-line__hint">с каждой оплаты друга</span>
           </span>
-          <span class="row-line__value accent">{{ data?.percent ?? '—' }}%</span>
+          <span class="row-line__value accent">
+            <span v-if="data?.partner?.kind === 'streamer'" class="badge-streamer">Стример</span>
+            {{ data?.percent ?? '—' }}%
+          </span>
         </div>
         <div v-if="data?.bonusDetails?.length" class="row-line">
           <span class="row-line__icon"><CalendarPlus :size="15" /></span>
@@ -477,3 +481,33 @@ async function bonus(action: string, amount: number | null, method?: string) {
     </AppModal>
   </div>
 </template>
+
+<style scoped>
+.badge-streamer {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  margin-right: 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(120deg, #772ce8, #9146ff 45%, #5c16c5);
+  overflow: hidden;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.badge-streamer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, transparent 30%, rgba(255, 255, 255, 0.45) 50%, transparent 70%);
+  background-size: 250% 100%;
+  animation: streamer-shine 2.6s ease-in-out infinite;
+}
+@keyframes streamer-shine {
+  0% { background-position: 120% 0; }
+  60%, 100% { background-position: -130% 0; }
+}
+</style>

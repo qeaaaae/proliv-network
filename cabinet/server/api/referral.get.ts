@@ -136,6 +136,7 @@ export default defineEventHandler(async (event) => {
     bonusHistory,
     partner: {
       enabled: Boolean(partner?.program_enabled),
+      kind: partner?.profile?.kind ?? null,
       withdrawalsEnabled: Boolean(partner?.withdrawals_enabled) && methods.length > 0,
       balanceAvailable: partnerBalance
         ? (partnerBalance.available_minor ?? 0) / 10 ** (partnerBalance.currency_scale ?? 2)
