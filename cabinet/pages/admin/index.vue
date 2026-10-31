@@ -74,6 +74,11 @@ interface PartnerAttention {
   total?: number
 }
 
+interface SupportStats {
+  total_unread_admin?: number
+  awaiting_admin?: number
+}
+
 interface PartnerRow {
   partner_id: number
   user_id?: number | null
@@ -92,6 +97,7 @@ const { plural } = useFormat()
 
 const stats = ref<AdminStatsResponse | null>(null)
 const attention = ref<PartnerAttention | null>(null)
+const supportStats = ref<SupportStats | null>(null)
 const partners = ref<PartnerRow[]>([])
 const partnersTotal = ref<number | null>(null)
 const partnersFailed = ref(false)
@@ -108,6 +114,35 @@ const dailySeries = computed<RevenuePoint[]>(() =>
 const todayPayments = computed(() => Number(fin.value.today_payments_count) || 0)
 const pendingApplications = computed(() => Number(attention.value?.pending_applications) || 0)
 const requestedWithdrawals = computed(() => Number(attention.value?.requested_withdrawals) || 0)
+const supportUnread = computed(() => Number(supportStats.value?.total_unread_admin) || 0)
+const syncFailed = computed(() => stats.value?.panel_sync?.status === 'failed')
+
+const attentionItems = computed(() => [
+  {
+    label: 'Заявки в партнёрскую программу',
+    count: pendingApplications.value,
+    to: '/admin/partners',
+    tone: 'warning' as const,
+  },
+  {
+    label: 'Заявки на вывод средств',
+    count: requestedWithdrawals.value,
+    to: '/admin/partners',
+    tone: 'warning' as const,
+  },
+  {
+    label: 'Непрочитанные тикеты поддержки',
+    count: supportUnread.value,
+    to: '/admin/support',
+    tone: 'danger' as const,
+  },
+  {
+    label: 'Синхронизация с панелью упала',
+    count: syncFailed.value ? 1 : 0,
+    to: '/admin/system',
+    tone: 'danger' as const,
+  },
+])
 
 function fmtNum(v: unknown): string {
   const n = Number(v)
@@ -137,12 +172,13 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [statsRes, attentionRes, partnersRes] = await Promise.allSettled([
+    const [statsRes, attentionRes, partnersRes, supportRes] = await Promise.allSettled([
       call<AdminStatsResponse>('stats'),
       call<PartnerAttention>('partners/attention'),
       call<{ partners?: PartnerRow[]; total?: number }>('partners', {
         query: { limit: 5 },
       }),
+      call<SupportStats>('support/stats'),
     ])
     if (statsRes.status === 'fulfilled') {
       stats.value = statsRes.value
@@ -150,6 +186,7 @@ async function load() {
       error.value = errText(statsRes.reason)
     }
     attention.value = attentionRes.status === 'fulfilled' ? attentionRes.value : null
+    supportStats.value = supportRes.status === 'fulfilled' ? supportRes.value : null
     if (partnersRes.status === 'fulfilled') {
       partners.value = partnersRes.value.partners || []
       partnersTotal.value = Number(partnersRes.value.total ?? partners.value.length)
@@ -201,54 +238,65 @@ onMounted(load)
         <div class="admin-kpi">
           <small>Пользователи</small>
           <strong>{{ fmtNum(users.total_users) }}</strong>
-          <small>+{{ fmtNum(users.active_today) }} сегодня</small>
-          <small>
-            заблокировано {{ fmtNum(users.banned_users) }} · рефералов
-            {{ fmtNum(users.referral_users) }}
-          </small>
+          <div class="kpi-sub">
+            <span class="t-pos">+{{ fmtNum(users.active_today) }} сег.</span>
+            <span class="t-acc">{{ fmtNum(users.referral_users) }} реф.</span>
+            <span :class="Number(users.banned_users) ? 't-neg' : 't-mut'">
+              {{ fmtNum(users.banned_users) }} бан
+            </span>
+          </div>
         </div>
         <div class="admin-kpi">
           <small>Активные подписки</small>
           <strong>{{ fmtNum(users.active_subscriptions) }}</strong>
-          <small>
-            платных {{ fmtNum(users.paid_subscriptions) }} · триал
-            {{ fmtNum(users.trial_users) }}
-          </small>
-          <small>бесплатных {{ fmtNum(users.free_subscription_users) }}</small>
+          <div class="kpi-sub">
+            <span class="t-pos">{{ fmtNum(users.paid_subscriptions) }} платн</span>
+            <span class="t-acc">{{ fmtNum(users.trial_users) }} триал</span>
+            <span class="t-mut">{{ fmtNum(users.free_subscription_users) }} беспл</span>
+          </div>
         </div>
         <div class="admin-kpi">
           <small>Без подписки</small>
           <strong>{{ fmtNum(users.inactive_users) }}</strong>
-          <small>истекла у {{ fmtNum(users.expired_subscription_users) }}</small>
+          <div class="kpi-sub">
+            <span :class="Number(users.expired_subscription_users) ? 't-neg' : 't-mut'">
+              {{ fmtNum(users.expired_subscription_users) }} истекло
+            </span>
+          </div>
         </div>
         <div class="admin-kpi">
           <small>Выручка сегодня</small>
           <strong>{{ fmtMoney(fin.today_revenue) }}</strong>
-          <small>
-            {{ fmtNum(todayPayments) }}
-            {{ plural(todayPayments, 'платёж', 'платежа', 'платежей') }}
-          </small>
+          <div class="kpi-sub">
+            <span class="t-mut">
+              {{ fmtNum(todayPayments) }}
+              {{ plural(todayPayments, 'платёж', 'платежа', 'платежей') }}
+            </span>
+          </div>
         </div>
         <div class="admin-kpi">
           <small>Выручка за 30 дней</small>
           <strong>{{ fmtMoney(fin.month_revenue) }}</strong>
-          <small>всего {{ fmtMoney(fin.all_time_revenue) }}</small>
+          <div class="kpi-sub">
+            <span class="t-mut">всего {{ fmtMoney(fin.all_time_revenue) }}</span>
+          </div>
         </div>
         <div class="admin-kpi">
           <small>Партнёры</small>
           <strong>{{ partnersTotal === null ? '—' : fmtNum(partnersTotal) }}</strong>
-          <small v-if="attention">
-            {{ fmtNum(pendingApplications + requestedWithdrawals) }} ожидают решения
-          </small>
-          <small v-else-if="partnersFailed">данные недоступны</small>
+          <div class="kpi-sub">
+            <span
+              v-if="attention"
+              :class="pendingApplications + requestedWithdrawals ? 't-warn' : 't-mut'"
+            >
+              {{ fmtNum(pendingApplications + requestedWithdrawals) }} на решении
+            </span>
+            <span v-else-if="partnersFailed" class="t-neg">нет данных</span>
+          </div>
         </div>
       </div>
 
-      <AdminDashboardAttentionCard
-        v-if="attention"
-        :pending-applications="pendingApplications"
-        :requested-withdrawals="requestedWithdrawals"
-      />
+      <AdminDashboardAttentionCard :items="attentionItems" />
 
       <AdminDashboardRevenueChart :points="dailySeries" :currency="currency" />
 

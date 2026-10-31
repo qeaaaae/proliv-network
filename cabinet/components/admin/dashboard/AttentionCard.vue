@@ -1,10 +1,14 @@
 <script setup lang="ts">
-const props = defineProps<{
-  pendingApplications: number
-  requestedWithdrawals: number
-}>()
+export interface AttentionItem {
+  label: string
+  count: number
+  to: string
+  tone?: 'warning' | 'danger' | 'muted'
+}
 
-const total = computed(() => props.pendingApplications + props.requestedWithdrawals)
+const props = defineProps<{ items: AttentionItem[] }>()
+
+const total = computed(() => props.items.reduce((sum, item) => sum + item.count, 0))
 </script>
 
 <template>
@@ -14,21 +18,17 @@ const total = computed(() => props.pendingApplications + props.requestedWithdraw
       <AdminBadge :tone="total ? 'warning' : 'success'">{{ total }}</AdminBadge>
     </div>
     <template v-if="total">
-      <div class="att-row">
-        <span>Заявки в партнёрскую программу</span>
-        <AdminBadge :tone="pendingApplications ? 'warning' : 'muted'">
-          {{ pendingApplications }}
-        </AdminBadge>
-      </div>
-      <div class="att-row">
-        <span>Заявки на вывод средств</span>
-        <AdminBadge :tone="requestedWithdrawals ? 'warning' : 'muted'">
-          {{ requestedWithdrawals }}
-        </AdminBadge>
-      </div>
-      <NuxtLink class="att-link" to="/admin/partners">Открыть раздел «Партнёры»</NuxtLink>
+      <NuxtLink
+        v-for="item in items.filter((i) => i.count > 0)"
+        :key="item.label"
+        :to="item.to"
+        class="att-row"
+      >
+        <span>{{ item.label }}</span>
+        <AdminBadge :tone="item.tone || 'warning'">{{ item.count }}</AdminBadge>
+      </NuxtLink>
     </template>
-    <p v-else class="admin-note">Нет ожидающих заявок - всё спокойно.</p>
+    <p v-else class="admin-note">Всё спокойно: заявок, выплат и тикетов нет.</p>
   </section>
 </template>
 
@@ -51,16 +51,12 @@ const total = computed(() => props.pendingApplications + props.requestedWithdraw
   justify-content: space-between;
   gap: 12px;
   padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--adm-card-2, #1a2231);
-}
-.att-link {
-  font-size: 12px;
-  color: var(--adm-accent, #3b82f6);
+  border-radius: 10px;
+  background: var(--adm-card-2, #1a1e24);
+  color: inherit;
   text-decoration: none;
-  justify-self: start;
 }
-.att-link:hover {
-  text-decoration: underline;
+.att-row:hover {
+  outline: 1px solid var(--adm-accent);
 }
 </style>

@@ -12,6 +12,9 @@ const props = defineProps<{
   tariffs: TariffRow[]
 }>()
 
+const PALETTE = ['#7dd3fc', '#6ee7b7', '#fbbf24', '#a78bfa', '#ff8587', '#38bdf8']
+const MUTED = '#3d4553'
+
 function tariffLabel(t: TariffRow): string {
   if (t.kind === 'trial') return 'Триал'
   if (t.kind === 'unassigned' || !t.tariff_key) return 'Без тарифа'
@@ -31,7 +34,8 @@ const rows = computed(() =>
       count: Number(t.active_users) || 0,
       inactive: t.is_enabled === false || t.is_configured === false,
     }))
-    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'ru')),
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'ru'))
+    .map((row, i) => ({ ...row, color: row.inactive ? MUTED : PALETTE[i % PALETTE.length] })),
 )
 
 function pct(count: number): number {
@@ -46,9 +50,18 @@ function pct(count: number): number {
       <AdminBadge>{{ total }}</AdminBadge>
     </div>
     <p v-if="!rows.length || !total" class="admin-note">Нет активных подписок.</p>
-    <div v-else class="td-list">
-      <div v-for="row in rows" :key="row.key" class="td-row">
-        <div class="td-row-top">
+    <template v-else>
+      <div class="td-stack" aria-hidden="true">
+        <div
+          v-for="row in rows"
+          :key="row.key"
+          class="td-seg"
+          :style="{ width: `${pct(row.count)}%`, background: row.color }"
+        />
+      </div>
+      <div class="td-legend">
+        <div v-for="row in rows" :key="row.key" class="td-legend-row">
+          <span class="td-dot" :style="{ background: row.color }" />
           <span class="td-label">
             {{ row.label }}
             <span v-if="row.inactive" class="td-off">выкл</span>
@@ -58,11 +71,8 @@ function pct(count: number): number {
             <span class="td-pct">{{ pct(row.count).toFixed(0) }}%</span>
           </span>
         </div>
-        <div class="td-track" aria-hidden="true">
-          <div class="td-fill" :style="{ width: `${pct(row.count)}%` }" />
-        </div>
       </div>
-    </div>
+    </template>
   </section>
 </template>
 
@@ -76,21 +86,42 @@ function pct(count: number): number {
 .td-head h2 {
   margin: 0;
 }
-.td-list {
-  display: grid;
-  gap: 8px;
-}
-.td-row {
-  display: grid;
-  gap: 6px;
-}
-.td-row-top {
+.td-stack {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 3px;
+  height: 16px;
+  border-radius: var(--radius-pill, 999px);
+  overflow: hidden;
+  background: var(--adm-card-2, #1a1e24);
+  padding: 3px;
+}
+.td-seg {
+  border-radius: var(--radius-pill, 999px);
+  min-width: 0;
+  transition: width 0.3s var(--ease, ease);
+}
+.td-legend {
+  display: grid;
+  gap: 4px;
+}
+.td-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 10px;
+}
+.td-legend-row:hover {
+  background: var(--adm-card-2, #1a1e24);
+}
+.td-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 .td-label {
+  flex: 1;
   font-size: 13px;
   overflow-wrap: anywhere;
 }
@@ -111,16 +142,5 @@ function pct(count: number): number {
   text-align: right;
   font-size: 11px;
   color: var(--adm-muted, #8b95a8);
-}
-.td-track {
-  height: 4px;
-  border-radius: 999px;
-  background: var(--adm-card-2, #1a2231);
-  overflow: hidden;
-}
-.td-fill {
-  height: 100%;
-  border-radius: inherit;
-  background: var(--adm-accent, #3b82f6);
 }
 </style>
