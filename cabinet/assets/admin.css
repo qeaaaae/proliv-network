@@ -1,7 +1,8 @@
 /* Общие токены и классы веб-админки - мапимся на палитру ЛК (main.css),
    чтобы админка выглядела как продолжение кабинета: те же фон, карточки,
    радиусы, акцент. */
-.admin-shell {
+:root {
+  /* --adm-* на :root, чтобы их видели и телепортированные в body модалки */
   --adm-bg: var(--bg);
   --adm-card: var(--card);
   --adm-card-2: var(--card-hover);
@@ -15,11 +16,44 @@
   --adm-danger: var(--red);
   --adm-warning: var(--amber);
   --adm-success: var(--green);
+}
+.admin-shell {
   min-height: 100dvh;
   background: var(--adm-bg);
   color: var(--adm-text);
   font-size: 14px;
   font-family: var(--font-body);
+}
+.adm-modal {
+  font-size: 14px;
+  font-family: var(--font-body);
+  color: var(--adm-text);
+}
+/* Тонкий тёмный скроллбар в админке и в модалках */
+.admin-shell,
+.adm-modal {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+.admin-shell ::-webkit-scrollbar,
+.adm-modal ::-webkit-scrollbar,
+.admin-shell::-webkit-scrollbar,
+.adm-modal::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.admin-shell ::-webkit-scrollbar-thumb,
+.adm-modal ::-webkit-scrollbar-thumb,
+.admin-shell::-webkit-scrollbar-thumb,
+.adm-modal::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+}
+.admin-shell ::-webkit-scrollbar-track,
+.adm-modal ::-webkit-scrollbar-track,
+.admin-shell::-webkit-scrollbar-track,
+.adm-modal::-webkit-scrollbar-track {
+  background: transparent;
 }
 .admin-page {
   max-width: var(--frame);
@@ -89,8 +123,8 @@
 /* Все формы админки - стиль полей ЛК: --control фон, radius-control,
    фокус с accent-бордером и мягким кольцом. Стилизуем и голые элементы,
    чтобы формы без явных классов выглядели одинаково. */
-.admin-shell input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']),
-.admin-shell textarea {
+:where(.admin-shell, .adm-modal) input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']),
+:where(.admin-shell, .adm-modal) textarea {
   width: 100%;
   min-height: 46px;
   padding: 0 16px;
@@ -105,46 +139,46 @@
     border-color 0.15s ease,
     box-shadow 0.2s ease;
 }
-.admin-shell textarea {
+:where(.admin-shell, .adm-modal) textarea {
   min-height: 96px;
   padding: 12px 16px;
   resize: vertical;
 }
-.admin-shell input:focus,
-.admin-shell textarea:focus {
+:where(.admin-shell, .adm-modal) input:focus,
+:where(.admin-shell, .adm-modal) textarea:focus {
   border-color: var(--adm-accent);
   box-shadow: 0 0 0 3px var(--adm-accent-soft);
 }
-.admin-shell input::placeholder,
-.admin-shell textarea::placeholder {
+:where(.admin-shell, .adm-modal) input::placeholder,
+:where(.admin-shell, .adm-modal) textarea::placeholder {
   color: var(--muted, #666d78);
 }
-.admin-shell input:disabled,
-.admin-shell textarea:disabled {
+:where(.admin-shell, .adm-modal) input:disabled,
+:where(.admin-shell, .adm-modal) textarea:disabled {
   opacity: 0.5;
 }
-.admin-shell input[type='datetime-local'] {
+:where(.admin-shell, .adm-modal) input[type='datetime-local'] {
   min-width: 0;
 }
 
 /* Лейбл-обёртка: muted подпись над полем */
-.admin-shell label:has(> input:not([type='checkbox']):not([type='radio'])),
-.admin-shell label:has(> select),
-.admin-shell label:has(> textarea),
+:where(.admin-shell, .adm-modal) label:has(> input:not([type='checkbox']):not([type='radio'])),
+:where(.admin-shell, .adm-modal) label:has(> select),
+:where(.admin-shell, .adm-modal) label:has(> textarea),
 .admin-field {
   display: grid;
   gap: 6px;
   font-size: 12px;
   color: var(--adm-muted);
 }
-.admin-shell label > span,
+:where(.admin-shell, .adm-modal) label > span,
 .admin-field > span {
   font-size: 12px;
   color: var(--adm-muted);
 }
 
 /* Кастомный чекбокс в стиле ЛК (.check__box): 20px, radius 7, accent fill */
-.admin-shell input[type='checkbox'] {
+:where(.admin-shell, .adm-modal) input[type='checkbox'] {
   appearance: none;
   -webkit-appearance: none;
   position: relative;
@@ -160,7 +194,7 @@
     background-color 0.15s ease,
     border-color 0.15s ease;
 }
-.admin-shell input[type='checkbox']::after {
+:where(.admin-shell, .adm-modal) input[type='checkbox']::after {
   content: '✓';
   position: absolute;
   inset: 0;
@@ -170,14 +204,14 @@
   font-weight: 700;
   color: transparent;
 }
-.admin-shell input[type='checkbox']:checked {
+:where(.admin-shell, .adm-modal) input[type='checkbox']:checked {
   background: var(--adm-accent);
   border-color: var(--adm-accent);
 }
-.admin-shell input[type='checkbox']:checked::after {
+:where(.admin-shell, .adm-modal) input[type='checkbox']:checked::after {
   color: var(--adm-accent-ink);
 }
-.admin-shell label:has(> input[type='checkbox']) {
+:where(.admin-shell, .adm-modal) label:has(> input[type='checkbox']) {
   display: flex;
   align-items: center;
   gap: 10px;
