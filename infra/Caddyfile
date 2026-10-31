@@ -47,13 +47,11 @@ app.${DOMAIN} {
 # Админская работа идёт внутри Telegram Mini App, поэтому из браузера открыты
 # только то, что реально нужно WebView: админские страницы, API и статика.
 # Всё остальное (юзерские страницы, webauth/oauth-флоу, health) - 404.
+# Веб-админка = Nuxt-кабинет (страница /admin): вход - тот же Telegram-логин,
+# что в ЛК; admin-роль проверяет minishop на каждом запросе к /api/admin/*.
 admin.${DOMAIN} {
 	encode
-	@blocked not path /admin* /api/* /open-app /docs/* /legal/* /subscription_webapp* /webapp-* /provider-logos/* /fonts/* /favicon.ico /apple-touch-icon* /icon-* /robots.txt
-	respond @blocked 404
-	reverse_proxy remnawave-minishop-backend:8081 {
-		header_up X-Forwarded-Proto https
-	}
+	reverse_proxy proliv-cabinet:80
 }
 
 # --- Remnawave panel - panel.${DOMAIN} --------------------------------------
