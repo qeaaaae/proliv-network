@@ -31,6 +31,8 @@ TARGETS = [
      "flag": "gb", "host": "31.76.60.63", "port": 443},
     {"id": "de", "kind": "location", "group": "locations", "name": "Германия · Франкфурт",
      "flag": "de", "host": "13.143.192.49", "port": 443},
+    {"id": "fi", "kind": "location", "group": "locations", "name": "Финляндия · Хельсинки",
+     "flag": "fi", "host": "179.253.82.201", "port": 443},
     {"id": "bot", "kind": "service", "group": "services", "name": "Telegram-бот",
      "icon": "tg", "url": "http://127.0.0.1:8088/healthz"},
     {"id": "cabinet", "kind": "service", "group": "services", "name": "Личный кабинет",
@@ -44,12 +46,31 @@ NODE_STATS_CMD = (
     "cat /proc/loadavg; "
     "free -m | awk '/Mem:/{print $3, $2}'; "
     "df --output=pcent / | tail -1; "
-    "ss -tn state established | wc -l"
+    "ss -tn state established | wc -l; "
+    # ipregion (infra/ipregion-node-install.sh) - гео-проверка IP ноды раз в 6ч
+    "echo __GEO__; stat -c %Y /opt/ipregion/last.json 2>/dev/null; "
+    "cat /opt/ipregion/last.json 2>/dev/null"
 )
 
 
+def parse_geo(raw):
+    """mtime + ipregion JSON -> compact {checked_at, primary/custom/cdn: {service: ipv4}} без IP."""
+    try:
+        mtime, body = raw.split("\n", 1)
+        results = json.loads(body)["results"]
+        return {
+            "checked_at": int(mtime),
+            **{
+                group: {r["service"]: r.get("ipv4") for r in results.get(group, [])}
+                for group in ("primary", "custom", "cdn")
+            },
+        }
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
 def node_stats(host):
-    """SSH probe: load/mem/disk/conn count on a VPN node (backup key, read-only)."""
+    """SSH probe: load/mem/disk/conn count (+ ipregion geo) on a VPN node (backup key, read-only)."""
     try:
         p = subprocess.run(
             [
@@ -62,8 +83,9 @@ def node_stats(host):
             capture_output=True, text=True, timeout=20,
         )
         if p.returncode != 0:
-            return None
-        lines = [l.strip() for l in p.stdout.strip().splitlines() if l.strip()]
+            return None, None
+        head, _, geo_raw = p.stdout.partition("__GEO__\n")
+        lines = [l.strip() for l in head.strip().splitlines() if l.strip()]
         load1 = float(lines[0].split()[0])
         mem_used, mem_total = (int(x) for x in lines[1].split()[:2])
         return {
@@ -72,9 +94,9 @@ def node_stats(host):
             "mem_total_mb": mem_total,
             "disk_pct": int(lines[2].rstrip("%")),
             "conns": int(lines[3]),
-        }
+        }, parse_geo(geo_raw)
     except Exception:
-        return None
+        return None, None
 
 
 def check(t):
@@ -139,7 +161,9 @@ def main():
     results = {}
     for t in TARGETS:
         results[t["id"]] = check(t)
-    stats = {t["id"]: node_stats(t["host"]) for t in TARGETS if t["kind"] == "location"}
+    probes = {t["id"]: node_stats(t["host"]) for t in TARGETS if t["kind"] == "location"}
+    stats = {tid: p[0] for tid, p in probes.items()}
+    geo = {tid: p[1] for tid, p in probes.items()}
     samples[str(now_min)] = results
 
     # TG-алерты админу: шлём только на устойчивой смене состояния (2 мин подряд)
@@ -200,6 +224,8 @@ def main():
         }
         if stats.get(tid):
             entry["stats"] = stats[tid]
+        if geo.get(tid):
+            entry["geo"] = geo[tid]
         if t.get("flag"):
             entry["flag"] = t["flag"]
         if t.get("icon"):

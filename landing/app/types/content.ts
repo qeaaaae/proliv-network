@@ -1,8 +1,8 @@
 export type MessageKey = string
 
-export type CountryCode = 'de' | 'ee' | 'gb'
+export type CountryCode = 'de' | 'ee' | 'fi' | 'gb'
 
-export type LocationId = 'germany' | 'estonia' | 'united-kingdom'
+export type LocationId = 'germany' | 'estonia' | 'finland' | 'united-kingdom'
 
 export interface LocationRecord {
   id: LocationId

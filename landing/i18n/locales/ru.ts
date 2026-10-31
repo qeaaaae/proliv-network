@@ -1,6 +1,6 @@
 export default {
   seo: {
-    description: 'Три локации с портом 10 Гбит/с, резервный LTE-доступ, 300 ГБ трафика в месяц с переносом остатка и 3 устройства. Подключение от 179 ₽.',
+    description: 'Четыре локации с портом 10 Гбит/с, резервный LTE-доступ, 300 ГБ трафика в месяц с переносом остатка и 3 устройства. Подключение от 179 ₽.',
     imageAlt: 'Баннер Proliv Network с адресом proliv-network.xyz'
   },
   brand: {
@@ -28,12 +28,12 @@ export default {
       trialLabel: 'за 15 ₽',
       trafficValue: '300 ГБ',
       trafficLabel: 'трафика в месяц, остаток переносится',
-      countriesValue: '3 страны',
+      countriesValue: '4 страны',
       countriesLabel: 'порт 10 Гбит⁠/⁠с'
     }
   },
   locations: {
-    titleBefore: 'Три локации',
+    titleBefore: 'Четыре локации',
     titleAccent: 'Порт 10 Гбит⁠/⁠с',
     titleAfter: 'на каждой',
     lead: 'Все локации входят в тариф. Переключайтесь между ними в приложении',
@@ -41,11 +41,13 @@ export default {
     items: {
       germany: 'Германия',
       estonia: 'Эстония',
+      finland: 'Финляндия',
       unitedKingdom: 'Великобритания'
     },
     cities: {
       germany: 'Франкфурт',
       estonia: 'Таллин',
+      finland: 'Хельсинки',
       unitedKingdom: 'Лондон'
     }
   },
@@ -105,7 +107,7 @@ export default {
       trafficLabel: 'трафика в месяц с переносом остатка',
       devicesValue: '3',
       devicesLabel: 'устройства',
-      locationsValue: '3',
+      locationsValue: '4',
       locationsLabel: 'локации',
       lteValue: '1',
       lteLabel: 'LTE-сервер'
@@ -169,7 +171,7 @@ export default {
       },
       locations: {
         question: 'Можно ли менять страну?',
-        answer: 'Да. Все три локации и резервный LTE-⁠сервер входят в тариф, переключайтесь между ними в приложении'
+        answer: 'Да. Все четыре локации и резервный LTE-⁠сервер входят в тариф, переключайтесь между ними в приложении'
       },
       payment: {
         question: 'Как оплатить?',
@@ -198,8 +200,8 @@ export default {
     benefitsLead: 'Один тариф: 300 ГБ трафика в месяц с переносом остатка и 3 устройства',
     benefits: {
       locations: {
-        title: 'Три страны',
-        text: 'Великобритания, Германия и Эстония. Порт 10 Гбит/с на каждой'
+        title: 'Четыре страны',
+        text: 'Великобритания, Германия, Эстония и Финляндия. Порт 10 Гбит/с на каждой'
       },
       lte: {
         title: 'LTE-⁠доступ',

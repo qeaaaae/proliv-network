@@ -56,7 +56,7 @@ export interface BonusEntry {
 }
 
 // Локации, которые есть в подписке (флаги в UI).
-export const LOCATION_IDS = ['gb', 'ee', 'de'] as const
+export const LOCATION_IDS = ['gb', 'ee', 'de', 'fi'] as const
 
 export function fmtNow(): string {
   return new Date().toISOString()
