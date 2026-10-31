@@ -115,15 +115,25 @@ async def referral_command_handler(
             await event.answer()
         return
 
+    partner_profile = await partner_dal.get_profile_by_user_id(session, inviter_user_id)
+
     if settings.traffic_sale_mode:
         bonus_details_str = _("referral_not_available_for_traffic")
     else:
-        bonus_details_str = _build_referral_bonus_details_text(settings, _, current_lang)
+        # Показываем реальную ставку партнёра (стример 40/50/60%, нарезчик 20%),
+        # а не дефолтную из настроек.
+        bonus_details_str = _build_referral_bonus_details_text(
+            settings,
+            _,
+            current_lang,
+            commission_bps_override=(
+                int(partner_profile.commission_bps) if partner_profile else None
+            ),
+        )
 
     referral_stats = await referral_service.get_referral_stats(session, inviter_user_id)
 
     streamer_line = ""
-    partner_profile = await partner_dal.get_profile_by_user_id(session, inviter_user_id)
     if partner_profile is not None:
         p_kind = str(getattr(partner_profile, "kind", "standard") or "standard")
         if p_kind == "streamer":
@@ -404,7 +414,9 @@ def _format_reward_percent(value: float) -> str:
     return f"{float(value):g}"
 
 
-def _referral_rewards_summary_text(settings: Settings, translator: Translator) -> str:
+def _referral_rewards_summary_text(
+    settings: Settings, translator: Translator, commission_bps_override: int | None = None
+) -> str:
     """Fallback rewards copy for deployments without day-based referral bonuses."""
 
     lines: list[str] = []
@@ -415,6 +427,8 @@ def _referral_rewards_summary_text(settings: Settings, translator: Translator) -
     except AttributeError:
         partner_enabled = bool(getattr(settings, "PARTNER_PROGRAM_ENABLED", False))
         commission_bps = int(getattr(settings, "PARTNER_DEFAULT_COMMISSION_BPS", 0) or 0)
+    if commission_bps_override is not None:
+        commission_bps = int(commission_bps_override)
     if partner_enabled and commission_bps > 0:
         lines.append(
             translator(
@@ -434,7 +448,10 @@ def _referral_rewards_summary_text(settings: Settings, translator: Translator) -
 
 
 def _build_referral_bonus_details_text(
-    settings: Settings, translator: Translator, current_lang: str
+    settings: Settings,
+    translator: Translator,
+    current_lang: str,
+    commission_bps_override: int | None = None,
 ) -> str:
     tariffs_config = settings.tariffs_config
     if not tariffs_config:
@@ -451,7 +468,7 @@ def _build_referral_bonus_details_text(
         return (
             "\n".join(bonus_info_parts)
             if bonus_info_parts
-            else _referral_rewards_summary_text(settings, translator)
+            else _referral_rewards_summary_text(settings, translator, commission_bps_override)
         )
 
     period_tariffs = [
@@ -472,7 +489,7 @@ def _build_referral_bonus_details_text(
         return (
             "\n".join(bonus_info_parts)
             if bonus_info_parts
-            else _referral_rewards_summary_text(settings, translator)
+            else _referral_rewards_summary_text(settings, translator, commission_bps_override)
         )
 
     bonus_info_parts = []
@@ -493,7 +510,7 @@ def _build_referral_bonus_details_text(
     return (
         "\n".join(bonus_info_parts)
         if bonus_info_parts
-        else _referral_rewards_summary_text(settings, translator)
+        else _referral_rewards_summary_text(settings, translator, commission_bps_override)
     )
 
 
