@@ -1,2 +1,4 @@
 User-agent: *
 Allow: /
+
+Sitemap: https://proliv-network.xyz/sitemap.xml
