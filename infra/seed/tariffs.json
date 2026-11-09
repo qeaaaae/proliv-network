@@ -9,16 +9,17 @@
         "en": "Proliv Network"
       },
       "descriptions": {
-        "ru": "300 ГБ/мес с переносом остатка, 3 устройства. Локации: UK, Эстония, Германия, Финляндия.",
-        "en": "300 GB/mo with rollover, 3 devices. Locations: UK, Estonia, Germany, Finland."
+        "ru": "500 ГБ/мес, до 150 ГБ остатка переносится на следующий месяц, устройства без лимита. Локации: UK, Эстония, Германия, Финляндия, Нидерланды, Казахстан.",
+        "en": "500 GB/mo, up to 150 GB rollover, unlimited devices. Locations: UK, Estonia, Germany, Finland, Netherlands, Kazakhstan."
       },
       "squad_uuids": [
         "2b5f5dcd-0099-4f51-bc26-0ba04c240d63"
       ],
       "billing_model": "period",
-      "monthly_gb": 300,
+      "monthly_gb": 500,
       "traffic_limit_strategy": "MONTH_ROLLING",
       "traffic_rollover": true,
+      "traffic_rollover_cap_gb": 150,
       "topup_packages": {
         "rub": [
           {
@@ -31,28 +32,10 @@
           }
         ]
       },
-      "hwid_device_limit": 3,
-      "hwid_device_packages": {
-        "rub": [
-          {
-            "count": 1,
-            "price": 39,
-            "traffic_bonus_gb": 0,
-            "prices": {
-              "30": 39.0,
-              "90": 117.0,
-              "180": 234.0,
-              "365": 468.0
-            },
-            "period_unit": "day"
-          }
-        ]
-      },
+      "hwid_device_limit": 0,
       "checkout_addons": {
         "devices": {
-          "enabled": true,
-          "max_extra_devices": 2,
-          "price_per_device": 29
+          "enabled": false
         },
         "traffic": {
           "enabled": false

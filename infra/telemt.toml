@@ -1,0 +1,31 @@
+[general]
+use_middle_proxy = true
+ad_tag = "ed20692b9877acd1f42248e328b2061c"
+log_level = "verbose"
+
+[general.modes]
+classic = false
+secure = true
+tls = true
+
+[general.links]
+show = "*"
+public_host = "179.253.82.201"
+public_port = 465
+
+[server]
+port = 465
+
+[server.api]
+enabled = true
+listen = "127.0.0.1:9091"
+whitelist = ["127.0.0.1/32"]
+
+[censorship]
+tls_domain = "www.microsoft.com"
+mask = true
+tls_emulation = true
+tls_front_dir = "/opt/telemt/tlsfront"
+
+[access.users]
+proliv = "a4f8c2e19d3b47f091e6c5a8b2d4f6e1"

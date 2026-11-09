@@ -43,8 +43,8 @@ function sourceLabel(id: string): string {
       </div>
 
       <template v-if="history.length">
-        <h3>Последние операции</h3>
-        <div class="adm-users-table-wrap">
+        <h3 class="admin-sub">Последние операции</h3>
+        <div class="admin-table-wrap">
           <table class="admin-table">
             <thead>
               <tr>
@@ -61,7 +61,7 @@ function sourceLabel(id: string): string {
                   {{ kindLabel(entry.kind) }}
                   <span v-if="entry.source_id === 'partner'" class="admin-note">(партнёр)</span>
                 </td>
-                <td :class="{ 'adm-users-neg': entry.amount_minor < 0 }">
+                <td :class="{ 'admin-neg': entry.amount_minor < 0 }">
                   {{ entry.amount_minor > 0 ? '+' : '' }}{{ fmtMinor(entry.amount_minor, balance.currency_scale, currencySymbol(balance.currency)) }}
                 </td>
                 <td>{{ entry.reason || '—' }}</td>
@@ -82,15 +82,5 @@ function sourceLabel(id: string): string {
 }
 .adm-users-balance-row .admin-kpi {
   flex: 1 1 160px;
-}
-.adm-users-neg {
-  color: var(--adm-danger, #f87171);
-}
-.adm-users-table-wrap {
-  overflow-x: auto;
-}
-h3 {
-  margin: 8px 0 0;
-  font-size: 14px;
 }
 </style>

@@ -13,7 +13,7 @@ const total = computed(() => props.items.reduce((sum, item) => sum + item.count,
 
 <template>
   <section class="admin-card" :class="{ att: total }">
-    <div class="att-head">
+    <div class="admin-card-head">
       <h2>Требует внимания</h2>
       <AdminBadge :tone="total ? 'warning' : 'success'">{{ total }}</AdminBadge>
     </div>
@@ -41,15 +41,6 @@ const total = computed(() => props.items.reduce((sum, item) => sum + item.count,
 <style scoped>
 .att {
   border-color: rgba(251, 191, 36, 0.25);
-}
-.att-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.att-head h2 {
-  margin: 0;
 }
 .att-list {
   display: grid;

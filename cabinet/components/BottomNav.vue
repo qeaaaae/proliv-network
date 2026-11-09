@@ -14,8 +14,13 @@ const tabs = computed(() => [
   ...(isAdmin.value ? [{ to: '/admin', icon: ShieldCheck, label: 'Панель' }] : []),
 ])
 
-const isActive = (to: string) =>
-  to === '/' ? route.path === '/' : route.path === to || route.path.startsWith(`${to}/`)
+// Страницы-подсекции без собственного таба: подсвечиваем родительский раздел
+const SECTION_OF: Record<string, string> = { '/install': '/' }
+
+const isActive = (to: string) => {
+  const path = SECTION_OF[route.path] ?? route.path
+  return to === '/' ? path === '/' : path === to || path.startsWith(`${to}/`)
+}
 
 const linkEls = ref<unknown[]>([])
 const pill = ref({ x: 0, w: 0, ready: false })
@@ -24,6 +29,12 @@ let remeasureTimer: ReturnType<typeof setTimeout> | undefined
 async function syncPill() {
   await nextTick()
   const idx = tabs.value.findIndex((t) => isActive(t.to))
+  if (idx < 0) {
+    // ни один таб не активен (напр. /auth) - прячем плашку, иначе она
+    // остаётся висеть на геометрии прошлой страницы
+    pill.value = { x: 0, w: 0, ready: false }
+    return
+  }
   const raw = linkEls.value?.[idx]
   // ref на NuxtLink возвращает инстанс компонента - нужен $el
   const el = raw instanceof HTMLElement ? raw : (raw as { $el?: unknown })?.$el

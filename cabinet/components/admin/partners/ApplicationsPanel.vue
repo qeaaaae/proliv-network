@@ -27,6 +27,12 @@ const emit = defineEmits<{
   changed: []
 }>()
 
+import {
+  adminErrorMessage as errorText,
+  fmtBps as pct,
+  fmtDateTimeFull as fmtDate,
+} from '~/components/admin/format'
+
 const { call } = useAdminApi()
 
 const PAGE = 25
@@ -64,28 +70,6 @@ const decision = ref<{ app: PartnerApplication; approve: boolean } | null>(null)
 const decisionMessage = ref('')
 const decisionRate = ref('')
 const reopenTarget = ref<PartnerApplication | null>(null)
-
-function fmtDate(iso?: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
-function pct(bps?: number | null): string {
-  return bps === null || bps === undefined ? '—' : `${(bps / 100).toLocaleString('ru-RU')}%`
-}
-
-function errorText(err: unknown): string {
-  const data = (err as { data?: { error?: string; message?: string } }).data || {}
-  return data.message || data.error || (err as Error).message || 'request_failed'
-}
 
 async function load(reset = true) {
   loading.value = true
@@ -173,11 +157,11 @@ onMounted(() => load())
     <div class="admin-row">
       <input
         v-model="search"
-        class="admin-input panel-search"
+        class="admin-input admin-search"
         placeholder="Имя или user_id"
         @keyup.enter="load()"
       />
-      <div class="panel-select">
+      <div class="admin-select-wrap">
         <AdminSelect v-model="status" :items="statusItems" />
       </div>
       <button type="button" class="admin-btn" :disabled="loading" @click="load()">Найти</button>
@@ -274,13 +258,6 @@ onMounted(() => load())
 </template>
 
 <style scoped>
-.panel-search {
-  flex: 1;
-  min-width: 160px;
-}
-.panel-select {
-  width: 180px;
-}
 .app-item {
   display: grid;
   gap: 6px;
@@ -293,11 +270,5 @@ onMounted(() => load())
 }
 .app-message {
   white-space: pre-wrap;
-}
-.admin-field {
-  display: grid;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--adm-muted, #8b95a8);
 }
 </style>

@@ -88,6 +88,16 @@ markdown-страницы — `data/pages/*.md` (`/api/admin/information-pages`)
 
 Править `shop/frontend/public/` НЕ нужно — всё через админку:
 
+**Статус на проде (2026-11-02): применено.** Лого-капля
+(`infra/assets/proliv-drop.png`) лежит в
+`/app/data/webapp-logo/uploads/logo-ecabb82434f50504.png`, фавикон-сет в
+`/app/data/webapp-logo/favicons/ecabb82434f50504/`, оверрайды
+`WEBAPP_LOGO_URL`/`WEBAPP_LOGO_FAVICON_URL` в БД. Тема `proliv` —
+`/app/data/themes/proliv/` (палитра лендинга, Manrope+Unbounded,
+дефолт через `WEBAPP_DEFAULT_THEME=proliv`); источники в
+`infra/seed/themes/proliv/`, применение — `infra/seed/brand-apply.py`
+(запускается внутри backend-контейнера, штатные хелперы админки).
+
 - **Админка → Внешний вид**: загрузка лого, фавикона, выбор темы
   (`ascii/dark/light/windows95` + кастомные), акцентный цвет, шрифт, масштаб лого.
 - API: `POST /api/admin/appearance/logo`, `POST /api/admin/appearance/favicon`,
@@ -121,17 +131,17 @@ TG-аватар бота сюда не относится — только BotFa
 
 **Готовый каталог Proliv:** `infra/seed/tariffs.json`. Один тариф `proliv`:
 
-- `billing_model: "period"`, `monthly_gb: 300` (300 ГиБ; конверсия
+- `billing_model: "period"`, `monthly_gb: 500` (500 ГиБ; конверсия
   `* 1024**3` байт — `tariffs_config.py`), `traffic_limit_strategy: "MONTH_ROLLING"`
-  (цикл от даты покупки), `traffic_rollover: true` (остаток копится),
-  `hwid_device_limit: 3`.
+  (цикл от даты покупки), `traffic_rollover: true` + `traffic_rollover_cap_gb: 150`
+  (остаток копится, максимум 150 ГБ в месяц), `hwid_device_limit: 0` (без лимита).
 - `enabled_periods: [30, 90, 180, 365]` = 1/3/6/12 мес.
 - `prices_rub`: `30 → 179`; скидка задаётся просто ценой ниже кратной месячной:
   `90 → 499` (~166 ₽/мес), `180 → 949` (~158 ₽/мес), `365 → 1799` (~150 ₽/мес).
   **Цены финальные (утверждены 2026-10-26).**
 - `topup_packages.rub`: докупка трафика (100 GB = 49 ₽ / 500 GB = 149 ₽).
-- `hwid_device_packages.rub`: +1 устройство 29 ₽/30 дн (`prices` по периодам).
-- `checkout_addons.devices`: докупка устройств на чекауте (лимит/цена правятся).
+- `hwid_device_packages`: не задаём — устройства без лимита, докупать нечего.
+- `checkout_addons.devices.enabled: false` — докупка устройств на чекауте выключена.
 - `referral_bonus_days_*`: бонусные дни рефералки по периодам; welcome-бонус
   реферала — `referral_welcome_bonus_tariff` + настройка
   `REFERRAL_WELCOME_BONUS_DAYS` (это и есть «триал по рефералке» из SPEC).
@@ -232,8 +242,8 @@ docker compose -f shop/docker-compose.yml -f infra/minishop.compose.yml --env-fi
    `infra/seed/tariffs.json` (или правка в админке: там сквады подгружаются
    из панели списком).
 2. Финальные цены 3/6/12 мес и топ-апы (в файле — плейсхолдеры).
-3. Лого/фавикон Proliv → загрузить в **Внешний вид** (или дать HTTPS-URL в
-   `WEBAPP_LOGO_URL`).
+3. ~~Лого/фавикон Proliv~~ — сделано 2026-11-02 (см. §2: `proliv-drop.png`,
+   тема `proliv`, оверрайды в БД).
 4. Тексты оферты и политики ПД — managed-документы в админке.
 5. `SUPPORT_LINK` — реальный TG-канал/бот поддержки.
 6. BotFather-чек-лист (§5).

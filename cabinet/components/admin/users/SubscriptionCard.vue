@@ -27,7 +27,7 @@ const history = computed(() => props.detail.subscriptions || [])
         <AdminBadge v-if="sub.is_trial" tone="warning">Триал</AdminBadge>
         <AdminBadge v-if="sub.is_throttled" tone="warning">Троттлинг</AdminBadge>
       </div>
-      <div class="adm-users-fields">
+      <div class="admin-fields">
         <AdminUsersFieldRow label="Действует до">
           {{ fmtDateTime(sub.end_date) }}
           <span v-if="remaining !== null" class="admin-note">
@@ -77,8 +77,8 @@ const history = computed(() => props.detail.subscriptions || [])
     <p v-else class="admin-note">Активной подписки нет.</p>
 
     <template v-if="detail.trial.used || detail.trial.last_reset_at">
-      <h3>Триал</h3>
-      <div class="adm-users-fields">
+      <h3 class="admin-sub">Триал</h3>
+      <div class="admin-fields">
         <AdminUsersFieldRow label="Статус">
           <template v-if="detail.trial.active">Активен до {{ fmtDate(detail.trial.latest_end_date) }}</template>
           <template v-else-if="detail.trial.used">Использован ({{ detail.trial.count }})</template>
@@ -91,8 +91,8 @@ const history = computed(() => props.detail.subscriptions || [])
     </template>
 
     <template v-if="history.length > 1">
-      <h3>История подписок</h3>
-      <div class="adm-users-table-wrap">
+      <h3 class="admin-sub">История подписок</h3>
+      <div class="admin-table-wrap">
         <table class="admin-table">
           <thead>
             <tr>
@@ -116,16 +116,4 @@ const history = computed(() => props.detail.subscriptions || [])
   </section>
 </template>
 
-<style scoped>
-.adm-users-fields {
-  display: grid;
-  gap: 6px;
-}
-.adm-users-table-wrap {
-  overflow-x: auto;
-}
-h3 {
-  margin: 8px 0 0;
-  font-size: 14px;
-}
-</style>
+<style scoped></style>

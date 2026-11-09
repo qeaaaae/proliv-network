@@ -16,6 +16,8 @@ import type {
 } from '~/components/admin/payments/types'
 import type { AdminApiError } from '~/composables/useAdminApi'
 
+import { adminErrorMessage } from '~/components/admin/format'
+
 const { call } = useAdminApi()
 const { push } = useToast()
 
@@ -126,7 +128,7 @@ async function load() {
     payments.value = res.payments || []
     total.value = res.total || 0
   } catch (e) {
-    errorText.value = `Ошибка загрузки: ${(e as Error).message || 'failed'}`
+    errorText.value = adminErrorMessage(e, 'Ошибка загрузки')
     payments.value = []
   } finally {
     loading.value = false
@@ -213,25 +215,22 @@ onMounted(load)
 
 <template>
   <main class="admin-page">
-    <div class="admin-row page-head">
-      <h1 class="page-title">Платежи</h1>
-      <div class="admin-row">
-        <button type="button" class="admin-btn ghost" :disabled="loading" @click="load">
-          <RefreshCw :size="14" />
-          Обновить
-        </button>
-        <button type="button" class="admin-btn ghost" @click="exportCsv">
-          <Download :size="14" />
-          Экспорт CSV
-        </button>
-      </div>
-    </div>
+    <AdminPageHead title="Платежи">
+      <button type="button" class="admin-btn ghost" :disabled="loading" @click="load">
+        <RefreshCw :size="14" />
+        Обновить
+      </button>
+      <button type="button" class="admin-btn ghost" @click="exportCsv">
+        <Download :size="14" />
+        Экспорт CSV
+      </button>
+    </AdminPageHead>
 
     <section class="admin-card filters">
       <div class="admin-row">
         <input
           v-model="search"
-          class="admin-input search"
+          class="admin-input admin-search"
           placeholder="ID пользователя, @username, имя или email"
           @keyup.enter="applyFilters"
         />
@@ -239,12 +238,10 @@ onMounted(load)
           Найти
         </button>
       </div>
-      <div class="admin-grid cols-3">
+      <div class="admin-filters">
         <AdminSelect v-model="statusFilter" :items="statusItems" />
         <AdminSelect v-model="providerFilter" :items="providerItems" />
         <AdminSelect v-model="currencyFilter" :items="currencyItems" />
-      </div>
-      <div class="admin-grid cols-3">
         <AdminSelect v-model="sort" :items="sortItems" />
         <AdminSelect v-model="pageSize" :items="pageSizeItems" />
       </div>
@@ -255,37 +252,24 @@ onMounted(load)
     </section>
 
     <section class="admin-card">
-      <p v-if="loading && !payments.length" class="admin-note">Загрузка...</p>
-      <p v-else-if="errorText" class="admin-note admin-error">{{ errorText }}</p>
-      <p v-else-if="!payments.length" class="admin-note">Нет платежей</p>
-      <p v-else-if="!visible.length" class="admin-note">
-        На этой странице нет платежей под текущие фильтры
-      </p>
+      <AdminStatusLine
+        :error="errorText"
+        :loading="loading && !payments.length"
+        :empty="!visible.length"
+        :empty-text="payments.length ? 'На этой странице нет платежей под текущие фильтры' : 'Нет платежей'"
+      />
 
-      <AdminPaymentsTable v-else :payments="visible" @open="openPayment" />
+      <AdminPaymentsTable v-if="visible.length" :payments="visible" @open="openPayment" />
 
-      <div class="admin-row pager">
-        <button
-          type="button"
-          class="admin-btn ghost"
-          :disabled="page === 0 || loading"
-          @click="page--; load()"
-        >
-          Назад
-        </button>
-        <span class="admin-note"
-          >Страница {{ page + 1 }} из {{ pageCount }} · всего {{ total
-          }}<template v-if="filtersActive"> · на странице: {{ visible.length }}</template></span
-        >
-        <button
-          type="button"
-          class="admin-btn ghost"
-          :disabled="page + 1 >= pageCount || loading"
-          @click="page++; load()"
-        >
-          Вперёд
-        </button>
-      </div>
+      <AdminPager
+        :page="page"
+        :page-count="pageCount"
+        :total="total"
+        :busy="loading"
+        @go="(p) => { page = p; load() }"
+      >
+        <span v-if="filtersActive" class="admin-note">на странице: {{ visible.length }}</span>
+      </AdminPager>
     </section>
 
     <AdminPaymentsDetailModal
@@ -301,25 +285,7 @@ onMounted(load)
 </template>
 
 <style scoped>
-.page-head {
-  justify-content: space-between;
-}
-.page-title {
-  margin: 0;
-  font-size: 20px;
-}
 .filters {
   gap: 10px;
-}
-.search {
-  flex: 1;
-}
-.pager {
-  justify-content: center;
-}
-.admin-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
 }
 </style>

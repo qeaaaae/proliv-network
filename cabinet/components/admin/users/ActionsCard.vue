@@ -560,7 +560,7 @@ async function doDelete() {
 
     <!-- Продление -->
     <AdminModal :open="modal === 'extend'" title="Изменить срок подписки" @close="close">
-      <div class="adm-users-form">
+      <div class="admin-form">
         <AdminSelect
           v-model="extendMode"
           :items="[
@@ -568,15 +568,15 @@ async function doDelete() {
             { value: 'date', label: 'До конкретной даты' },
           ]"
         />
-        <label v-if="extendMode === 'days'" class="adm-users-field-edit">
+        <label v-if="extendMode === 'days'" class="admin-field">
           <span>Дней (можно отрицательное)</span>
           <input v-model="extendDays" class="admin-input" type="number" step="1" />
         </label>
-        <label v-else class="adm-users-field-edit">
+        <label v-else class="admin-field">
           <span>Новая дата окончания</span>
           <input v-model="extendDate" class="admin-input" type="date" />
         </label>
-        <label class="adm-users-field-edit">
+        <label class="admin-field">
           <span>Тариф для продления</span>
           <AdminSelect v-model="extendTariff" :items="periodTariffItems" />
         </label>
@@ -596,8 +596,8 @@ async function doDelete() {
 
     <!-- Тариф -->
     <AdminModal :open="modal === 'tariff'" title="Сменить тариф" @close="close">
-      <div class="adm-users-form">
-        <label class="adm-users-field-edit">
+      <div class="admin-form">
+        <label class="admin-field">
           <span>Тариф</span>
           <AdminSelect v-model="tariffKey" :items="tariffItems" placeholder="Выберите тариф" />
         </label>
@@ -614,8 +614,8 @@ async function doDelete() {
 
     <!-- Выдача трафика -->
     <AdminModal :open="modal === 'grant'" title="Выдать трафик" @close="close">
-      <div class="adm-users-form">
-        <label class="adm-users-field-edit">
+      <div class="admin-form">
+        <label class="admin-field">
           <span>Тип</span>
           <AdminSelect
             v-model="grantKind"
@@ -625,7 +625,7 @@ async function doDelete() {
             ]"
           />
         </label>
-        <label class="adm-users-field-edit">
+        <label class="admin-field">
           <span>Объём, ГБ</span>
           <input v-model="grantGb" class="admin-input" type="number" min="0" step="0.1" />
         </label>
@@ -639,11 +639,11 @@ async function doDelete() {
 
     <!-- Премиум-лимит -->
     <AdminModal :open="modal === 'premium'" title="Премиум-трафик" @close="close">
-      <div class="adm-users-form">
+      <div class="admin-form">
         <label class="admin-check">
           <input v-model="premiumUnlimited" type="checkbox" /> Безлимитный премиум
         </label>
-        <label class="adm-users-field-edit">
+        <label class="admin-field">
           <span>Бонусный премиум, ГБ</span>
           <input v-model="premiumBonusGb" class="admin-input" type="number" min="0" step="0.1" :disabled="premiumUnlimited" />
         </label>
@@ -657,11 +657,11 @@ async function doDelete() {
 
     <!-- Основной лимит -->
     <AdminModal :open="modal === 'regular'" title="Основной трафик" @close="close">
-      <div class="adm-users-form">
+      <div class="admin-form">
         <label class="admin-check">
           <input v-model="regularUnlimited" type="checkbox" /> Безлимитный трафик
         </label>
-        <label class="adm-users-field-edit">
+        <label class="admin-field">
           <span>Бонусный трафик, ГБ</span>
           <input v-model="regularBonusGb" class="admin-input" type="number" min="0" step="0.1" :disabled="regularUnlimited" />
         </label>
@@ -675,7 +675,7 @@ async function doDelete() {
 
     <!-- HWID-лимит -->
     <AdminModal :open="modal === 'hwid'" title="Лимит устройств" @close="close">
-      <div class="adm-users-form">
+      <div class="admin-form">
         <AdminSelect
           v-model="hwidMode"
           :items="[
@@ -684,7 +684,7 @@ async function doDelete() {
             { value: 'custom', label: 'Свой лимит' },
           ]"
         />
-        <label v-if="hwidMode === 'custom'" class="adm-users-field-edit">
+        <label v-if="hwidMode === 'custom'" class="admin-field">
           <span>Устройств</span>
           <input v-model="hwidLimit" class="admin-input" type="number" min="1" step="1" />
         </label>
@@ -699,7 +699,7 @@ async function doDelete() {
 
     <!-- Стратегия сброса -->
     <AdminModal :open="modal === 'strategy'" title="Стратегия сброса трафика" @close="close">
-      <div class="adm-users-form">
+      <div class="admin-form">
         <AdminSelect
           v-model="strategy"
           :items="[
@@ -744,8 +744,8 @@ async function doDelete() {
 
     <!-- Сообщение -->
     <AdminModal :open="modal === 'message'" title="Сообщение пользователю" @close="close">
-      <div class="adm-users-form">
-        <label class="adm-users-field-edit">
+      <div class="admin-form">
+        <label class="admin-field">
           <span>Текст (HTML-разметка Telegram)</span>
           <textarea v-model="messageText" class="admin-input" rows="5" />
         </label>
@@ -770,8 +770,8 @@ async function doDelete() {
 
     <!-- Баланс -->
     <AdminModal :open="modal === 'balance'" title="Корректировка баланса" @close="close">
-      <div class="adm-users-form">
-        <label class="adm-users-field-edit">
+      <div class="admin-form">
+        <label class="admin-field">
           <span>Баланс</span>
           <AdminSelect
             v-model="balanceTarget"
@@ -781,7 +781,7 @@ async function doDelete() {
             ]"
           />
         </label>
-        <label class="adm-users-field-edit">
+        <label class="admin-field">
           <span>Операция</span>
           <AdminSelect
             v-model="balanceMode"
@@ -792,11 +792,11 @@ async function doDelete() {
             ]"
           />
         </label>
-        <label class="adm-users-field-edit">
+        <label class="admin-field">
           <span>Сумма, {{ balance?.currency || 'RUB' }}</span>
           <input v-model="balanceAmount" class="admin-input" type="number" min="0" step="0.01" />
         </label>
-        <label class="adm-users-field-edit">
+        <label class="admin-field">
           <span>Комментарий</span>
           <input v-model="balanceReason" class="admin-input" maxlength="500" placeholder="Причина корректировки" />
         </label>
@@ -810,8 +810,8 @@ async function doDelete() {
 
     <!-- Конвертация -->
     <AdminModal :open="modal === 'convert'" title="Конвертация баланса" @close="close">
-      <div class="adm-users-form">
-        <label class="adm-users-field-edit">
+      <div class="admin-form">
+        <label class="admin-field">
           <span>Направление</span>
           <AdminSelect
             v-model="convertDirection"
@@ -821,11 +821,11 @@ async function doDelete() {
             ]"
           />
         </label>
-        <label class="adm-users-field-edit">
+        <label class="admin-field">
           <span>Сумма, {{ balance?.currency || 'RUB' }}</span>
           <input v-model="convertAmount" class="admin-input" type="number" min="0" step="0.01" />
         </label>
-        <label class="adm-users-field-edit">
+        <label class="admin-field">
           <span>Комментарий</span>
           <input v-model="convertReason" class="admin-input" maxlength="500" />
         </label>
@@ -839,7 +839,7 @@ async function doDelete() {
 
     <!-- Уведомления -->
     <AdminModal :open="modal === 'prefs'" title="Настройки уведомлений" @close="close">
-      <div class="adm-users-form">
+      <div class="admin-form">
         <label class="admin-check"><input v-model="prefsSystemTelegram" type="checkbox" /> Системные в Telegram</label>
         <label class="admin-check"><input v-model="prefsMarketingTelegram" type="checkbox" /> Маркетинг в Telegram</label>
         <label class="admin-check"><input v-model="prefsSystemEmail" type="checkbox" /> Системные на email</label>
@@ -854,11 +854,11 @@ async function doDelete() {
 
     <!-- Объединение -->
     <AdminModal :open="modal === 'merge'" title="Объединить аккаунты" @close="close">
-      <div class="adm-users-form">
+      <div class="admin-form">
         <p class="admin-note">
           Аккаунт-источник будет влит в текущий ({{ user.minishop_id || `#${user.user_id}` }}): Telegram, подписки и платежи перейдут сюда, источник будет удалён.
         </p>
-        <label class="adm-users-field-edit">
+        <label class="admin-field">
           <span>user_id аккаунта-источника</span>
           <input v-model="mergeSourceId" class="admin-input" type="number" min="1" step="1" />
         </label>
@@ -884,11 +884,11 @@ async function doDelete() {
 
     <!-- Удаление -->
     <AdminModal :open="modal === 'delete'" title="Удалить пользователя" @close="close">
-      <div class="adm-users-form">
+      <div class="admin-form">
         <p class="admin-note admin-error">
           Необратимо: пользователь и все его данные (подписки, платежи, баланс, аккаунт в панели) будут удалены.
         </p>
-        <label class="adm-users-field-edit">
+        <label class="admin-field">
           <span>Для подтверждения введите user_id: {{ user.user_id }}</span>
           <input v-model="deleteConfirm" class="admin-input" type="number" />
         </label>
@@ -913,16 +913,6 @@ async function doDelete() {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-}
-.adm-users-form {
-  display: grid;
-  gap: 12px;
-}
-.adm-users-field-edit {
-  display: grid;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--adm-muted, #8b95a8);
 }
 .adm-users-merge-preview {
   padding: 10px;

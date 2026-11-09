@@ -8,6 +8,8 @@ interface PanelSyncInfo {
   subscriptions_synced?: number
 }
 
+import { fmtDateTimeShort, fmtNum } from '~/components/admin/format'
+
 const props = defineProps<{
   panel: Record<string, unknown> | null
   sync: PanelSyncInfo | null
@@ -23,8 +25,7 @@ function num(v: unknown): number | null {
 }
 
 function fmt(v: unknown): string {
-  const n = num(v)
-  return n === null ? '—' : new Intl.NumberFormat('ru-RU').format(n)
+  return fmtNum(v)
 }
 
 const failed = computed(() => !props.panel || Boolean(rec(props.panel)?.error))
@@ -103,21 +104,13 @@ const syncMeta = computed(() => {
 })
 
 function fmtDateTime(iso?: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return fmtDateTimeShort(iso)
 }
 </script>
 
 <template>
   <section class="admin-card">
-    <div class="panel-head">
+    <div class="admin-card-head">
       <h2>Панель Remnawave</h2>
       <AdminBadge v-if="syncMeta" :tone="syncMeta.tone">
         синхронизация: {{ syncMeta.label }}
@@ -142,16 +135,6 @@ function fmtDateTime(iso?: string | null): string {
 </template>
 
 <style scoped>
-.panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.panel-head h2 {
-  margin: 0;
-}
 .tiles {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));

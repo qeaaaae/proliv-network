@@ -75,6 +75,7 @@ export interface ShopPlan {
   monthly_gb?: number | null
   device_count?: number
   hwid_device_limit?: number | null
+  effective_hwid_device_limit?: number | null
   sale_mode?: string
   billing_model?: string
   is_default_tariff?: boolean

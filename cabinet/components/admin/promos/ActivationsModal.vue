@@ -41,6 +41,8 @@ interface RevenueSummary {
 const props = defineProps<{ open: boolean; promoId: number | null; code: string }>()
 const emit = defineEmits<{ close: [] }>()
 
+import { fmtNum as fmtAmount, fmtTrim as fmtNum } from '~/components/admin/format'
+
 const { call } = useAdminApi()
 const { dateTime } = useFormat()
 
@@ -108,16 +110,6 @@ watch([page, sort], () => {
   if (props.open) load()
 })
 
-function fmtAmount(v: number | null | undefined): string {
-  if (v === null || v === undefined) return '—'
-  return new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 }).format(v)
-}
-
-function fmtNum(v: number | null | undefined): string {
-  if (v === null || v === undefined) return '—'
-  return Number.isInteger(v) ? String(v) : v.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')
-}
-
 function paymentText(a: PromoActivation): string {
   if (!a.payment_id) return 'без оплаты'
   const amount =
@@ -169,7 +161,7 @@ function userText(a: PromoActivation): string {
       <p v-else-if="errorText" class="admin-note admin-error">{{ errorText }}</p>
       <p v-else-if="!rows.length" class="admin-note">Активаций пока нет</p>
 
-      <div v-else class="acts-table-wrap">
+      <div v-else class="admin-table-wrap">
         <table class="admin-table">
           <thead>
             <tr>
@@ -199,20 +191,14 @@ function userText(a: PromoActivation): string {
         }}<template v-if="revenueText"> · выручка: {{ revenueText }}</template>
       </p>
 
-      <div v-if="pageCount > 1" class="admin-row acts-pager">
-        <button type="button" class="admin-btn ghost" :disabled="page === 0 || loading" @click="page--">
-          Назад
-        </button>
-        <span class="admin-note">{{ page + 1 }} / {{ pageCount }}</span>
-        <button
-          type="button"
-          class="admin-btn ghost"
-          :disabled="page + 1 >= pageCount || loading"
-          @click="page++"
-        >
-          Вперёд
-        </button>
-      </div>
+      <AdminPager
+        v-if="pageCount > 1"
+        :page="page"
+        :page-count="pageCount"
+        :total="total"
+        :busy="loading"
+        @go="(p) => { page = p }"
+      />
     </div>
     <template #footer>
       <button type="button" class="admin-btn ghost" @click="emit('close')">Закрыть</button>
@@ -230,11 +216,5 @@ function userText(a: PromoActivation): string {
 }
 .acts-sort {
   max-width: 220px;
-}
-.acts-table-wrap {
-  overflow-x: auto;
-}
-.acts-pager {
-  justify-content: center;
 }
 </style>

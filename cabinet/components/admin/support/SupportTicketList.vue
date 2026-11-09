@@ -31,6 +31,8 @@ defineProps<{
   error: string
 }>()
 
+import { fmtDateTimeShort } from '~/components/admin/format'
+
 const emit = defineEmits<{ select: [id: number] }>()
 
 const statusLabels: Record<string, string> = {
@@ -71,12 +73,7 @@ function userLabel(user: SupportTicketRow['user'], userId: number): string {
   return `user #${user.user_id || userId}`
 }
 
-function fmtTime(iso: string | null): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
-}
+const fmtTime = (iso: string | null) => (iso ? fmtDateTimeShort(iso) : '')
 </script>
 
 <template>

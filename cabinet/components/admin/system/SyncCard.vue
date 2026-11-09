@@ -13,6 +13,8 @@ const props = defineProps<{
   busy: boolean
   notice: string
 }>()
+import { fmtDateTimeFull, fmtNum } from '~/components/admin/format'
+
 const emit = defineEmits<{ sync: [] }>()
 
 const SYNC_LABELS: Record<string, string> = {
@@ -35,20 +37,10 @@ function syncLabel(status: string): string {
   return SYNC_LABELS[status] || status || 'Неизвестно'
 }
 function fmtDateTime(iso: string | null | undefined): string {
-  if (!iso) return '-'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return String(iso)
-  return d.toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return fmtDateTimeFull(iso)
 }
 function num(value: unknown): string {
-  const n = Number(value)
-  return Number.isFinite(n) ? n.toLocaleString('ru-RU') : '-'
+  return fmtNum(value, '-')
 }
 const queueRows = computed(() => {
   const q = props.queue
@@ -76,7 +68,7 @@ const queueRows = computed(() => {
 
 <template>
   <section class="admin-card">
-    <div class="admin-row card-head">
+    <div class="admin-card-head">
       <h2>Синхронизация и очереди</h2>
       <button class="admin-btn" :disabled="busy" @click="emit('sync')">
         {{ busy ? 'Запуск...' : 'Синхронизировать с панелью' }}
@@ -97,7 +89,7 @@ const queueRows = computed(() => {
     </div>
     <p v-if="sync?.details" class="admin-note sys-details">{{ sync.details }}</p>
 
-    <h3 class="sys-sub">Очередь сообщений бота</h3>
+    <h3 class="admin-sub">Очередь сообщений бота</h3>
     <p v-if="!queue" class="admin-note">Данные очереди недоступны.</p>
     <table v-else class="admin-table">
       <thead>
@@ -127,13 +119,6 @@ const queueRows = computed(() => {
 </template>
 
 <style scoped>
-.card-head {
-  justify-content: space-between;
-}
-.sys-sub {
-  margin: 4px 0 0;
-  font-size: 14px;
-}
 .sys-details {
   white-space: pre-wrap;
   word-break: break-word;

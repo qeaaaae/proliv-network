@@ -41,6 +41,8 @@ interface SupportStats {
   total_unread_admin: number
 }
 
+import { adminErrorMessage as errText } from '~/components/admin/format'
+
 const { call } = useAdminApi()
 
 const stats = ref<SupportStats | null>(null)
@@ -92,16 +94,6 @@ const sortItems = [
   { value: 'created_desc', label: 'Сначала новые' },
   { value: 'created_asc', label: 'Сначала старые' },
 ]
-
-function errText(e: unknown): string {
-  const err = e as { code?: string; message?: string }
-  const code = err.code || err.message || ''
-  const map: Record<string, string> = {
-    request_failed: 'Ошибка запроса',
-    not_found: 'Не найдено',
-  }
-  return map[code] || code || 'Ошибка загрузки'
-}
 
 async function loadStats() {
   try {
@@ -161,10 +153,9 @@ onMounted(reloadAll)
 
 <template>
   <main class="admin-page support-page">
-    <div class="support-head">
-      <h1 class="support-title">Поддержка</h1>
+    <AdminPageHead title="Поддержка">
       <button type="button" class="admin-btn ghost" @click="reloadAll">Обновить</button>
-    </div>
+    </AdminPageHead>
 
     <div v-if="stats" class="admin-grid cols-3">
       <div class="admin-kpi">
@@ -182,7 +173,7 @@ onMounted(reloadAll)
     </div>
 
     <section class="admin-card">
-      <div class="filters">
+      <div class="admin-filters">
         <AdminSelect v-model="fStatus" :items="statusItems" />
         <AdminSelect v-model="fPriority" :items="priorityItems" />
         <AdminSelect v-model="fCategory" :items="categoryItems" />
@@ -191,7 +182,7 @@ onMounted(reloadAll)
       <div class="admin-row">
         <input
           v-model="search"
-          class="admin-input"
+          class="admin-input admin-search"
           placeholder="Поиск: тема, @username, имя, email"
           @keyup.enter="loadTickets(true)"
         />
@@ -237,20 +228,6 @@ onMounted(reloadAll)
 <style scoped>
 .support-page {
   max-width: 1100px;
-}
-.support-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.support-title {
-  margin: 0;
-  font-size: 20px;
-}
-.filters {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 8px;
 }
 .support-split {
   display: grid;

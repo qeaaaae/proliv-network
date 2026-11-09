@@ -63,11 +63,20 @@ panel.${DOMAIN} {
 }
 
 # --- Subscription page - sub.${DOMAIN} ---------------------------------------
+# URL подписки дёргают и браузеры, и VPN-клиенты. Браузеру (UA содержит
+# Mozilla) отдаём свою статичную страницу /srv/subpage/index.html с диплинками
+# и QR; клиентам проксируем remnawave-subscription-page - там живая подписка.
 sub.${DOMAIN} {
 	encode
 	# Голый корень - на лендинг (subpage без uuid всё равно падает)
 	@root path /
 	redir @root https://${DOMAIN} 302
+	@browser header User-Agent *Mozilla*
+	handle @browser {
+		root * /srv/subpage
+		rewrite * /index.html
+		file_server
+	}
 	reverse_proxy remnawave-subscription-page:3010 {
 		header_up X-Forwarded-Proto https
 	}

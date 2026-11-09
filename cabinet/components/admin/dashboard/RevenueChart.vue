@@ -4,6 +4,11 @@ interface RevenuePoint {
   amount: number
 }
 
+import {
+  fmtDateShort,
+  fmtMoney as fmtMoneyShared,
+} from '~/components/admin/format'
+
 const props = defineProps<{
   points: RevenuePoint[]
   currency: string
@@ -67,22 +72,11 @@ const bars = computed(() => {
 })
 
 function fmtMoney(value: number): string {
-  const code = (props.currency || 'RUB').toUpperCase()
-  try {
-    return new Intl.NumberFormat('ru-RU', {
-      style: 'currency',
-      currency: code,
-      maximumFractionDigits: value % 1 ? 2 : 0,
-    }).format(value)
-  } catch {
-    return `${new Intl.NumberFormat('ru-RU').format(value)} ${code}`
-  }
+  return fmtMoneyShared(value, props.currency)
 }
 
 function fmtShortDate(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })
+  return fmtDateShort(iso)
 }
 
 const firstDate = computed(() => {
@@ -97,7 +91,7 @@ const lastDate = computed(() => {
 
 <template>
   <section class="admin-card">
-    <div class="chart-head">
+    <div class="admin-card-head">
       <div class="chart-title">
         <h2>Выручка</h2>
         <p class="admin-note">
@@ -147,13 +141,6 @@ const lastDate = computed(() => {
 </template>
 
 <style scoped>
-.chart-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
 .chart-title {
   display: grid;
   gap: 4px;

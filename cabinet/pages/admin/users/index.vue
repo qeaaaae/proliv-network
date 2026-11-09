@@ -144,8 +144,6 @@ watch(search, () => {
 watch([filterValue, panelStatus, premiumTraffic, tariffFilter, sortValue], () => load(0))
 
 const pages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
-const rangeStart = computed(() => (total.value === 0 ? 0 : page.value * pageSize + 1))
-const rangeEnd = computed(() => Math.min(total.value, (page.value + 1) * pageSize))
 
 function balanceText(item: AdminUsersListResponse['users'][number]): string {
   const parts: string[] = []
@@ -161,7 +159,7 @@ onMounted(() => load(0))
 
 <template>
   <main class="admin-page">
-    <h1>Пользователи</h1>
+    <AdminPageHead title="Пользователи" />
 
     <section class="admin-card">
       <div class="adm-users-search">
@@ -172,7 +170,7 @@ onMounted(() => load(0))
           placeholder="Имя, @username, email, user_id, telegram_id, ms_id"
         />
       </div>
-      <div class="adm-users-filters">
+      <div class="admin-filters">
         <AdminSelect v-model="filterValue" :items="filterItems" />
         <AdminSelect v-model="panelStatus" :items="panelStatusItems" />
         <AdminSelect v-model="premiumTraffic" :items="premiumItems" />
@@ -184,7 +182,7 @@ onMounted(() => load(0))
     <p v-if="error" class="admin-note admin-error">{{ error }}</p>
 
     <section class="admin-card">
-      <div class="adm-users-table-wrap">
+      <div class="admin-table-wrap">
         <table class="admin-table">
           <thead>
             <tr>
@@ -234,34 +232,16 @@ onMounted(() => load(0))
         </table>
       </div>
 
-      <div class="admin-row adm-users-pager">
-        <span class="admin-note">
-          {{ total ? `Показано ${rangeStart}-${rangeEnd} из ${total}` : '' }}
-        </span>
-        <button class="admin-btn ghost" :disabled="busy || page <= 0" @click="load(page - 1)">Назад</button>
-        <span class="admin-note">Страница {{ page + 1 }} из {{ pages }}</span>
-        <button class="admin-btn ghost" :disabled="busy || page >= pages - 1" @click="load(page + 1)">Вперёд</button>
+      <AdminPager :page="page" :page-count="pages" :total="total" :busy="busy" @go="load">
         <button class="admin-btn ghost" :disabled="busy" @click="load(page)">Обновить</button>
-      </div>
+      </AdminPager>
     </section>
   </main>
 </template>
 
 <style scoped>
-h1 {
-  margin: 0;
-  font-size: 20px;
-}
 .adm-users-search {
   display: grid;
-}
-.adm-users-filters {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 8px;
-}
-.adm-users-table-wrap {
-  overflow-x: auto;
 }
 .adm-users-row {
   cursor: pointer;
@@ -283,8 +263,9 @@ h1 {
   font-size: 12px;
   color: var(--adm-muted, #8b95a8);
 }
-.adm-users-pager {
-  justify-content: center;
-  flex-wrap: wrap;
+@media (max-width: 720px) {
+  .adm-users-cell-user {
+    min-width: 0;
+  }
 }
 </style>

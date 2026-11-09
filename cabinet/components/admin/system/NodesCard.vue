@@ -19,6 +19,8 @@ const props = defineProps<{
   panel: Record<string, unknown> | null
   loading: boolean
 }>()
+import { fmtBytes, fmtNum } from '~/components/admin/format'
+
 const emit = defineEmits<{ refresh: [] }>()
 
 function isRec(value: unknown): value is Record<string, unknown> {
@@ -127,29 +129,22 @@ function flag(cc: string | null): string {
   if (code.length !== 2 || !/^[A-Z]{2}$/.test(code)) return ''
   return String.fromCodePoint(...[...code].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65))
 }
-function fmtBytes(bytes: number): string {
-  if (!bytes || bytes <= 0) return '0 GB'
-  const gb = bytes / 1073741824
-  const formatted = gb >= 10 ? gb.toFixed(1) : gb.toFixed(2)
-  return `${formatted.replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1')} GB`
-}
 function fmtCount(value: number | string | null | undefined): string {
   if (value === null || value === undefined || value === '') return '-'
-  const n = Number(value)
-  return Number.isFinite(n) ? n.toLocaleString('ru-RU') : String(value)
+  return fmtNum(value, String(value))
 }
 </script>
 
 <template>
   <section class="admin-card">
-    <div class="admin-row card-head">
+    <div class="admin-card-head">
       <h2>Ноды и сквады</h2>
       <button class="admin-btn ghost" :disabled="loading" @click="emit('refresh')">
         {{ loading ? 'Обновление...' : 'Обновить' }}
       </button>
     </div>
 
-    <h3 class="sys-sub">Ноды панели (трафик за 7 дней)</h3>
+    <h3 class="admin-sub">Ноды панели (трафик за 7 дней)</h3>
     <p v-if="!nodeRows.length" class="admin-note">
       {{ loading ? 'Загрузка...' : 'Нет данных - панель не вернула статистику нод.' }}
     </p>
@@ -178,7 +173,7 @@ function fmtCount(value: number | string | null | undefined): string {
       </tbody>
     </table>
 
-    <h3 class="sys-sub">Внутренние сквады</h3>
+    <h3 class="admin-sub">Внутренние сквады</h3>
     <p v-if="squadsError" class="admin-note admin-error">{{ squadsError }}</p>
     <p v-else-if="!squads || !squads.length" class="admin-note">
       {{ loading ? 'Загрузка...' : 'Нет данных - панель не вернула сквады.' }}
@@ -202,12 +197,4 @@ function fmtCount(value: number | string | null | undefined): string {
   </section>
 </template>
 
-<style scoped>
-.card-head {
-  justify-content: space-between;
-}
-.sys-sub {
-  margin: 4px 0 0;
-  font-size: 14px;
-}
-</style>
+<style scoped></style>

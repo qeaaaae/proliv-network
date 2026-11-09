@@ -91,7 +91,7 @@ function candidateLabel(user: RoleCandidate): string {
 
 <template>
   <section class="admin-card">
-    <div class="admin-row card-head">
+    <div class="admin-card-head">
       <h2>Администраторы</h2>
       <button class="admin-btn ghost" :disabled="loading" @click="emit('refresh')">
         {{ loading ? 'Обновление...' : 'Обновить' }}
@@ -134,7 +134,7 @@ function candidateLabel(user: RoleCandidate): string {
         </tbody>
       </table>
 
-      <h3 class="sys-sub">Выдать роль</h3>
+      <h3 class="admin-sub">Выдать роль</h3>
       <div class="sys-grant">
         <input
           v-model="identifier"
@@ -179,13 +179,6 @@ function candidateLabel(user: RoleCandidate): string {
 </template>
 
 <style scoped>
-.card-head {
-  justify-content: space-between;
-}
-.sys-sub {
-  margin: 4px 0 0;
-  font-size: 14px;
-}
 .sys-role-user {
   display: grid;
   gap: 2px;

@@ -48,7 +48,6 @@ const trafficPct = computed(() =>
     : 0,
 )
 
-const connectOpen = ref(false)
 const qrOpen = ref(false)
 const qrSrc = ref('')
 
@@ -61,21 +60,6 @@ async function showQr() {
   })
   qrOpen.value = true
 }
-
-const platforms = [
-  {
-    name: 'iOS / Android',
-    icon: Smartphone,
-    note: 'Happ - магазин приложений',
-    href: 'https://www.happ.su/main/ru',
-  },
-  {
-    name: 'Windows / macOS',
-    icon: Monitor,
-    note: 'Happ - десктопная версия',
-    href: 'https://www.happ.su/main/ru',
-  },
-]
 
 const DEVICE_ICONS: Record<Device['platform'], typeof Smartphone> = {
   ios: Smartphone,
@@ -252,10 +236,10 @@ async function activateTrial() {
           </div>
 
           <div style="display: flex; gap: 8px; flex-wrap: wrap">
-            <button class="btn btn--primary" @click="connectOpen = true">
+            <NuxtLink to="/install" class="btn btn--primary">
               <Plug :size="16" />
               Подключиться
-            </button>
+            </NuxtLink>
             <button class="btn btn--ghost" @click="showQr">
               <QrCode :size="16" />
               QR
@@ -334,30 +318,6 @@ async function activateTrial() {
         </NuxtLink>
       </section>
     </template>
-
-    <!-- Модалка подключения -->
-    <AppModal :open="connectOpen" title="Подключиться" @close="connectOpen = false">
-      <div class="stack">
-        <CopyField v-if="sub" :value="sub.subscriptionUrl" qr @qr="showQr" />
-        <a
-          v-for="p in platforms"
-          :key="p.name"
-          :href="p.href"
-          target="_blank"
-          rel="noopener"
-          class="method"
-        >
-          <span class="method__mark"><component :is="p.icon" :size="17" /></span>
-          <span>
-            {{ p.name }}
-            <div class="muted" style="font-size: 12px; font-weight: 400">{{ p.note }}</div>
-          </span>
-        </a>
-        <p class="muted" style="font-size: 12px">
-          Добавьте ссылку подписки в приложение - конфиги всех локаций подтянутся автоматически.
-        </p>
-      </div>
-    </AppModal>
 
     <!-- Модалка QR -->
     <AppModal :open="qrOpen" title="QR-код подписки" @close="qrOpen = false">

@@ -32,6 +32,7 @@ services:
       - proliv_default
     volumes:
       - ${PROLIV_DIR:-/opt/proliv}/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${PROLIV_DIR:-/opt/proliv}/subpage:/srv/subpage:ro
       - caddy-ssl-data:/data
       - caddy-config-data:/config
 

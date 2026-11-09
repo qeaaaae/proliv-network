@@ -1,0 +1,10 @@
+/* Proliv Network theme extras.
+   Served verbatim at /webapp-theme-css/proliv/style.css; design tokens from
+   theme.json are injected separately as CSS variables on .app-shell.
+   Only rules scoped to .theme-key-proliv live here. */
+
+.theme-key-proliv {
+  /* Brand radius split: cards/dialogs rounder than controls (landing tokens). */
+  --radius-card: 20px;
+  --radius-dialog: 18px;
+}

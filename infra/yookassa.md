@@ -128,7 +128,7 @@ reconciliation-worker за ~1-2 минуты, но webhook будет 500-кат
 Для самозанятого правильный путь - (2). Чек НПД создаётся в "Мой налог"
 независимо от того, что ЮKassa делает со своим receipt.
 
-## 5. Тариф Proliv Network (179 руб/мес, 3 устройства, 300 ГБ)
+## 5. Тариф Proliv Network (179 руб/мес, устройства без лимита, 500 ГБ)
 
 Цены живут НЕ в env: каталог тарифов - JSON `/app/data/tariffs.json`
 (volume `shop-data`), путь из `TARIFFS_CONFIG_PATH` (дефолт
@@ -148,30 +148,22 @@ reconciliation-worker за ~1-2 минуты, но webhook будет 500-кат
       "key": "proliv_network",
       "names": { "ru": "Proliv Network", "en": "Proliv Network" },
       "descriptions": {
-        "ru": "Универсальный Network: 3 устройства, 300 ГБ/мес с переносом остатка",
-        "en": "Universal Network: 3 devices, 300 GB/mo with rollover"
+        "ru": "Универсальный Network: устройства без лимита, 500 ГБ/мес с переносом остатка до 150 ГБ",
+        "en": "Universal Network: 3 devices, 500 GB/mo with rollover"
       },
       "billing_model": "period",
       "enabled": true,
-      "monthly_gb": 300,
+      "monthly_gb": 500,
       "traffic_limit_strategy": "MONTH_ROLLING",
       "traffic_rollover": true,
-      "hwid_device_limit": 3,
+      "traffic_rollover_cap_gb": 150,
+      "hwid_device_limit": 0,
       "enabled_periods": [1, 3, 6, 12],
       "prices_rub": { "1": 179, "3": 499, "6": 949, "12": 1799 },
       "topup_packages": {
         "rub": [
           { "gb": 100, "price": 49 },
           { "gb": 500, "price": 149 }
-        ]
-      },
-      "hwid_device_packages": {
-        "rub": [
-          {
-            "count": 1,
-            "price": 29,
-            "prices": { "1": 29, "3": 87, "6": 174, "12": 348 }
-          }
         ]
       }
     }
@@ -186,8 +178,9 @@ reconciliation-worker за ~1-2 минуты, но webhook будет 500-кат
 - `squad_uuids` тарифа заполнить UUID внутренних сквадов панели
   (UK/EE/DE), иначе юзер не попадёт в нужные сквады; premium-поля не
   нужны - в спеке один тариф без premium-слоёв.
-- Докупка трафика (`topup_packages`) и устройств (`hwid_device_packages`)
-  работает только через каталог тарифов. **Не задавать `TRAFFIC_PACKAGES`
+- Докупка трафика (`topup_packages`) работает только через каталог тарифов.
+  Устройства - без лимита (`hwid_device_limit: 0`), `hwid_device_packages` не задаём.
+  **Не задавать `TRAFFIC_PACKAGES`
   в env** - в legacy-режиме (без tariffs.json) эта переменная переключает
   весь магазин в "продажу гигабайт" вместо подписок
   (`traffic_sale_mode`).

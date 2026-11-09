@@ -40,6 +40,12 @@ const emit = defineEmits<{
   changed: []
 }>()
 
+import {
+  adminErrorMessage as errorText,
+  fmtDateTimeFull as fmtDate,
+  fmtMinorFixed as fmtMoney,
+} from '~/components/admin/format'
+
 const { call } = useAdminApi()
 
 const PAGE = 25
@@ -98,30 +104,6 @@ const transitionSettlement = ref('')
 const revealTarget = ref<PartnerWithdrawal | null>(null)
 const requisites = ref<Record<string, string> | null>(null)
 const revealBusy = ref(false)
-
-function fmtMoney(minor: number | null | undefined, scale = 2, currency = 'RUB'): string {
-  const value = (minor ?? 0) / Math.pow(10, scale)
-  const cur = currency === 'RUB' ? '₽' : currency
-  return `${value.toLocaleString('ru-RU', { minimumFractionDigits: scale, maximumFractionDigits: scale })} ${cur}`
-}
-
-function fmtDate(iso?: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
-function errorText(err: unknown): string {
-  const data = (err as { data?: { error?: string; message?: string } }).data || {}
-  return data.message || data.error || (err as Error).message || 'request_failed'
-}
 
 function methodLabel(w: PartnerWithdrawal): string {
   const snapshot = w.method_snapshot || {}
@@ -223,11 +205,11 @@ onMounted(() => load())
     <div class="admin-row">
       <input
         v-model="search"
-        class="admin-input panel-search"
+        class="admin-input admin-search"
         placeholder="Партнёр или user_id"
         @keyup.enter="load()"
       />
-      <div class="panel-select">
+      <div class="admin-select-wrap">
         <AdminSelect v-model="status" :items="statusItems" />
       </div>
       <button type="button" class="admin-btn" :disabled="loading" @click="load()">Найти</button>
@@ -341,13 +323,6 @@ onMounted(() => load())
 </template>
 
 <style scoped>
-.panel-search {
-  flex: 1;
-  min-width: 160px;
-}
-.panel-select {
-  width: 180px;
-}
 .wd-item {
   display: grid;
   gap: 6px;
@@ -366,10 +341,10 @@ onMounted(() => load())
   font-size: 13px;
   word-break: break-all;
 }
-.admin-field {
-  display: grid;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--adm-muted, #8b95a8);
+@media (max-width: 560px) {
+  .req-row {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
 }
 </style>

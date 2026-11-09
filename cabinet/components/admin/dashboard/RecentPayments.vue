@@ -13,6 +13,11 @@ interface PaymentRow {
   created_at?: string | null
 }
 
+import {
+  fmtDateTimeShort,
+  fmtMoney as fmtMoneyShared,
+} from '~/components/admin/format'
+
 const props = defineProps<{
   payments: PaymentRow[]
   currency: string
@@ -54,41 +59,25 @@ function statusOf(p: PaymentRow): { tone: BadgeTone; label: string } {
 }
 
 function fmtMoney(value: unknown, paymentCurrency?: string | null): string {
-  const n = Number(value)
-  if (!Number.isFinite(n)) return '—'
-  const code = String(paymentCurrency || props.currency || 'RUB').toUpperCase()
-  try {
-    return new Intl.NumberFormat('ru-RU', {
-      style: 'currency',
-      currency: code,
-      maximumFractionDigits: n % 1 ? 2 : 0,
-    }).format(n)
-  } catch {
-    return `${new Intl.NumberFormat('ru-RU').format(n)} ${code}`
-  }
+  return fmtMoneyShared(
+    Number.isFinite(Number(value)) ? Number(value) : null,
+    paymentCurrency || props.currency,
+  )
 }
 
 function fmtDateTime(iso?: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return fmtDateTimeShort(iso)
 }
 </script>
 
 <template>
   <section class="admin-card">
-    <div class="pay-head">
+    <div class="admin-card-head">
       <h2>Последние платежи</h2>
-      <NuxtLink class="pay-link" to="/admin/payments">Все платежи</NuxtLink>
+      <NuxtLink class="admin-link" to="/admin/payments">Все платежи</NuxtLink>
     </div>
     <p v-if="!rows.length" class="admin-note">Платежей пока нет.</p>
-    <div v-else class="pay-table-wrap">
+    <div v-else class="admin-table-wrap">
       <table class="admin-table">
         <thead>
           <tr>
@@ -119,26 +108,6 @@ function fmtDateTime(iso?: string | null): string {
 </template>
 
 <style scoped>
-.pay-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.pay-head h2 {
-  margin: 0;
-}
-.pay-link {
-  font-size: 12px;
-  color: var(--adm-accent, #3b82f6);
-  text-decoration: none;
-}
-.pay-link:hover {
-  text-decoration: underline;
-}
-.pay-table-wrap {
-  overflow-x: auto;
-}
 .pay-user {
   font-weight: 600;
 }

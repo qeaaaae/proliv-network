@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run as root on a VPN node: bash ipregion-node-install.sh
-# Geo check of the node IP (github.com/vernette/ipregion) every 6h -> /opt/ipregion/last.json.
+# Geo check of the node IP (github.com/vernette/ipregion) every 1h -> /opt/ipregion/last.json.
 # status-probe on main reads the file over SSH and the bot renders it in /nodes.
 set -euo pipefail
 BASE=/opt/ipregion
@@ -44,12 +44,12 @@ EOF
 
 cat >/etc/systemd/system/ipregion.timer <<'EOF'
 [Unit]
-Description=Proliv ipregion geo check every 6h
+Description=Proliv ipregion geo check every 1h
 
 [Timer]
 OnBootSec=5min
-OnUnitActiveSec=6h
-RandomizedDelaySec=10min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
 
 [Install]
 WantedBy=timers.target

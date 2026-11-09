@@ -1,0 +1,16 @@
+[Unit]
+Description=telemt MTProto proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/telemt
+ExecStart=/usr/local/bin/telemt /etc/telemt/telemt.toml
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

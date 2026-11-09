@@ -70,10 +70,17 @@ sub.proliv-network.xyz {
 	# Голый корень - на лендинг (subpage без uuid всё равно падает)
 	@root path /
 	redir @root https://proliv-network.xyz 302
+	@browser header User-Agent *Mozilla*
+	handle @browser {
+		root * /srv/subpage
+		rewrite * /index.html
+		file_server
+	}
 	reverse_proxy remnawave-subscription-page:3010 {
 		header_up X-Forwarded-Proto https
 	}
 }
+
 
 # --- Webhooks - api.proliv-network.xyz: /tg/webhook -> bot, /webhook/* -> backend -----
 api.proliv-network.xyz {

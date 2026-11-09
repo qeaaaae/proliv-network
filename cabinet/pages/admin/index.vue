@@ -92,6 +92,8 @@ interface PartnerRow {
 
 useHead({ title: 'Админка · Дашборд - Proliv Network' })
 
+import { adminErrorMessage, fmtMoney, fmtNum } from '~/components/admin/format'
+
 const { call } = useAdminApi()
 const { plural } = useFormat()
 
@@ -144,28 +146,8 @@ const attentionItems = computed(() => [
   },
 ])
 
-function fmtNum(v: unknown): string {
-  const n = Number(v)
-  return Number.isFinite(n) ? new Intl.NumberFormat('ru-RU').format(n) : '—'
-}
-
-function fmtMoney(v: unknown): string {
-  const n = Number(v)
-  if (!Number.isFinite(n)) return '—'
-  const code = (currency.value || 'RUB').toUpperCase()
-  try {
-    return new Intl.NumberFormat('ru-RU', {
-      style: 'currency',
-      currency: code,
-      maximumFractionDigits: n % 1 ? 2 : 0,
-    }).format(n)
-  } catch {
-    return `${fmtNum(n)} ${code}`
-  }
-}
-
-function errText(e: unknown): string {
-  return (e as { message?: string })?.message || 'request_failed'
+function money(v: unknown): string {
+  return fmtMoney(Number.isFinite(Number(v)) ? Number(v) : null, currency.value)
 }
 
 async function load() {
@@ -183,7 +165,7 @@ async function load() {
     if (statsRes.status === 'fulfilled') {
       stats.value = statsRes.value
     } else {
-      error.value = errText(statsRes.reason)
+      error.value = adminErrorMessage(statsRes.reason)
     }
     attention.value = attentionRes.status === 'fulfilled' ? attentionRes.value : null
     supportStats.value = supportRes.status === 'fulfilled' ? supportRes.value : null
@@ -212,16 +194,10 @@ onMounted(load)
 
 <template>
   <main class="admin-page dash">
-    <div class="dash-head">
-      <div>
-        <h1>Дашборд</h1>
-        <p class="admin-note">Обзор ключевых метрик minishop</p>
-      </div>
-      <div class="admin-row">
-        <span v-if="loadedAt" class="admin-note">Обновлено {{ loadedAt }}</span>
-        <button class="admin-btn ghost" :disabled="loading" @click="load">Обновить</button>
-      </div>
-    </div>
+    <AdminPageHead title="Дашборд" note="Обзор ключевых метрик minishop">
+      <span v-if="loadedAt" class="admin-note">Обновлено {{ loadedAt }}</span>
+      <button class="admin-btn ghost" :disabled="loading" @click="load">Обновить</button>
+    </AdminPageHead>
 
     <p v-if="loading && !stats" class="admin-note">Загрузка...</p>
 
@@ -266,7 +242,7 @@ onMounted(load)
         </div>
         <div class="admin-kpi">
           <small>Выручка сегодня</small>
-          <strong>{{ fmtMoney(fin.today_revenue) }}</strong>
+          <strong>{{ money(fin.today_revenue) }}</strong>
           <div class="kpi-sub">
             <span class="t-mut">
               {{ fmtNum(todayPayments) }}
@@ -276,9 +252,9 @@ onMounted(load)
         </div>
         <div class="admin-kpi">
           <small>Выручка за 30 дней</small>
-          <strong>{{ fmtMoney(fin.month_revenue) }}</strong>
+          <strong>{{ money(fin.month_revenue) }}</strong>
           <div class="kpi-sub">
-            <span class="t-mut">всего {{ fmtMoney(fin.all_time_revenue) }}</span>
+            <span class="t-mut">всего {{ money(fin.all_time_revenue) }}</span>
           </div>
         </div>
         <div class="admin-kpi">
@@ -320,20 +296,6 @@ onMounted(load)
 </template>
 
 <style scoped>
-.dash-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.dash-head h1 {
-  margin: 0;
-  font-size: 20px;
-}
-.dash-head p {
-  margin: 4px 0 0;
-}
 .admin-kpi strong {
   font-variant-numeric: tabular-nums;
   font-family: var(--font-body);

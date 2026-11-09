@@ -58,7 +58,7 @@ watch(
     <p v-if="error" class="admin-note admin-error">{{ error }}</p>
 
     <template v-if="loaded">
-      <div v-if="logs.length" class="adm-users-table-wrap">
+      <div v-if="logs.length" class="admin-table-wrap">
         <table class="admin-table">
           <thead>
             <tr>
@@ -70,7 +70,7 @@ watch(
           </thead>
           <tbody>
             <tr v-for="entry in logs" :key="entry.log_id">
-              <td class="adm-users-nowrap">{{ fmtDateTime(entry.timestamp) }}</td>
+              <td class="admin-nowrap">{{ fmtDateTime(entry.timestamp) }}</td>
               <td>
                 {{ entry.event_type || '—' }}
                 <AdminBadge v-if="entry.is_admin_event" tone="warning">админ</AdminBadge>
@@ -83,32 +83,15 @@ watch(
       </div>
       <p v-else class="admin-note">Событий нет.</p>
 
-      <div v-if="pages > 1" class="admin-row adm-users-pager">
-        <button class="admin-btn ghost" :disabled="busy || page <= 0" @click="load(page - 1)">Назад</button>
-        <span class="admin-note">Страница {{ page + 1 }} из {{ pages }}</span>
-        <button class="admin-btn ghost" :disabled="busy || page >= pages - 1" @click="load(page + 1)">Вперёд</button>
-      </div>
+      <AdminPager v-if="pages > 1" :page="page" :page-count="pages" :total="total" :busy="busy" @go="load" />
     </template>
   </section>
 </template>
 
 <style scoped>
-.adm-users-table-wrap {
-  overflow-x: auto;
-}
-.adm-users-nowrap {
-  white-space: nowrap;
-}
 .adm-users-log-content {
   max-width: 320px;
   word-break: break-word;
   white-space: pre-wrap;
-}
-.adm-users-pager {
-  justify-content: center;
-}
-h2 {
-  margin: 0;
-  font-size: 15px;
 }
 </style>
