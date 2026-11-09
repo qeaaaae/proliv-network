@@ -6,7 +6,6 @@ from contextlib import suppress
 from aiogram import Dispatcher
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.types import (
-    MenuButtonDefault,
     MenuButtonWebApp,
     WebAppInfo,
 )
@@ -185,8 +184,7 @@ async def on_startup_configured(dispatcher: Dispatcher):
                     web_app=WebAppInfo(url=settings.SUBSCRIPTION_MINI_APP_URL),
                 )
             )
-            await bot.set_chat_menu_button(menu_button=MenuButtonDefault())
-            logger.info("STARTUP: Mini app domain registered and default menu button restored.")
+            logger.info("STARTUP: Mini app menu button configured.")
 
         await _run_telegram_startup_step(
             "registering mini app menu button",

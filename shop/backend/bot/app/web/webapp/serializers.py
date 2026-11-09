@@ -271,7 +271,7 @@ async def _build_user_payload(request: web.Request, user_id: int) -> dict[str, A
                 local_sub,
                 panel_short_uuid=str(active.get("panel_short_uuid") or ""),
             )
-            if active and local_sub
+            if active and local_sub and settings.SUBSCRIPTION_GUIDES_SHARE_LINKS_ENABLED
             else None
         )
         trial_base_available = bool(
@@ -652,6 +652,7 @@ def _serialize_subscription(
         can_topup_regular_traffic = False
         can_topup_premium_traffic = False
         can_topup_traffic = False
+    share_links_enabled = bool(settings.SUBSCRIPTION_GUIDES_SHARE_LINKS_ENABLED)
     share_token = str(
         install_share_token or getattr(local_sub, "install_share_token", "") or ""
     ).strip()
@@ -698,8 +699,16 @@ def _serialize_subscription(
             else "panel"
         ),
         "panel_short_uuid": panel_short_uuid or None,
-        "install_share_token": subscription_dal.normalize_install_share_token(share_token) or None,
-        "install_share_url": _build_install_share_link(request, settings, share_token),
+        "install_share_token": (
+            subscription_dal.normalize_install_share_token(share_token) or None
+            if share_links_enabled
+            else None
+        ),
+        "install_share_url": (
+            _build_install_share_link(request, settings, share_token)
+            if share_links_enabled
+            else None
+        ),
         "traffic_limit": _format_bytes(active.get("traffic_limit_bytes"), zero_as_unlimited=True),
         "traffic_used": _format_bytes(active.get("traffic_used_bytes")),
         "traffic_limit_bytes": _coerce_int_or_none(active.get("traffic_limit_bytes")),

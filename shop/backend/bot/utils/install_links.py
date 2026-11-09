@@ -42,6 +42,8 @@ def bot_install_guide_url(settings: Settings) -> str | None:
 
 
 def install_guide_share_links_enabled(settings: Settings) -> bool:
+    if not settings.SUBSCRIPTION_GUIDES_SHARE_LINKS_ENABLED:
+        return False
     return bool(
         (
             subscription_guides_available(settings)

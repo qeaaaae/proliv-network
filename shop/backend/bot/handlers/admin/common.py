@@ -21,7 +21,10 @@ from bot.utils.message_queue import get_queue_manager
 from config.settings import Settings
 
 from . import broadcast as admin_broadcast_handlers
+from . import giveaway as admin_giveaway_handlers
 from . import logs_admin as admin_logs_handlers
+from . import post as admin_post_handlers
+from . import purchases as admin_purchases_handlers
 from . import statistics as admin_stats_handlers
 from . import sync_admin as admin_sync_handlers
 from . import user_management as admin_user_mgmnt_handlers
@@ -92,6 +95,16 @@ async def admin_panel_actions_callback_handler(
         await admin_stats_handlers.show_statistics_handler(callback, i18n_data, settings, session)
     elif action == "broadcast":
         await admin_broadcast_handlers.broadcast_message_prompt_handler(
+            callback, state, i18n_data, settings, session
+        )
+    elif action == "post":
+        await admin_post_handlers.post_prompt_handler(callback, state, i18n_data, settings)
+    elif action == "giveaway":
+        await admin_giveaway_handlers.giveaway_menu_handler(
+            callback, state, i18n_data, settings, session
+        )
+    elif action == "purchases":
+        await admin_purchases_handlers.purchases_menu_handler(
             callback, state, i18n_data, settings, session
         )
     elif action == "create_promo":

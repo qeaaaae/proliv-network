@@ -147,6 +147,8 @@ async def subscription_gateway_route(request: web.Request) -> web.Response:
     if access is None:
         return _error(404)
     if representation == "page":
+        if not settings.SUBSCRIPTION_GUIDES_SHARE_LINKS_ENABLED:
+            return _error(404)
         return _protect(await index_route(request))
     semaphore = request.app.setdefault(_DELIVERY_SEMAPHORE_KEY, asyncio.Semaphore(64))
     try:
@@ -169,7 +171,10 @@ async def subscription_gateway_route(request: web.Request) -> web.Response:
     finally:
         semaphore.release()
     headers = CIMultiDict(result.headers)
-    if settings.SUBSCRIPTION_GATEWAY_REWRITE_PROFILE_PAGE_URL:
+    if (
+        settings.SUBSCRIPTION_GATEWAY_REWRITE_PROFILE_PAGE_URL
+        and settings.SUBSCRIPTION_GUIDES_SHARE_LINKS_ENABLED
+    ):
         page_url = _public_install_url(request, token)
         if page_url:
             headers["profile-web-page-url"] = page_url + "?view=page"

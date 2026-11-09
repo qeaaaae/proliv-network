@@ -432,6 +432,10 @@ class Tariff(BaseModel):
     # limit is monthly_gb + what was left over. Applies to period tariffs only;
     # NO_RESET never closes a period and therefore never rolls.
     traffic_rollover: bool = False
+    # Max GB of an ended period's unused standing quota that may roll into the
+    # carried balance per period. None = unlimited rollover (legacy behavior).
+    # Paid top-ups already in the balance are never capped.
+    traffic_rollover_cap_gb: float | None = None
     prices: dict[str, dict[str, float]] = Field(default_factory=dict)
     prices_rub: dict[str, float] = Field(default_factory=dict)
     prices_stars: dict[str, float] = Field(default_factory=dict)
@@ -521,6 +525,8 @@ class Tariff(BaseModel):
             )
         if self.hwid_device_limit is not None and self.hwid_device_limit < 0:
             raise ValueError(f"tariff {self.key}: hwid_device_limit must be >= 0")
+        if self.traffic_rollover_cap_gb is not None and self.traffic_rollover_cap_gb < 0:
+            raise ValueError(f"tariff {self.key}: traffic_rollover_cap_gb must be >= 0")
         if self.premium_monthly_gb is not None and self.premium_monthly_gb < 0:
             raise ValueError(f"tariff {self.key}: premium_monthly_gb must be >= 0")
         if self.premium_topup_packages and not self.premium_squad_uuids:
@@ -716,6 +722,12 @@ class Tariff(BaseModel):
         if self.monthly_gb is None or self.monthly_gb <= 0:
             return 0
         return int(float(self.monthly_gb) * (1024**3))
+
+    @property
+    def traffic_rollover_cap_bytes(self) -> int | None:
+        if self.traffic_rollover_cap_gb is None:
+            return None
+        return max(0, int(float(self.traffic_rollover_cap_gb) * (1024**3)))
 
     def period_price(self, months: int, currency: Currency = "rub") -> float | None:
         source = self.prices.get(normalize_currency_key(currency), {})

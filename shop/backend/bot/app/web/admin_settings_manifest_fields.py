@@ -369,6 +369,16 @@ SETTINGS_MANIFEST: list[SettingField] = [
         ),
     ),
     SettingField(
+        "SUBSCRIPTION_GUIDES_SHARE_LINKS_ENABLED",
+        "bool",
+        "subscription_guides",
+        "Public install share links",
+        (
+            "Issue shareable /s/ install guide links in the bot and Mini App and serve the "
+            "public install page. Turn off to hide the public guide from users."
+        ),
+    ),
+    SettingField(
         "SUBSCRIPTION_REISSUE_ENABLED",
         "bool",
         "subscription_guides",

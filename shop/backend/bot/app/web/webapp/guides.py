@@ -11,6 +11,7 @@ from typing import Any
 
 from aiohttp import web
 
+from bot.app.web.context import get_settings
 from db.dal import subscription_dal, user_dal  # noqa: F401  (patched via this namespace in tests)
 
 from .common import (
@@ -90,6 +91,8 @@ async def subscription_guides_route(request: web.Request) -> web.Response:
 
 
 async def public_subscription_guides_route(request: web.Request) -> web.Response:
+    if not get_settings(request).SUBSCRIPTION_GUIDES_SHARE_LINKS_ENABLED:
+        return json_response({"ok": False, "error": "share_links_disabled"}, status=404)
     share_token = subscription_dal.normalize_install_share_token(
         request.match_info.get("share_token")
     )

@@ -353,11 +353,9 @@ async def display_subscription_options(
             plans_count=plans_count,
             tariff_key=viewed_tariff_key,
         )
+        await render_card(event, text_content, reply_markup)
         if isinstance(event, types.CallbackQuery):
-            await render_card(event, text_content, reply_markup)
             await event.answer()
-        else:
-            await event.answer(text_content, reply_markup=reply_markup)
         return
 
     traffic_packages = settings.traffic_packages or {}
@@ -434,12 +432,10 @@ async def display_subscription_options(
 
     await _emit_subscription_options_viewed(event, settings, plans_count=len(options))
 
+    await render_card(event, text_content, reply_markup)
     if isinstance(event, types.CallbackQuery):
-        await render_card(event, text_content, reply_markup)
         with contextlib.suppress(Exception):
             await event.answer()
-    else:
-        await event.answer(text_content, reply_markup=reply_markup)
 
 
 @router.callback_query(F.data.startswith("main_action:subscribe"))

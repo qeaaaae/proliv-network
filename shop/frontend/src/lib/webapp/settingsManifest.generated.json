@@ -15141,6 +15141,25 @@
         "updated_at": null
       },
       {
+        "key": "SUBSCRIPTION_GUIDES_SHARE_LINKS_ENABLED",
+        "type": "bool",
+        "section": "subscription_guides",
+        "section_order": 10,
+        "subsection": null,
+        "label": "Public install share links",
+        "description": "Issue shareable /s/ install guide links in the bot and Mini App and serve the public install page. Turn off to hide the public guide from users.",
+        "i18n_label_key": "admin_settings_field_subscription_guides_share_links_enabled_label",
+        "i18n_description_key": "admin_settings_field_subscription_guides_share_links_enabled_description",
+        "i18n_subsection_key": null,
+        "i18n_placeholder_key": null,
+        "placeholder": "",
+        "optional": true,
+        "secret": false,
+        "value": "",
+        "overridden": false,
+        "updated_at": null
+      },
+      {
         "key": "SUBSCRIPTION_REISSUE_ENABLED",
         "type": "bool",
         "section": "subscription_guides",

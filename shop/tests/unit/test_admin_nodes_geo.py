@@ -4,7 +4,7 @@ TEXTS = {
     "admin_nodes_geo_mismatch": "Видят другую страну:",
     "admin_nodes_geo_all_match": "Все сервисы видят {cc}",
     "admin_nodes_geo_blocked": "Недоступно: {items}",
-    "admin_nodes_geo_checked": "проверка {stamp} UTC",
+    "admin_nodes_geo_checked": "проверка {stamp} МСК",
     "admin_nodes_geo_reddit_guest": "Reddit без входа",
     "admin_nodes_geo_spotify_signup": "регистрация Spotify",
 }
@@ -57,5 +57,5 @@ def test_location_block_all_match_and_without_geo() -> None:
     geo = {"primary": {"ipinfo.io": "GB"}, "checked_at": 86400}
     out = render_location_block("UK", [], "GB", geo, _)
     assert "Все сервисы видят GB" in out
-    assert "проверка 02.01 00:00 UTC" in out
+    assert "проверка 02.01 03:00 МСК" in out
     assert render_location_block("UK", ["x"], "GB", None, _) == "<blockquote>UK\nx</blockquote>"

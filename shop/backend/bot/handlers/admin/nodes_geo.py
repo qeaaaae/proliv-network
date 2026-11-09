@@ -2,10 +2,11 @@
 
 import html
 import re
-import time
 from collections.abc import Callable, Mapping
+from datetime import datetime, timedelta, timezone
 
 _CC_RE = re.compile(r"^([A-Z]{2})\b")
+_MSK = timezone(timedelta(hours=3))
 
 ICON_MISMATCH = '<tg-emoji emoji-id="5883955653348692941">🗺</tg-emoji>'
 ICON_BLOCKED = '<tg-emoji emoji-id="5872829476143894491">🚫</tg-emoji>'
@@ -100,6 +101,6 @@ def _geo_lines(cc: str, geo: Mapping[str, object], gettext: Callable[..., str]) 
         lines.append(f"{ICON_CDN} CDN: {' · '.join(cdn)}")
     checked = geo.get("checked_at")
     if isinstance(checked, int) and checked > 0:
-        stamp = time.strftime("%d.%m %H:%M", time.gmtime(checked))
+        stamp = datetime.fromtimestamp(checked, tz=_MSK).strftime("%d.%m %H:%M")
         lines.append(f"<i>{gettext('admin_nodes_geo_checked', stamp=stamp)}</i>")
     return lines

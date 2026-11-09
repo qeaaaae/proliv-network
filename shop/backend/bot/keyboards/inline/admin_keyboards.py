@@ -1,4 +1,5 @@
 import math
+from collections.abc import Callable
 
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder, InlineKeyboardButton
@@ -126,13 +127,300 @@ def get_system_functions_keyboard(i18n_instance: JsonI18n, lang: str) -> InlineK
     builder = InlineKeyboardBuilder()
 
     builder.button(text=_(key="admin_broadcast_button"), callback_data="admin_action:broadcast")
+    builder.button(text=_(key="admin_post_button"), callback_data="admin_action:post")
+    builder.button(text=_(key="admin_giveaway_button"), callback_data="admin_action:giveaway")
+    builder.button(text=_(key="admin_purchases_button"), callback_data="admin_action:purchases")
     builder.button(text=_(key="admin_sync_panel_button"), callback_data="admin_action:sync_panel")
     builder.button(
         text=_(key="admin_queue_status_button"), callback_data="admin_action:queue_status"
     )
 
     builder.button(text=_(key="back_to_admin_panel_button"), callback_data="admin_action:main")
-    builder.adjust(2, 1, 1)
+    builder.adjust(2, 2, 2, 1)
+    return builder.as_markup()
+
+
+def get_post_step_keyboard(
+    _: Callable[..., str], skip_callback: str | None = None
+) -> InlineKeyboardMarkup:
+    """Composer prompts: optional step-skip plus a cancel that exits the flow."""
+    builder = InlineKeyboardBuilder()
+    if skip_callback:
+        builder.button(text=_(key="admin_post_skip_button"), callback_data=skip_callback)
+    builder.button(text=_(key="cancel_button"), callback_data="admin_post:cancel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_post_confirm_keyboard(_: Callable[..., str]) -> InlineKeyboardMarkup:
+    """Final composer step: test send to the admin, send to group, or cancel."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text=_(key="admin_post_send_test_button"), callback_data="admin_post:send_test")
+    builder.button(
+        text=_(key="admin_post_send_group_button"), callback_data="admin_post:send_group"
+    )
+    builder.button(text=_(key="cancel_button"), callback_data="admin_post:cancel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_post_after_test_keyboard(_: Callable[..., str]) -> InlineKeyboardMarkup:
+    """Shown after a test send: the draft lives on, so group publish stays open."""
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=_(key="admin_post_send_group_button"), callback_data="admin_post:send_group"
+    )
+    builder.button(text=_(key="back_to_admin_panel_button"), callback_data="admin_post:cancel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_giveaway_participate_keyboard(
+    url: str, label: str, count: int | None = None
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    text = f"{label} ({count})" if count is not None else label
+    # ZWSP keeps a leading Unicode emoji as plain text: the custom-emoji
+    # middleware only promotes an emoji that is the whole first token, and a
+    # promoted icon does not render on channel posts.
+    builder.button(text="\u200b" + text, url=url)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_giveaway_menu_keyboard(
+    _: Callable[..., str], giveaway_id: int | None, is_active: bool
+) -> InlineKeyboardMarkup:
+    """Giveaway section root: actions for the latest giveaway plus a new draft."""
+    builder = InlineKeyboardBuilder()
+    if giveaway_id is not None and is_active:
+        builder.button(
+            text=_(key="admin_giveaway_participants_button"),
+            callback_data=f"admin_giveaway:list:{giveaway_id}:0",
+        )
+        builder.button(
+            text=_(key="admin_giveaway_draw_button"),
+            callback_data=f"admin_giveaway:draw:{giveaway_id}",
+        )
+        builder.button(
+            text=_(key="admin_giveaway_schedule_button"),
+            callback_data=f"admin_giveaway:schedule:{giveaway_id}",
+        )
+        builder.button(
+            text=_(key="admin_giveaway_setcount_button"),
+            callback_data=f"admin_giveaway:setcount:{giveaway_id}",
+        )
+        builder.button(
+            text=_(key="admin_giveaway_cancel_gw_button"),
+            callback_data=f"admin_giveaway:cancel_gw:{giveaway_id}",
+        )
+    builder.button(text=_(key="admin_giveaway_new_button"), callback_data="admin_giveaway:new")
+    builder.button(text=_(key="back_to_admin_panel_button"), callback_data="admin_action:main")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_giveaway_step_keyboard(
+    _: Callable[..., str], skip_callback: str | None = None
+) -> InlineKeyboardMarkup:
+    """Composer prompts: optional step-skip plus a cancel that exits the flow."""
+    builder = InlineKeyboardBuilder()
+    if skip_callback:
+        builder.button(text=_(key="admin_post_skip_button"), callback_data=skip_callback)
+    builder.button(text=_(key="cancel_button"), callback_data="admin_giveaway:cancel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_giveaway_confirm_keyboard(_: Callable[..., str]) -> InlineKeyboardMarkup:
+    """Final composer step: test send to the admin, publish to group, or cancel."""
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=_(key="admin_post_send_test_button"), callback_data="admin_giveaway:send_test"
+    )
+    builder.button(
+        text=_(key="admin_giveaway_send_group_button"),
+        callback_data="admin_giveaway:send_group",
+    )
+    builder.button(text=_(key="cancel_button"), callback_data="admin_giveaway:cancel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_giveaway_after_test_keyboard(_: Callable[..., str]) -> InlineKeyboardMarkup:
+    """Shown after a test send: the draft lives on, so group publish stays open."""
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=_(key="admin_giveaway_send_group_button"),
+        callback_data="admin_giveaway:send_group",
+    )
+    builder.button(text=_(key="back_to_admin_panel_button"), callback_data="admin_giveaway:cancel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_giveaway_draw_confirm_keyboard(
+    _: Callable[..., str], giveaway_id: int
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=_(key="admin_giveaway_draw_confirm_button"),
+        callback_data=f"admin_giveaway:draw_confirm:{giveaway_id}",
+    )
+    builder.button(text=_(key="back_to_admin_panel_button"), callback_data="admin_giveaway:menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_giveaway_cancel_confirm_keyboard(
+    _: Callable[..., str], giveaway_id: int
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=_(key="admin_giveaway_cancel_confirm_button"),
+        callback_data=f"admin_giveaway:cancel_confirm:{giveaway_id}",
+    )
+    builder.button(text=_(key="back_to_admin_panel_button"), callback_data="admin_giveaway:menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_giveaway_participants_keyboard(
+    _: Callable[..., str],
+    giveaway_id: int,
+    current_page: int,
+    total_pages: int,
+    is_active: bool,
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    row_buttons = []
+    if current_page > 0:
+        row_buttons.append(
+            InlineKeyboardButton(
+                text="⬅️ " + _("prev_page_button"),
+                callback_data=f"admin_giveaway:list:{giveaway_id}:{current_page - 1}",
+            )
+        )
+    row_buttons.append(
+        InlineKeyboardButton(
+            text=f"{current_page + 1}/{max(total_pages, 1)}",
+            callback_data="admin_giveaway:page_display",
+        )
+    )
+    if current_page < total_pages - 1:
+        row_buttons.append(
+            InlineKeyboardButton(
+                text=_("next_page_button") + " ➡️",
+                callback_data=f"admin_giveaway:list:{giveaway_id}:{current_page + 1}",
+            )
+        )
+    builder.row(*row_buttons)
+    if is_active:
+        builder.button(
+            text=_(key="admin_giveaway_draw_button"),
+            callback_data=f"admin_giveaway:draw:{giveaway_id}",
+        )
+    builder.button(text=_(key="admin_giveaway_back_button"), callback_data="admin_giveaway:menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_purchases_menu_keyboard(
+    _: Callable[..., str],
+    purchases: list,
+    current_page: int,
+    total_pages: int,
+) -> InlineKeyboardMarkup:
+    """Purchases section root: one button per record plus the add button."""
+    builder = InlineKeyboardBuilder()
+    for purchase in purchases:
+        label = _("admin_purchases_item_button", title=purchase.title)
+        builder.button(
+            text=label,
+            callback_data=f"admin_purchases:card:{purchase.purchase_id}:{current_page}",
+        )
+    if total_pages > 1:
+        row = []
+        if current_page > 0:
+            row.append(
+                InlineKeyboardButton(
+                    text="⬅️ " + _("prev_page_button"),
+                    callback_data=f"admin_purchases:page:{current_page - 1}",
+                )
+            )
+        row.append(
+            InlineKeyboardButton(
+                text=f"{current_page + 1}/{total_pages}",
+                callback_data="admin_purchases:page_display",
+            )
+        )
+        if current_page < total_pages - 1:
+            row.append(
+                InlineKeyboardButton(
+                    text=_("next_page_button") + " ➡️",
+                    callback_data=f"admin_purchases:page:{current_page + 1}",
+                )
+            )
+        builder.row(*row)
+    builder.button(text=_(key="admin_purchases_add_button"), callback_data="admin_purchases:new")
+    builder.button(text=_(key="back_to_admin_panel_button"), callback_data="admin_action:main")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_purchase_card_keyboard(
+    _: Callable[..., str], purchase_id: int, back_page: int
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=_(key="admin_purchases_renew_button"),
+        callback_data=f"admin_purchases:renew:{purchase_id}:{back_page}",
+    )
+    builder.button(
+        text=_(key="admin_purchases_delete_button"),
+        callback_data=f"admin_purchases:delete:{purchase_id}:{back_page}",
+    )
+    builder.button(
+        text=_(key="admin_purchases_back_button"),
+        callback_data=f"admin_purchases:page:{back_page}",
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_purchase_delete_confirm_keyboard(
+    _: Callable[..., str], purchase_id: int, back_page: int
+) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=_(key="admin_purchases_delete_confirm_button"),
+        callback_data=f"admin_purchases:delete_confirm:{purchase_id}:{back_page}",
+    )
+    builder.button(
+        text=_(key="admin_purchases_back_button"),
+        callback_data=f"admin_purchases:card:{purchase_id}:{back_page}",
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_purchase_step_keyboard(
+    _: Callable[..., str], skip_callback: str | None = None
+) -> InlineKeyboardMarkup:
+    """Composer prompts: optional step-skip plus a cancel that exits the flow."""
+    builder = InlineKeyboardBuilder()
+    if skip_callback:
+        builder.button(text=_(key="admin_post_skip_button"), callback_data=skip_callback)
+    builder.button(text=_(key="cancel_button"), callback_data="admin_purchases:cancel")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_purchase_confirm_keyboard(_: Callable[..., str]) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text=_(key="admin_purchases_save_button"), callback_data="admin_purchases:save")
+    builder.button(text=_(key="cancel_button"), callback_data="admin_purchases:cancel")
+    builder.adjust(1)
     return builder.as_markup()
 
 

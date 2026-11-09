@@ -37,6 +37,11 @@ from .chain_0105_provider_mandates import CHAIN_0105_PROVIDER_MANDATES
 from .chain_0106_support_connector import CHAIN_0106_SUPPORT_CONNECTOR
 from .chain_0107_cleaned_trial_history import CHAIN_0107_CLEANED_TRIAL_HISTORY
 from .chain_0108_partner_streamer import CHAIN_0108_PARTNER_STREAMER
+from .chain_0109_giveaways import CHAIN_0109_GIVEAWAYS
+from .chain_0110_giveaway_scheduled_draw import CHAIN_0110_GIVEAWAY_SCHEDULED_DRAW
+from .chain_0111_giveaway_display_count import CHAIN_0111_GIVEAWAY_DISPLAY_COUNT
+from .chain_0112_admin_purchases import CHAIN_0112_ADMIN_PURCHASES
+from .chain_0113_admin_purchase_price import CHAIN_0113_ADMIN_PURCHASE_PRICE
 from .engine import Migration
 
 MIGRATIONS: list[Migration] = [
@@ -75,4 +80,9 @@ MIGRATIONS: list[Migration] = [
     *CHAIN_0106_SUPPORT_CONNECTOR,
     *CHAIN_0107_CLEANED_TRIAL_HISTORY,
     *CHAIN_0108_PARTNER_STREAMER,
+    *CHAIN_0109_GIVEAWAYS,
+    *CHAIN_0110_GIVEAWAY_SCHEDULED_DRAW,
+    *CHAIN_0111_GIVEAWAY_DISPLAY_COUNT,
+    *CHAIN_0112_ADMIN_PURCHASES,
+    *CHAIN_0113_ADMIN_PURCHASE_PRICE,
 ]

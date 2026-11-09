@@ -533,6 +533,29 @@ async def _gift_activation_task(ctx: PluginContext) -> None:
     )
 
 
+async def _giveaway_draw_task(ctx: PluginContext) -> None:
+    from bot.services.giveaway_draw_worker import GiveawayDrawWorker
+
+    await GiveawayDrawWorker(
+        settings=ctx.settings,
+        session_factory=ctx.require_session_factory(),
+        subscription_service=ctx.require_subscription_service(),
+        i18n=ctx.require_i18n(),
+        bot=ctx.bot,
+    ).run()
+
+
+async def _purchase_reminder_task(ctx: PluginContext) -> None:
+    from bot.services.purchase_reminder_worker import PurchaseReminderWorker
+
+    await PurchaseReminderWorker(
+        settings=ctx.settings,
+        session_factory=ctx.require_session_factory(),
+        i18n=ctx.require_i18n(),
+        bot=ctx.bot,
+    ).run()
+
+
 async def _outbound_settings_refresh_task(ctx: PluginContext) -> None:
     keys = outbound_runtime_setting_keys()
     while True:
@@ -594,6 +617,8 @@ def _core_worker_tasks() -> list[WorkerTaskSpec]:
             factory=_partner_program_task,
         ),
         WorkerTaskSpec(name="LteTrafficAlertWorker", factory=_lte_traffic_alert_task),
+        WorkerTaskSpec(name="GiveawayDrawWorker", factory=_giveaway_draw_task),
+        WorkerTaskSpec(name="PurchaseReminderWorker", factory=_purchase_reminder_task),
         WorkerTaskSpec(name="AdminBroadcastWorker", factory=_admin_broadcast_task),
         WorkerTaskSpec(name="BackupWorker", factory=_backup_worker_task),
         WorkerTaskSpec(name="PanelSyncLoop", factory=_panel_sync_loop),

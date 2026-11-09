@@ -685,6 +685,13 @@ class Settings(
             "install guide share links."
         ),
     )
+    SUBSCRIPTION_GUIDES_SHARE_LINKS_ENABLED: bool = Field(
+        default=True,
+        description=(
+            "Issue public /s/ install guide share links and serve the public install page. "
+            "Turn off to hide the shareable install page from users entirely."
+        ),
+    )
     SUBSCRIPTION_PAGE_CONFIG_PANEL_ENABLED: bool = Field(
         default=True,
         description=(
@@ -838,6 +845,24 @@ class Settings(
     )
     LOG_SUPPORT_THREAD_ID: int | None = Field(
         default=None, description="Thread ID for support ticket log messages"
+    )
+    ADMIN_POST_CHAT_ID: int | None = Field(
+        default=None,
+        description=(
+            "Group chat ID that receives posts composed in the admin panel. "
+            "Empty sends the finished post to the composing admin (test mode)."
+        ),
+    )
+    GIVEAWAY_CHANNEL_ID: int | None = Field(
+        default=None,
+        description=(
+            "Channel ID users must join to participate in giveaways. Unlike "
+            "REQUIRED_CHANNEL_ID this gates only giveaway joins, not the whole bot."
+        ),
+    )
+    GIVEAWAY_CHANNEL_LINK: str | None = Field(
+        default=None,
+        description="Public link to the giveaway channel shown in the join prompt.",
     )
 
     # Notification types

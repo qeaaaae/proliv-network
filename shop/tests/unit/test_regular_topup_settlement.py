@@ -101,6 +101,7 @@ class SettleRegularTopupTests(unittest.IsolatedAsyncioTestCase):
         history: dict[str, Any] | None = None,
         strategy: str = "MONTH",
         rollover: bool = False,
+        rollover_cap_gb: float | None = None,
     ) -> tuple[int, AsyncMock]:
         summary = AsyncMock(
             side_effect=lambda _session, **kw: {
@@ -133,7 +134,13 @@ class SettleRegularTopupTests(unittest.IsolatedAsyncioTestCase):
             consumed = await settle_regular_topup(
                 AsyncMock(),
                 sub,
-                SimpleNamespace(monthly_bytes=50 * GB, traffic_rollover=rollover),
+                SimpleNamespace(
+                    monthly_bytes=50 * GB,
+                    traffic_rollover=rollover,
+                    traffic_rollover_cap_bytes=(
+                        None if rollover_cap_gb is None else int(rollover_cap_gb * GB)
+                    ),
+                ),
                 subscription_service=_service(device_bonus),
                 used_bytes=used,
                 panel_user_data={"userTraffic": {"lifetimeUsedTrafficBytes": lifetime}},
@@ -369,6 +376,61 @@ class SettleRegularTopupTests(unittest.IsolatedAsyncioTestCase):
 
         # August overflow still charges the pack; September's unused 30 GB rolls.
         self.assertEqual((consumed, sub.topup_balance_bytes), (30 * GB, 50 * GB))
+
+    async def test_rollover_cap_limits_the_carried_quota(self) -> None:
+        sub = self._sub()
+
+        consumed, _ = await self._settle(
+            sub, used=0, lifetime=480 * GB, rollover=True, rollover_cap_gb=30
+        )
+
+        # The whole 50 GB quota was left, but only 30 GB may carry over.
+        self.assertEqual(consumed, 0)
+        self.assertEqual(sub.topup_balance_bytes, 80 * GB)
+
+    async def test_rollover_cap_only_bites_above_the_cap(self) -> None:
+        sub = self._sub()
+
+        consumed, _ = await self._settle(
+            sub, used=0, lifetime=520 * GB, rollover=True, rollover_cap_gb=30
+        )
+
+        # 10 GB unused is below the 30 GB cap: it rolls in full.
+        self.assertEqual(consumed, 0)
+        self.assertEqual(sub.topup_balance_bytes, 60 * GB)
+
+    async def test_rollover_cap_applies_without_bandwidth_history(self) -> None:
+        start = datetime(2026, 8, 1, tzinfo=UTC)
+        sub = self._sub(state_start=start)
+
+        consumed, _ = await self._settle(
+            sub,
+            used=0,
+            lifetime=550 * GB,
+            previous=start,
+            rollover=True,
+            rollover_cap_gb=20,
+        )
+
+        # No per-period usage history across two periods: the confirmed 70 GB
+        # can kill only one period's roll; the idle one rolls its capped 20 GB.
+        self.assertEqual(sub.topup_balance_bytes, 70 * GB)
+
+    async def test_rollover_without_history_caps_heavy_usage(self) -> None:
+        start = datetime(2026, 8, 1, tzinfo=UTC)
+        sub = self._sub(state_start=start)
+
+        consumed, _ = await self._settle(
+            sub,
+            used=0,
+            lifetime=590 * GB,
+            previous=start,
+            rollover=True,
+            rollover_cap_gb=20,
+        )
+
+        # 110 GB of confirmed usage can burn both 50 GB quotas: nothing rolls.
+        self.assertEqual(sub.topup_balance_bytes, 50 * GB)
 
 
 def _history(start: datetime, end: datetime, usage: dict[int, int]) -> dict[str, Any]:

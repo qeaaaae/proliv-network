@@ -156,7 +156,9 @@ async def get_ticket_context(
         )
         facts["installation_url"] = (
             subscription_public_install_url(service.settings, subscription.install_share_token)
-            if subscription and subscription.install_share_token
+            if subscription
+            and subscription.install_share_token
+            and service.settings.SUBSCRIPTION_GUIDES_SHARE_LINKS_ENABLED
             else None
         )
         facts["account_binding"] = hashlib.sha256((panel_uuid or "").encode()).hexdigest()
