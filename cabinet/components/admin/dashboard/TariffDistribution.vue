@@ -68,7 +68,7 @@ function pct(count: number): number {
 
 <template>
   <section class="admin-card">
-    <div class="td-head">
+    <div class="admin-card-head">
       <h2>Подписки по тарифам</h2>
       <AdminBadge>{{ total }}</AdminBadge>
     </div>
@@ -106,15 +106,6 @@ function pct(count: number): number {
 </template>
 
 <style scoped>
-.td-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.td-head h2 {
-  margin: 0;
-}
 .td-stack {
   display: flex;
   gap: 3px;

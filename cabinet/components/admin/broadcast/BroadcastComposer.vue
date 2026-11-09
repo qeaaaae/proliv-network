@@ -44,20 +44,9 @@ const CORE_AUDIENCES: { value: string; label: string }[] = [
   { value: 'admins', label: 'Администраторы (тест)' },
 ]
 
-const ERROR_LABELS: Record<string, string> = {
-  empty_text: 'Введите текст сообщения',
-  invalid_audience: 'Неизвестная аудитория',
-  audience_unavailable: 'Эта аудитория сейчас недоступна',
-  unknown_shortcode: 'Неизвестный шорткод в тексте',
-  invalid_telegram_html: 'Ошибка HTML-разметки для Telegram',
-  queue_unavailable: 'Очередь отправки недоступна',
-  email_not_configured: 'Email-канал не настроен на бэкенде',
-  preview_failed: 'Не удалось отправить предпросмотр',
-  admin_telegram_unavailable: 'У вашего аккаунта не привязан Telegram',
-  broadcast_schedule_future: 'Время отправки должно быть в будущем',
-}
-
 const emit = defineEmits<{ sent: [] }>()
+
+import { adminErrorMessage, fmtDateTimeFull } from '~/components/admin/format'
 
 const { call } = useAdminApi()
 const toast = useToast()
@@ -78,8 +67,7 @@ const shortcodes = ref<{ name: string; description: string }[]>([])
 const shortcodesOpen = ref(false)
 
 function errText(e: unknown): string {
-  const err = e as { code?: string; message?: string }
-  return ERROR_LABELS[err.code || ''] || err.message || 'Ошибка запроса'
+  return adminErrorMessage(e)
 }
 
 const audienceItems = computed(() => {
@@ -257,7 +245,7 @@ onMounted(() => {
     <AdminModal :open="confirmOpen" title="Подтвердите рассылку" @close="confirmOpen = false">
       <p class="admin-note">Аудитория: <strong>{{ audienceLabel }}</strong></p>
       <p class="admin-note" v-if="scheduleEnabled">
-        Время отправки: {{ new Date(scheduledAt).toLocaleString('ru-RU') }}
+        Время отправки: {{ fmtDateTimeFull(scheduledAt) }}
       </p>
       <pre class="bc-preview-text">{{ text.trim() }}</pre>
       <template #footer>

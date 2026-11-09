@@ -144,6 +144,13 @@ const emit = defineEmits<{
   changed: []
 }>()
 
+import {
+  adminErrorMessage as errorText,
+  fmtBps as pct,
+  fmtDateTimeFull as fmtDate,
+  fmtMinorFixed as fmtMoney,
+} from '~/components/admin/format'
+
 const { call } = useAdminApi()
 
 const detail = ref<DetailResponse | null>(null)
@@ -246,34 +253,6 @@ const importPreview = ref<ImportPreview | null>(null)
 const importLoading = ref(false)
 
 const TABLE_LIMIT = 15
-
-function fmtMoney(minor: number | null | undefined, scale = 2, currency = 'RUB'): string {
-  const value = (minor ?? 0) / Math.pow(10, scale)
-  const cur = currency === 'RUB' ? '₽' : currency
-  return `${value.toLocaleString('ru-RU', { minimumFractionDigits: scale, maximumFractionDigits: scale })} ${cur}`
-}
-
-function fmtDate(iso?: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
-function pct(bps?: number | null): string {
-  return `${((bps ?? 0) / 100).toLocaleString('ru-RU')}%`
-}
-
-function errorText(err: unknown): string {
-  const data = (err as { data?: { error?: string; message?: string } }).data || {}
-  return data.message || data.error || (err as Error).message || 'request_failed'
-}
 
 async function run(fn: () => Promise<string>, closeModal = true) {
   busy.value = true
@@ -904,28 +883,6 @@ watch(() => props.partnerId, load, { immediate: true })
   height: 44px;
   border-radius: 12px;
   object-fit: cover;
-}
-.admin-card-lite {
-  display: grid;
-  gap: 10px;
-  padding: 14px;
-  border-radius: 12px;
-  border: 1px solid var(--adm-border, #232c3d);
-  background: var(--adm-card-2, #1a2231);
-}
-.admin-card-lite h3 {
-  margin: 0;
-  font-size: 14px;
-}
-.admin-card-lite h3 small {
-  color: var(--adm-muted, #8b95a8);
-  font-weight: 400;
-}
-.admin-field {
-  display: grid;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--adm-muted, #8b95a8);
 }
 .link-line code {
   user-select: all;

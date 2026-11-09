@@ -55,6 +55,8 @@ const TARGET_LABELS: Record<string, string> = {
   admins: 'Админы',
 }
 
+import { fmtDateTimeFull } from '~/components/admin/format'
+
 const { call } = useAdminApi()
 const toast = useToast()
 
@@ -89,9 +91,7 @@ function targetLabel(target: string): string {
 }
 
 function fmt(iso: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString('ru-RU')
+  return fmtDateTimeFull(iso)
 }
 
 function isActive(item: BroadcastItem): boolean {
@@ -125,7 +125,7 @@ onMounted(reload)
     <h2>История рассылок</h2>
     <p v-if="loading" class="admin-note">Загрузка...</p>
     <p v-else-if="!items.length" class="admin-note">Рассылок пока не было.</p>
-    <div v-else class="bc-table-wrap">
+    <div v-else class="admin-table-wrap">
       <table class="admin-table">
         <thead>
           <tr>
@@ -187,9 +187,6 @@ onMounted(reload)
 </template>
 
 <style scoped>
-.bc-table-wrap {
-  overflow-x: auto;
-}
 .bc-text {
   max-width: 220px;
   overflow: hidden;

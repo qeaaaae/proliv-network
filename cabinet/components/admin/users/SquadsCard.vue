@@ -95,7 +95,7 @@ async function refreshSquads() {
 
 <template>
   <section class="admin-card">
-    <div class="admin-row" style="justify-content: space-between">
+    <div class="admin-card-head">
       <h2>Сквады панели</h2>
       <div class="admin-row">
         <button class="admin-btn ghost" :disabled="busy" @click="refreshSquads">Синхронизировать</button>
@@ -107,7 +107,7 @@ async function refreshSquads() {
       <p v-if="!overrides.panel_snapshot_available" class="admin-note">
         Снапшот панели недоступен - данные могут быть неполными.
       </p>
-      <div class="adm-users-fields">
+      <div class="admin-fields">
         <AdminUsersFieldRow label="Внутренние сквады">
           <template v-if="effective.length">
             <AdminBadge v-for="uuid in effective" :key="uuid">{{ squadLabel(uuid) }}</AdminBadge>
@@ -140,7 +140,7 @@ async function refreshSquads() {
       </template>
       <p v-else-if="!squadsError" class="admin-note">Загрузка сквадов...</p>
 
-      <div class="adm-users-field-edit">
+      <div class="admin-field ext-field">
         <span>Внешний сквад</span>
         <AdminSelect
           v-model="externalMode"
@@ -167,19 +167,7 @@ async function refreshSquads() {
 </template>
 
 <style scoped>
-.adm-users-fields {
-  display: grid;
-  gap: 6px;
-}
-.adm-users-field-edit {
-  display: grid;
-  gap: 8px;
+.ext-field {
   margin-top: 8px;
-  font-size: 13px;
-  color: var(--adm-muted, #8b95a8);
-}
-h2 {
-  margin: 0;
-  font-size: 15px;
 }
 </style>

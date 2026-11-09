@@ -10,6 +10,12 @@ interface Overview {
 
 const { data, status, refresh } = useFetch<Overview>('/api/overview', { lazy: true })
 const subscriptionUrl = computed(() => data.value?.subscription?.subscriptionUrl ?? '')
+const happDeepLink = computed(
+  () => `happ://add/${encodeURIComponent(subscriptionUrl.value)}`,
+)
+const incyDeepLink = computed(
+  () => `incy://add/${encodeURIComponent(subscriptionUrl.value)}`,
+)
 
 const qrSrc = ref('')
 watch(
@@ -109,6 +115,16 @@ const platforms = [
         </div>
         <div class="panel--pad stack">
           <CopyField :value="subscriptionUrl" />
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px">
+            <a :href="happDeepLink" class="btn btn--primary" style="justify-content: center">
+              <Plug :size="15" />
+              В Happ
+            </a>
+            <a :href="incyDeepLink" class="btn" style="justify-content: center">
+              <Plug :size="15" />
+              В Incy
+            </a>
+          </div>
           <div v-if="qrSrc" class="qr-box"><img :src="qrSrc" alt="QR подписки" /></div>
           <p class="muted" style="font-size: 12px">
             В приложении нажмите «+» и выберите импорт по ссылке - конфиги всех локаций подтянутся

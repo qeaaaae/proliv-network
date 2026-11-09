@@ -402,12 +402,6 @@ async function submit() {
   display: grid;
   gap: 12px;
 }
-.admin-field {
-  display: grid;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--adm-muted, #8b95a8);
-}
 .admin-row .admin-input {
   flex: 1;
 }

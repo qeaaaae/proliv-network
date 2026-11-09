@@ -64,6 +64,8 @@ interface UsersListResponse {
   }[]
 }
 
+import { adminErrorMessage as errText } from '~/components/admin/format'
+
 const { call } = useAdminApi()
 
 const health = ref<HealthData | null>(null)
@@ -90,25 +92,6 @@ const rolesNoticeError = ref(false)
 
 const syncBusy = ref(false)
 const syncNotice = ref('')
-
-function errText(e: unknown, fallback = 'Ошибка запроса'): string {
-  const code = (e as { code?: string })?.code
-  const map: Record<string, string> = {
-    forbidden: 'Нет доступа',
-    unauthorized: 'Нет доступа',
-    panel_unavailable: 'Панель недоступна',
-    panel_request_failed: 'Ошибка запроса к панели',
-    queue_unavailable: 'Очередь фоновых задач недоступна',
-    account_not_found: 'Аккаунт не найден',
-    account_identifier_required: 'Укажите ms_ id или email',
-    invalid_role_request: 'Некорректный запрос роли',
-    role_revoke_failed: 'Не удалось снять роль',
-    invalid_payload: 'Некорректный запрос',
-  }
-  if (code && map[code]) return map[code]
-  const msg = (e as Error)?.message
-  return msg && msg !== 'request_failed' && msg !== 'Backend request failed' ? msg : fallback
-}
 
 async function loadHealth(refresh = false) {
   healthLoading.value = true
@@ -270,7 +253,7 @@ onMounted(async () => {
 
 <template>
   <main class="admin-page">
-    <h1 class="sys-title">Система</h1>
+    <AdminPageHead title="Система" />
 
     <p v-if="statsError" class="admin-note admin-error">{{ statsError }}</p>
 
@@ -316,9 +299,4 @@ onMounted(async () => {
   </main>
 </template>
 
-<style scoped>
-.sys-title {
-  margin: 0;
-  font-size: 20px;
-}
-</style>
+<style scoped></style>

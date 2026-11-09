@@ -15,6 +15,8 @@ const emit = defineEmits<{
   notice: [text: string, isError: boolean]
 }>()
 
+import { adminErrorMessage as errorText } from '~/components/admin/format'
+
 const { call } = useAdminApi()
 
 const userId = ref('')
@@ -45,11 +47,6 @@ watch(
     formError.value = ''
   },
 )
-
-function errorText(err: unknown): string {
-  const data = (err as { data?: { error?: string; message?: string } }).data || {}
-  return data.message || data.error || (err as Error).message || 'request_failed'
-}
 
 async function submit() {
   const uid = Number(userId.value)
@@ -157,11 +154,4 @@ async function submit() {
   </AdminModal>
 </template>
 
-<style scoped>
-.admin-field {
-  display: grid;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--adm-muted, #8b95a8);
-}
-</style>
+<style scoped></style>

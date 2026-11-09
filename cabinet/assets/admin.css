@@ -225,6 +225,11 @@
   /* класс сохранён для совместимости - стиль задаёт правило выше */
 }
 .admin-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 38px;
   padding: 10px 16px;
   border-radius: var(--radius-control);
   border: 1px solid transparent;
@@ -304,10 +309,195 @@
   font-size: 12px;
   color: var(--adm-muted);
 }
+.admin-list-item.selected {
+  border-color: var(--adm-accent);
+}
+
+/* Общие блоки страниц/карточек - раньше дублировались scoped-стилями
+   в каждом файле. */
+.admin-page > h1,
+.admin-page-head h1 {
+  margin: 0;
+  font-size: 20px;
+}
+.admin-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.admin-page-head-title {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.admin-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.admin-card-head > h2 {
+  margin: 0;
+}
+.admin-card-lite {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--adm-border);
+  background: var(--adm-card-2);
+}
+.admin-card-lite > h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.admin-card-lite > h3 small {
+  color: var(--adm-muted);
+  font-weight: 400;
+}
+.admin-sub {
+  margin: 6px 0 0;
+  font-size: 14px;
+}
+.admin-fields {
+  display: grid;
+  gap: 6px;
+}
+.admin-form {
+  display: grid;
+  gap: 12px;
+}
+.admin-table-wrap {
+  overflow-x: auto;
+}
+.admin-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr));
+  gap: 8px;
+}
+.admin-search {
+  flex: 1;
+  min-width: 140px;
+}
+.admin-select-wrap {
+  flex: 1 1 150px;
+  min-width: 140px;
+}
+.admin-pager {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.admin-row-actions {
+  display: flex;
+  gap: 2px;
+  justify-content: flex-end;
+}
+.admin-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--adm-muted);
+  cursor: pointer;
+}
+.admin-icon-btn:hover {
+  border-color: var(--adm-border);
+  color: var(--adm-text);
+}
+.admin-icon-btn.danger:hover {
+  color: var(--adm-danger);
+  border-color: rgba(248, 113, 113, 0.4);
+}
+.admin-icon-btn .ok {
+  color: var(--adm-success);
+}
+.admin-icon-btn .off {
+  color: var(--adm-danger);
+}
+.admin-code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 13px;
+  color: var(--adm-accent);
+}
+.admin-mono {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+.admin-link {
+  color: var(--adm-accent);
+  text-decoration: none;
+  font-size: 12px;
+}
+.admin-link:hover {
+  text-decoration: underline;
+}
+.admin-link-btn {
+  border: 0;
+  background: transparent;
+  color: var(--adm-accent);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0;
+}
+.admin-nowrap {
+  white-space: nowrap;
+}
+.admin-neg {
+  color: var(--adm-danger);
+}
+.admin-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--adm-border);
+  padding-bottom: 8px;
+  overflow-x: auto;
+}
+.admin-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--adm-muted);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.admin-tab:hover {
+  color: var(--adm-text);
+}
+.admin-tab.active {
+  color: var(--adm-accent);
+  background: var(--adm-accent-soft);
+}
 
 /* Адаптив: на узком экране таблица -> карточки. Подписи полей берутся из
    data-label (ставит plugins/admTableLabels.client.ts по заголовкам thead). */
 @media (max-width: 720px) {
+  .admin-page {
+    padding-top: 14px;
+  }
+  .admin-card {
+    padding: 14px;
+  }
+  .admin-grid.cols-3 {
+    grid-template-columns: repeat(auto-fit, minmax(min(150px, 47%), 1fr));
+  }
+  .admin-grid.cols-2 {
+    grid-template-columns: 1fr;
+  }
   .admin-table thead {
     display: none;
   }
@@ -326,20 +516,25 @@
     background: var(--adm-card-2);
   }
   .admin-table td {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 12px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 4px 12px;
+    min-width: 0;
     border: 0;
     padding: 2px 0;
     text-align: right;
   }
   .admin-table td::before {
     content: attr(data-label);
-    flex-shrink: 0;
     font-size: 11px;
     color: var(--adm-muted);
     text-align: left;
+  }
+  .admin-table td > * {
+    min-width: 0;
+    justify-self: end;
+    overflow-wrap: anywhere;
   }
   .admin-table td[colspan] {
     display: block;
@@ -347,5 +542,28 @@
   }
   .admin-table td[colspan]::before {
     content: none;
+  }
+  .adm-modal {
+    padding: 14px;
+    max-height: 92dvh;
+  }
+  .adm-modal-footer {
+    flex-wrap: wrap;
+  }
+  .adm-modal-footer .admin-btn {
+    flex: 1 1 auto;
+  }
+  .admin-page-head .admin-row,
+  .admin-pager {
+    row-gap: 6px;
+  }
+}
+
+@media (max-width: 720px) {
+  .admin-nav {
+    scrollbar-width: none;
+  }
+  .admin-nav::-webkit-scrollbar {
+    display: none;
   }
 }

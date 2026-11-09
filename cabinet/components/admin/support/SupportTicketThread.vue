@@ -56,6 +56,8 @@ interface TicketDetail {
 const props = defineProps<{ ticketId: number }>()
 const emit = defineEmits<{ updated: []; close: [] }>()
 
+import { adminErrorMessage } from '~/components/admin/format'
+
 const { call } = useAdminApi()
 
 const detail = ref<TicketDetail | null>(null)
@@ -155,17 +157,7 @@ const snapshotRows = computed(() => {
 })
 
 function errText(e: unknown): string {
-  const err = e as { code?: string; message?: string }
-  const code = err.code || err.message || ''
-  const map: Record<string, string> = {
-    not_found: 'Тикет не найден',
-    empty_text: 'Пустое сообщение',
-    invalid_request: 'Некорректный запрос',
-    invalid_telegram_html: 'Ошибка HTML-разметки',
-    request_failed: 'Ошибка запроса',
-  }
-  if (code.startsWith('unknown_shortcode')) return 'Неизвестный шорткод в тексте'
-  return map[code] || code || 'Ошибка'
+  return adminErrorMessage(e, 'Ошибка', { not_found: 'Тикет не найден' })
 }
 
 async function scrollBottom() {

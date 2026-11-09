@@ -43,7 +43,7 @@ async function copy(text: string, tag: string) {
       </div>
     </div>
 
-    <div class="adm-users-fields">
+    <div class="admin-fields">
       <AdminUsersFieldRow label="Telegram ID">
         {{ user.telegram_id ?? '—' }}
       </AdminUsersFieldRow>
@@ -60,7 +60,7 @@ async function copy(text: string, tag: string) {
         {{ user.panel_username || '—' }}
       </AdminUsersFieldRow>
       <AdminUsersFieldRow label="UUID в панели">
-        <span class="adm-users-mono">{{ user.panel_user_uuid || '—' }}</span>
+        <span class="admin-mono">{{ user.panel_user_uuid || '—' }}</span>
       </AdminUsersFieldRow>
       <AdminUsersFieldRow label="Устройства">
         {{ detail.hwid_devices.current_devices ?? '—' }} / {{ detail.hwid_devices.max_devices ?? '—' }}
@@ -108,20 +108,14 @@ async function copy(text: string, tag: string) {
 .adm-users-identity-main {
   display: grid;
   gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .adm-users-identity-main h2 {
   display: flex;
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
-}
-.adm-users-fields {
-  display: grid;
-  gap: 6px;
-}
-.adm-users-mono {
-  font-family: monospace;
-  font-size: 12px;
 }
 .adm-users-links {
   display: flex;

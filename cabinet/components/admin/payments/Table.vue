@@ -16,7 +16,7 @@ const { dateTime } = useFormat()
 </script>
 
 <template>
-  <div class="table-wrap">
+  <div class="admin-table-wrap">
     <table class="admin-table">
       <thead>
         <tr>
@@ -61,9 +61,6 @@ const { dateTime } = useFormat()
 </template>
 
 <style scoped>
-.table-wrap {
-  overflow-x: auto;
-}
 .row {
   cursor: pointer;
 }

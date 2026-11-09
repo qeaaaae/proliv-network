@@ -7,7 +7,7 @@ const history = ref<InstanceType<typeof BroadcastHistory>>()
 
 <template>
   <main class="admin-page">
-    <h1>Админка · Рассылка</h1>
+    <AdminPageHead title="Рассылка" />
     <BroadcastComposer @sent="history?.reload()" />
     <BroadcastHistory ref="history" />
   </main>

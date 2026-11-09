@@ -70,6 +70,12 @@ interface BulkImportPreview {
   partners: number
 }
 
+import {
+  adminErrorMessage as errorText,
+  fmtBps as pct,
+  fmtMinorFixed as fmtMoney,
+} from '~/components/admin/format'
+
 const { call } = useAdminApi()
 
 const tab = ref<'partners' | 'applications' | 'withdrawals'>('partners')
@@ -152,21 +158,6 @@ const filteredPartners = computed(() =>
     ? partners.value
     : partners.value.filter((item) => (item.kind || 'standard') === kindFilter.value),
 )
-
-function fmtMoney(minor: number | null | undefined, scale = 2, currency = 'RUB'): string {
-  const value = (minor ?? 0) / Math.pow(10, scale)
-  const cur = currency === 'RUB' ? '₽' : currency
-  return `${value.toLocaleString('ru-RU', { minimumFractionDigits: scale, maximumFractionDigits: scale })} ${cur}`
-}
-
-function pct(bps?: number | null): string {
-  return `${((bps ?? 0) / 100).toLocaleString('ru-RU')}%`
-}
-
-function errorText(err: unknown): string {
-  const data = (err as { data?: { error?: string; message?: string } }).data || {}
-  return data.message || data.error || (err as Error).message || 'request_failed'
-}
 
 function onNotice(text: string, isError: boolean) {
   notice.value = text
@@ -272,15 +263,12 @@ onMounted(() => {
 
 <template>
   <main class="admin-page partners-page">
-    <div class="admin-row partners-head">
-      <h1>Партнёры</h1>
-      <div class="admin-row">
-        <button type="button" class="admin-btn ghost" :disabled="busy" @click="openBulkImport">
-          Массовый импорт рефералов
-        </button>
-        <button type="button" class="admin-btn" @click="createOpen = true">Новый партнёр</button>
-      </div>
-    </div>
+    <AdminPageHead title="Партнёры">
+      <button type="button" class="admin-btn ghost" :disabled="busy" @click="openBulkImport">
+        Массовый импорт рефералов
+      </button>
+      <button type="button" class="admin-btn" @click="createOpen = true">Новый партнёр</button>
+    </AdminPageHead>
 
     <p v-if="notice" class="admin-note" :class="{ 'admin-error': noticeError }">{{ notice }}</p>
 
@@ -365,7 +353,7 @@ onMounted(() => {
         <div class="admin-row">
           <input
             v-model="search"
-            class="admin-input list-search"
+            class="admin-input admin-search"
             placeholder="Имя, код, partner_id или user_id"
             @keyup.enter="loadPartners()"
           />
@@ -374,13 +362,13 @@ onMounted(() => {
           </button>
         </div>
         <div class="admin-row">
-          <div class="filter-select">
+          <div class="admin-select-wrap">
             <AdminSelect v-model="statusFilter" :items="statusItems" placeholder="Статус" />
           </div>
-          <div class="filter-select">
+          <div class="admin-select-wrap">
             <AdminSelect v-model="kindFilter" :items="kindItems" placeholder="Тип" />
           </div>
-          <div class="filter-select">
+          <div class="admin-select-wrap">
             <AdminSelect v-model="sort" :items="sortItems" placeholder="Сортировка" />
           </div>
         </div>
@@ -490,53 +478,10 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.partners-page h1 {
-  margin: 0;
-  font-size: 20px;
-}
-.partners-head {
-  justify-content: space-between;
-}
-.admin-tabs {
-  display: flex;
-  gap: 4px;
-  border-bottom: 1px solid var(--adm-border, #232c3d);
-  padding-bottom: 8px;
-}
-.admin-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--adm-muted, #8b95a8);
-  font-size: 13px;
-  cursor: pointer;
-}
-.admin-tab:hover {
-  color: var(--adm-text, #e8ecf4);
-}
-.admin-tab.active {
-  color: var(--adm-accent, #3b82f6);
-  background: var(--adm-accent-soft, rgba(59, 130, 246, 0.14));
-}
 .range-select {
   width: 140px;
 }
-.list-search {
-  flex: 1;
-  min-width: 160px;
-}
-.filter-select {
-  flex: 1;
-  min-width: 150px;
-}
 .row-head {
   gap: 6px;
-}
-.admin-list-item.selected {
-  border-color: var(--adm-accent, #3b82f6);
 }
 </style>

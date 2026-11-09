@@ -22,6 +22,8 @@ interface SupportMessage {
   connector_source?: string | null
 }
 
+import { fmtDateTimeShort } from '~/components/admin/format'
+
 const props = defineProps<{ message: SupportMessage }>()
 
 function escapeHtml(s: string): string {
@@ -70,10 +72,7 @@ const bubbleClass = computed(() => {
 })
 
 function fmtTime(iso: string | null): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return iso ? fmtDateTimeShort(iso) : ''
 }
 
 function safeUrl(url: string): string | null {

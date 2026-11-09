@@ -118,10 +118,6 @@ onMounted(() => {
 </template>
 
 <style scoped>
-h1 {
-  margin: 0;
-  font-size: 20px;
-}
 .adm-users-back {
   color: var(--adm-muted, #8b95a8);
   text-decoration: none;

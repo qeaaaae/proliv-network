@@ -2,6 +2,7 @@
 // Промокоды: GET/POST /api/admin/promos, PATCH/DELETE /api/admin/promos/{id},
 // GET /api/admin/promos/{id}/activations. Админ-гейт - в pages/admin.vue.
 import { Check, Copy, History, Pencil, Plus, Power, RefreshCw, Trash2 } from '@lucide/vue'
+import { adminErrorMessage } from '~/components/admin/format'
 
 interface AdminPromo {
   id: number
@@ -124,7 +125,7 @@ async function load() {
     total.value = res.total || 0
     ownedTotal.value = res.owned_total || 0
   } catch (e) {
-    errorText.value = `Ошибка загрузки: ${(e as Error).message || 'failed'}`
+    errorText.value = adminErrorMessage(e, 'Ошибка загрузки')
     promos.value = []
   } finally {
     loading.value = false
@@ -214,25 +215,22 @@ onMounted(load)
 
 <template>
   <main class="admin-page">
-    <div class="admin-row page-head">
-      <h1 class="page-title">Промокоды</h1>
-      <div class="admin-row">
-        <button type="button" class="admin-btn ghost" :disabled="loading" @click="load">
-          <RefreshCw :size="14" />
-          Обновить
-        </button>
-        <button type="button" class="admin-btn" @click="openCreate">
-          <Plus :size="14" />
-          Создать
-        </button>
-      </div>
-    </div>
+    <AdminPageHead title="Промокоды">
+      <button type="button" class="admin-btn ghost" :disabled="loading" @click="load">
+        <RefreshCw :size="14" />
+        Обновить
+      </button>
+      <button type="button" class="admin-btn" @click="openCreate">
+        <Plus :size="14" />
+        Создать
+      </button>
+    </AdminPageHead>
 
     <section class="admin-card filters">
       <div class="admin-row">
         <input
           v-model="search"
-          class="admin-input search"
+          class="admin-input admin-search"
           placeholder="Поиск по коду"
           @keyup.enter="applyFilters"
         />
@@ -240,22 +238,23 @@ onMounted(load)
           Найти
         </button>
       </div>
-      <div class="admin-grid cols-3">
+      <div class="admin-filters">
         <AdminSelect v-model="statusFilter" :items="statusItems" />
         <AdminSelect v-model="scopeFilter" :items="scopeItems" />
         <AdminSelect v-model="sort" :items="sortItems" />
-      </div>
-      <div v-if="ownedTotal > 0" class="admin-grid cols-3">
-        <AdminSelect v-model="kindFilter" :items="kindItems" />
+        <AdminSelect v-if="ownedTotal > 0" v-model="kindFilter" :items="kindItems" />
       </div>
     </section>
 
     <section class="admin-card">
-      <p v-if="loading" class="admin-note">Загрузка...</p>
-      <p v-else-if="errorText" class="admin-note admin-error">{{ errorText }}</p>
-      <p v-else-if="!promos.length" class="admin-note">Промокоды не найдены</p>
+      <AdminStatusLine
+        :error="errorText"
+        :loading="loading"
+        :empty="!promos.length"
+        empty-text="Промокоды не найдены"
+      />
 
-      <div v-else class="table-wrap">
+      <div v-if="promos.length" class="admin-table-wrap">
         <table class="admin-table">
           <thead>
             <tr>
@@ -273,10 +272,10 @@ onMounted(load)
             <tr v-for="p in promos" :key="p.id">
               <td>
                 <div class="code-cell">
-                  <code class="code">{{ p.code }}</code>
+                  <code class="admin-code">{{ p.code }}</code>
                   <button
                     type="button"
-                    class="icon-btn"
+                    class="admin-icon-btn"
                     title="Скопировать код"
                     :aria-label="`Скопировать ${p.code}`"
                     @click="copyCode(p)"
@@ -298,21 +297,21 @@ onMounted(load)
                 <span v-else class="admin-note">—</span>
               </td>
               <td>
-                <div class="row-actions">
+                <div class="admin-row-actions">
                   <button
                     type="button"
-                    class="icon-btn"
+                    class="admin-icon-btn"
                     title="Активации"
                     @click="openActivations(p)"
                   >
                     <History :size="15" />
                   </button>
-                  <button type="button" class="icon-btn" title="Изменить" @click="openEdit(p)">
+                  <button type="button" class="admin-icon-btn" title="Изменить" @click="openEdit(p)">
                     <Pencil :size="15" />
                   </button>
                   <button
                     type="button"
-                    class="icon-btn"
+                    class="admin-icon-btn"
                     :title="p.is_active ? 'Выключить' : 'Включить'"
                     @click="toggleActive(p)"
                   >
@@ -320,7 +319,7 @@ onMounted(load)
                   </button>
                   <button
                     type="button"
-                    class="icon-btn danger"
+                    class="admin-icon-btn danger"
                     title="Удалить"
                     @click="deleting = p"
                   >
@@ -333,20 +332,13 @@ onMounted(load)
         </table>
       </div>
 
-      <div class="admin-row pager">
-        <button type="button" class="admin-btn ghost" :disabled="page === 0 || loading" @click="page--; load()">
-          Назад
-        </button>
-        <span class="admin-note">Страница {{ page + 1 }} из {{ pageCount }} · всего {{ total }}</span>
-        <button
-          type="button"
-          class="admin-btn ghost"
-          :disabled="page + 1 >= pageCount || loading"
-          @click="page++; load()"
-        >
-          Вперёд
-        </button>
-      </div>
+      <AdminPager
+        :page="page"
+        :page-count="pageCount"
+        :total="total"
+        :busy="loading"
+        @go="(p) => { page = p; load() }"
+      />
     </section>
 
     <AdminPromosFormModal
@@ -364,7 +356,7 @@ onMounted(load)
 
     <AdminModal :open="deleting !== null" title="Удалить промокод" @close="deleting = null">
       <p class="admin-note">
-        Удалить промокод <code class="code">{{ deleting?.code }}</code
+        Удалить промокод <code class="admin-code">{{ deleting?.code }}</code
         >? Использованных активаций: {{ deleting?.current_activations || 0 }}. Действие
         необратимое.
       </p>
@@ -381,68 +373,11 @@ onMounted(load)
 </template>
 
 <style scoped>
-.page-head {
-  justify-content: space-between;
-}
-.page-title {
-  margin: 0;
-  font-size: 20px;
-}
 .filters {
   gap: 10px;
 }
-.search {
-  flex: 1;
-}
-.table-wrap {
-  overflow-x: auto;
-}
 .code-cell {
   display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.code {
-  font-family: ui-monospace, monospace;
-  font-size: 13px;
-  color: var(--adm-accent, #3b82f6);
-}
-.icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--adm-muted, #8b95a8);
-  cursor: pointer;
-}
-.icon-btn:hover {
-  border-color: var(--adm-border, #232c3d);
-  color: var(--adm-text, #e8ecf4);
-}
-.icon-btn.danger:hover {
-  color: var(--adm-danger, #f87171);
-  border-color: rgba(248, 113, 113, 0.4);
-}
-.icon-btn .ok {
-  color: var(--adm-success, #34d399);
-}
-.icon-btn .off {
-  color: var(--adm-danger, #f87171);
-}
-.row-actions {
-  display: flex;
-  gap: 2px;
-  justify-content: flex-end;
-}
-.pager {
-  justify-content: center;
-}
-.admin-btn {
-  display: inline-flex;
   align-items: center;
   gap: 6px;
 }

@@ -12,7 +12,7 @@ defineProps<{ payments: AdminPayment[]; totalPaid: number; currency?: string | n
       <small>Всего оплачено</small>
       <strong>{{ fmtMoney(totalPaid, currency) }}</strong>
     </div>
-    <div v-if="payments.length" class="adm-users-table-wrap">
+    <div v-if="payments.length" class="admin-table-wrap">
       <table class="admin-table">
         <thead>
           <tr>
@@ -36,8 +36,4 @@ defineProps<{ payments: AdminPayment[]; totalPaid: number; currency?: string | n
   </section>
 </template>
 
-<style scoped>
-.adm-users-table-wrap {
-  overflow-x: auto;
-}
-</style>
+<style scoped></style>

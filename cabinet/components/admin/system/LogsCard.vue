@@ -20,6 +20,11 @@ interface LogsResponse {
   total: number
 }
 
+import {
+  adminErrorMessage as errText,
+  fmtDateTimeShort as fmtDateTime,
+} from '~/components/admin/format'
+
 const { call } = useAdminApi()
 
 const PAGE_SIZE = 50
@@ -67,13 +72,6 @@ const visibleLogs = computed(() =>
 )
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 
-function errText(e: unknown): string {
-  const code = (e as { code?: string })?.code
-  if (code === 'invalid_user_id') return 'Некорректный user_id'
-  const msg = (e as Error)?.message
-  return msg && msg !== 'request_failed' ? msg : 'Ошибка загрузки'
-}
-
 async function load() {
   loading.value = true
   error.value = ''
@@ -116,17 +114,6 @@ watch([sort], () => {
   load()
 })
 
-function fmtDateTime(iso: string | null): string {
-  if (!iso) return '-'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return String(iso)
-  return d.toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
 function userDisplay(entry: LogEntry, kindOf: 'user' | 'target'): string {
   const label = kindOf === 'target' ? entry.target_user_label : entry.user_label
   if (label) return label
@@ -147,7 +134,7 @@ onMounted(load)
 
 <template>
   <section class="admin-card">
-    <div class="admin-row card-head">
+    <div class="admin-card-head">
       <h2>Логи</h2>
       <span class="admin-note">Всего: {{ total.toLocaleString('ru-RU') }}</span>
       <button class="admin-btn ghost" :disabled="loading" @click="load">
@@ -174,7 +161,7 @@ onMounted(load)
     <p v-else-if="loading && !logs.length" class="admin-note">Загрузка...</p>
     <p v-else-if="!visibleLogs.length" class="admin-note">Записей нет</p>
 
-    <div v-else class="sys-logs-wrap">
+    <div v-else class="admin-table-wrap">
       <table class="admin-table">
         <thead>
           <tr>
@@ -200,34 +187,16 @@ onMounted(load)
       </table>
     </div>
 
-    <div class="admin-row">
-      <button class="admin-btn ghost" :disabled="loading || page <= 0" @click="setPage(page - 1)">
-        Назад
-      </button>
-      <span class="admin-note">Страница {{ page + 1 }} из {{ pageCount }}</span>
-      <button
-        class="admin-btn ghost"
-        :disabled="loading || page >= pageCount - 1"
-        @click="setPage(page + 1)"
-      >
-        Вперёд
-      </button>
-    </div>
+    <AdminPager :page="page" :page-count="pageCount" :total="total" :busy="loading" @go="setPage" />
   </section>
 </template>
 
 <style scoped>
-.card-head {
-  justify-content: space-between;
-}
 .sys-filters {
   display: grid;
   grid-template-columns: minmax(120px, 1fr) repeat(3, minmax(140px, 1fr)) auto;
   gap: 8px;
   align-items: center;
-}
-.sys-logs-wrap {
-  overflow-x: auto;
 }
 .sys-nowrap {
   white-space: nowrap;

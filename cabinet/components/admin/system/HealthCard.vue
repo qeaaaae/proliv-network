@@ -26,6 +26,12 @@ const props = defineProps<{
   loading: boolean
   error: string
 }>()
+import {
+  fmtDateTimeFull,
+  fmtMoney as fmtMoneyShared,
+  fmtNum as fmtNumShared,
+} from '~/components/admin/format'
+
 const emit = defineEmits<{ refresh: [] }>()
 
 // Русские тексты для частых alert-ключей бэкенда (message_key + {params}).
@@ -126,32 +132,20 @@ function num(value: unknown): number | null {
   return Number.isFinite(n) ? n : null
 }
 function fmtNum(value: unknown): string {
-  const n = num(value)
-  return n === null ? '-' : n.toLocaleString('ru-RU')
+  return fmtNumShared(value, '-')
 }
 function fmtMoney(value: unknown): string {
   const n = num(value)
-  if (n === null) return '-'
-  const sym = currency.value === 'RUB' ? '₽' : currency.value
-  return `${n.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} ${sym}`
+  return n === null ? '-' : fmtMoneyShared(n, currency.value)
 }
 function fmtDateTime(iso: string | null | undefined): string {
-  if (!iso) return '-'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return String(iso)
-  return d.toLocaleString('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return fmtDateTimeFull(iso)
 }
 </script>
 
 <template>
   <section class="admin-card">
-    <div class="admin-row card-head">
+    <div class="admin-card-head">
       <h2>Состояние системы</h2>
       <AdminBadge v-if="!loading && !error && !alerts.length" tone="success">Всё в порядке</AdminBadge>
       <AdminBadge v-if="errorCount" tone="danger">Ошибок: {{ errorCount }}</AdminBadge>
@@ -217,9 +211,6 @@ function fmtDateTime(iso: string | null | undefined): string {
 </template>
 
 <style scoped>
-.card-head {
-  justify-content: space-between;
-}
 .sys-alerts {
   list-style: none;
   margin: 0;

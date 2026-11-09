@@ -66,7 +66,7 @@ watch(
   <section class="admin-card">
     <h2>Реферальная программа</h2>
 
-    <div class="adm-users-fields">
+    <div class="admin-fields">
       <AdminUsersFieldRow label="Реферальный код">
         {{ referral.code || '—' }}
       </AdminUsersFieldRow>
@@ -74,17 +74,17 @@ watch(
         {{ referral.invitees_total }}
       </AdminUsersFieldRow>
       <AdminUsersFieldRow v-if="referral.inviter || inviter" label="Пригласил">
-        <NuxtLink :to="`/admin/users/${(inviter || referral.inviter)!.user_id}`" class="adm-users-link">
+        <NuxtLink :to="`/admin/users/${(inviter || referral.inviter)!.user_id}`" class="admin-link">
           {{ userDisplayName(inviter || referral.inviter) }}
         </NuxtLink>
       </AdminUsersFieldRow>
       <AdminUsersFieldRow v-if="referral.bot_link" label="Ссылка (бот)">
-        <button type="button" class="adm-users-copy" @click="copy(referral.bot_link!, 'bot')">
+        <button type="button" class="admin-link-btn" @click="copy(referral.bot_link!, 'bot')">
           {{ copied === 'bot' ? 'Скопировано' : 'Копировать' }}
         </button>
       </AdminUsersFieldRow>
       <AdminUsersFieldRow v-if="referral.webapp_link" label="Ссылка (webapp)">
-        <button type="button" class="adm-users-copy" @click="copy(referral.webapp_link!, 'web')">
+        <button type="button" class="admin-link-btn" @click="copy(referral.webapp_link!, 'web')">
           {{ copied === 'web' ? 'Скопировано' : 'Копировать' }}
         </button>
       </AdminUsersFieldRow>
@@ -111,32 +111,12 @@ watch(
       </ul>
       <p v-else class="admin-note">Приглашённых нет.</p>
 
-      <div v-if="pages > 1" class="admin-row adm-users-pager">
-        <button class="admin-btn ghost" :disabled="busy || page <= 0" @click="load(page - 1)">Назад</button>
-        <span class="admin-note">Страница {{ page + 1 }} из {{ pages }}</span>
-        <button class="admin-btn ghost" :disabled="busy || page >= pages - 1" @click="load(page + 1)">Вперёд</button>
-      </div>
+      <AdminPager v-if="pages > 1" :page="page" :page-count="pages" :total="total" :busy="busy" @go="load" />
     </template>
   </section>
 </template>
 
 <style scoped>
-.adm-users-fields {
-  display: grid;
-  gap: 6px;
-}
-.adm-users-link {
-  color: var(--adm-accent, #3b82f6);
-  text-decoration: none;
-}
-.adm-users-copy {
-  border: 0;
-  background: transparent;
-  color: var(--adm-accent, #3b82f6);
-  cursor: pointer;
-  font-size: 13px;
-  padding: 0;
-}
 .adm-users-invitee {
   display: flex;
   gap: 10px;
@@ -146,8 +126,5 @@ watch(
 .adm-users-invitee-main {
   display: grid;
   gap: 2px;
-}
-.adm-users-pager {
-  justify-content: center;
 }
 </style>

@@ -46,7 +46,7 @@ function subLabel(p: PartnerRow): string {
 
 <template>
   <section class="admin-card">
-    <div class="tp-head">
+    <div class="admin-card-head">
       <h2>Топ партнёров</h2>
       <AdminBadge v-if="total !== null">{{ total }}</AdminBadge>
     </div>
@@ -67,15 +67,6 @@ function subLabel(p: PartnerRow): string {
 </template>
 
 <style scoped>
-.tp-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.tp-head h2 {
-  margin: 0;
-}
 .tp-item {
   text-decoration: none;
 }
