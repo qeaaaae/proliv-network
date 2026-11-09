@@ -319,3 +319,4 @@ class WebAppReferralExchangePayload(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     days: int = Field(ge=1, le=3660)
+    source: Literal["user", "partner"] = "user"

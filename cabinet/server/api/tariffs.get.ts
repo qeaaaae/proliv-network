@@ -113,19 +113,27 @@ export default defineEventHandler(async (event) => {
       (m.icon && /^https?:\/\//.test(m.icon) ? m.icon : ''),
   }))
 
+  // Лимит устройств: effective = тарифный лимит или USER_HWID_DEVICE_LIMIT;
+  // 0/null в контракте = безлимит (как в fmt.deviceUsage), не «0 устройств».
+  const deviceLimit =
+    main?.effective_hwid_device_limit ?? main?.hwid_device_limit ?? main?.device_count ?? null
+
   const specParts: string[] = []
   const gb = main?.monthly_gb ?? main?.traffic_gb
   if (gb) specParts.push(`${gb} ГБ/мес`)
-  if (main?.device_count || main?.hwid_device_limit) {
-    specParts.push(`${main.device_count ?? main.hwid_device_limit} устройств`)
+  if (deviceLimit && deviceLimit > 0) {
+    specParts.push(`${deviceLimit} устройств`)
+  } else if (deviceLimit === 0) {
+    specParts.push('устройства без лимита')
   }
 
   // Балансы для галочки «списать бонусы» в чекауте: user = бонусный счёт,
-  // partner = комиссии партнёрки. available флаг уже учитывает enabled и
-  // ненулевой остаток; партнёр - ещё и balance_payment_enabled.
+  // partner = комиссии партнёрки. Берём только per-source available - он уже
+  // учитывает ненулевой остаток, а для partner ещё и balance_payment_enabled
+  // + active-статус. Общий balance.enabled - флаг модуля топ-апа юзерского
+  // кошелька и на доступность партнёрского баланса не влияет.
   const scale = balance?.currency_scale ?? 2
   const srcAmount = (id: string) => {
-    if (balance?.enabled === false) return 0
     const s = balance?.sources?.find((x) => x.id === id)
     return s?.available ? (s.amount_minor ?? 0) / 10 ** scale : 0
   }
@@ -134,7 +142,7 @@ export default defineEventHandler(async (event) => {
     plan: {
       name: me.subscription?.tariff_name || main?.tariff_name || 'Proliv Network',
       spec: specParts.join(', ') || main?.description || '',
-      devices: main?.device_count ?? main?.hwid_device_limit ?? 0,
+      devices: deviceLimit && deviceLimit > 0 ? deviceLimit : null,
     },
     periods,
     extras,

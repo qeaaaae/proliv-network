@@ -56,11 +56,18 @@ const maxBonusDays = (list: ReferralData['bonusDetails'], key: 'inviterDays' | '
 
 const { data, status, refresh } = useFetch<ReferralData>('/api/referral', { lazy: true })
 
+// Сумма по обоим счетам (бонусный + партнёрский) - используется и для
+// чекаута, и для обмена на дни: юзеру незачем разбираться, где лежат деньги.
+const payableBalance = computed(
+  () => (data.value?.bonusBalance ?? 0) + (data.value?.partner?.balanceAvailable ?? 0),
+)
+
 // Обмен бонусов на дни - слайдер от 1 до максимума по цене дня из бэкенда.
+// Списание идёт с любого счёта, BFF выберет источник.
 const maxExchangeDays = computed(() => {
   const price = data.value?.exchangeDayPrice
   if (!price || price <= 0) return 0
-  return Math.floor((data.value?.bonusBalance ?? 0) / price)
+  return Math.floor(payableBalance.value / price)
 })
 const exchangeCost = computed(() => {
   const price = data.value?.exchangeDayPrice ?? 0
@@ -79,12 +86,6 @@ const withdrawMethod = ref('')
 const withdrawNetwork = ref('')
 const withdrawRequisites = ref<Record<string, string>>({})
 const busy = ref(false)
-
-// «Оплатить бонусами» - галочка списания в чекауте; доступно при любом
-// ненулевом балансе (бонусный счёт или партнёрский).
-const payableBalance = computed(
-  () => (data.value?.bonusBalance ?? 0) + (data.value?.partner?.balanceAvailable ?? 0),
-)
 
 const withdrawMethods = computed(() => data.value?.partner?.methods ?? [])
 const currentWithdrawMethod = computed(

@@ -3,6 +3,26 @@ import { readBody } from 'h3'
 import { requireUser } from '../utils/session'
 import { hasShopBackend, shopFetch, type ShopMe, type ShopPartnerOverview } from '../utils/backend'
 
+interface ShopBalanceSources {
+  currency_scale?: number
+  sources?: { id?: string; available?: boolean; amount_minor?: number }[]
+}
+
+const exchangeErrors: Record<string, string> = {
+  bonus_exchange_unavailable: 'Обмен бонусов сейчас недоступен',
+  bonus_exchange_insufficient: 'Недостаточно бонусов для обмена',
+  bonus_exchange_failed: 'Обмен не удался, попробуйте позже',
+}
+
+function exchangeFail(e: unknown): never {
+  const data = (e as { data?: { error?: string; message?: string } })?.data
+  const code = typeof data?.error === 'string' ? data.error : ''
+  throw createError({
+    statusCode: (e as { statusCode?: number })?.statusCode ?? 400,
+    statusMessage: exchangeErrors[code] ?? data?.message ?? 'Обмен не удался',
+  })
+}
+
 // Балансовые операции. 'days' - обмен бонусов на дни подписки
 // (/api/referral/exchange, 1 день = BONUS_EXCHANGE_DAY_PRICE); 'pay' - частичная
 // оплата балансом в чекауте; 'withdraw' - заявка на вывод партнёрского баланса
@@ -24,28 +44,47 @@ export default defineEventHandler(async (event) => {
 
   switch (body?.action) {
     case 'days': {
-      // Обмен бонусов на дни подписки - тот же механизм, что в боте:
-      // списание с баланса по цене дня + продление активной подписки.
+      // Обмен на дни идёт с любого счёта: сначала бонусный кошелёк,
+      // остаток - партнёрский (source - vendored-патч upstream exchange).
       const days = Math.max(1, Math.floor(Number(body?.days ?? body?.amount) || 0))
-      const res = await shopFetch<{ ok?: boolean; days?: number }>(
-        event,
-        '/api/referral/exchange',
-        { method: 'POST', body: { days } },
-      ).catch((e) => {
-        const data = (e as { data?: { error?: string; message?: string } })?.data
-        const code = typeof data?.error === 'string' ? data.error : ''
-        const messages: Record<string, string> = {
-          bonus_exchange_unavailable: 'Обмен бонусов сейчас недоступен',
-          bonus_exchange_insufficient: 'Недостаточно бонусов для обмена',
-          bonus_exchange_failed: 'Обмен не удался, попробуйте позже',
+      const [me, bal] = await Promise.all([
+        shopFetch<ShopMe>(event, '/api/me').catch(() => null),
+        shopFetch<ShopBalanceSources>(event, '/api/balance').catch(() => null),
+      ])
+      const scale = bal?.currency_scale ?? 2
+      const priceMinor = Math.round(Number(me?.referral?.exchange_day_price ?? 0) * 10 ** scale)
+      const srcMinor = (id: string) => {
+        const s = bal?.sources?.find((x) => x.id === id)
+        return s?.available ? (s.amount_minor ?? 0) : 0
+      }
+
+      let userDays = days
+      let partnerDays = 0
+      if (priceMinor > 0) {
+        userDays = Math.min(days, Math.floor(srcMinor('user') / priceMinor))
+        partnerDays = days - userDays
+        if (partnerDays > Math.floor(srcMinor('partner') / priceMinor)) {
+          throw createError({ statusCode: 400, statusMessage: exchangeErrors.bonus_exchange_insufficient })
         }
-        throw createError({
-          statusCode: (e as { statusCode?: number })?.statusCode ?? 400,
-          statusMessage: messages[code] ?? data?.message ?? 'Обмен не удался',
-        })
-      })
+      }
+
+      let ok = true
+      if (userDays > 0) {
+        const res = await shopFetch<{ ok?: boolean }>(event, '/api/referral/exchange', {
+          method: 'POST',
+          body: { days: userDays, source: 'user' },
+        }).catch(exchangeFail)
+        ok = ok && Boolean(res.ok)
+      }
+      if (partnerDays > 0) {
+        const res = await shopFetch<{ ok?: boolean }>(event, '/api/referral/exchange', {
+          method: 'POST',
+          body: { days: partnerDays, source: 'partner' },
+        }).catch(exchangeFail)
+        ok = ok && Boolean(res.ok)
+      }
       const after = await shopFetch<ShopMe>(event, '/api/me')
-      return { ok: Boolean(res.ok), balance: Number(after.balance?.amount ?? 0), days }
+      return { ok, balance: Number(after.balance?.amount ?? 0), days }
     }
     case 'pay': {
       // Частичная оплата балансом - галочка «Списать бонусы» в чекауте

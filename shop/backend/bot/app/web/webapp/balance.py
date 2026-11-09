@@ -14,7 +14,7 @@ from bot.app.web.context import (
 )
 from bot.services.partner_common import amount_to_minor, currency_scale
 from bot.services.user_balance_service import UserBalanceService
-from db.dal import user_balance_dal, user_dal
+from db.dal import partner_dal, user_balance_dal, user_dal
 
 from .assets import _enforce_webapp_rate_limit
 from .billing_payments import _create_subscription_payment
@@ -130,27 +130,66 @@ async def referral_exchange_route(request: web.Request) -> web.Response:
             return _json_error(403, "access_denied", "Access denied")
         await user_dal.lock_user_by_id(session, user_id)
 
-        balance_minor = await user_balance_dal.balance_minor(session, user_id, currency)
-        if days > int(balance_minor // price_minor):
-            await session.rollback()
-            return _json_error(400, "bonus_exchange_insufficient", "Not enough bonus balance")
-
         spend_minor = days * price_minor
         exchange_id = uuid4().hex
-        await user_balance_dal.create_ledger_entry(
-            session,
-            user_id=user_id,
-            currency=currency,
-            currency_scale=scale,
-            amount_minor=-spend_minor,
-            kind="extension_purchase",
-            state="posted",
-            reference_type="bonus_exchange",
-            reference_id=f"bonus-exchange:{user_id}:{exchange_id[:16]}",
-            idempotency_key=f"bonus-exchange:{exchange_id}",
-            reason="bonus balance exchange to subscription days",
-            posted_at=datetime.now(UTC),
-        )
+        if payload.source == "partner":
+            # Vendored: обмен с партнёрского баланса (upstream умел только user).
+            if not settings.partner_settings.enabled:
+                await session.rollback()
+                return _json_error(
+                    400, "bonus_exchange_unavailable", "Bonus exchange is not available"
+                )
+            profile = await partner_dal.get_profile_by_user_id(
+                session, user_id, for_update=True
+            )
+            if profile is None or str(profile.status) != "active":
+                await session.rollback()
+                return _json_error(
+                    400, "bonus_exchange_insufficient", "Not enough bonus balance"
+                )
+            partner_minor = await partner_dal.balance_minor(
+                session, int(profile.partner_id), currency
+            )
+            if days > int(partner_minor // price_minor):
+                await session.rollback()
+                return _json_error(
+                    400, "bonus_exchange_insufficient", "Not enough bonus balance"
+                )
+            await partner_dal.create_ledger_entry(
+                session,
+                partner_id=int(profile.partner_id),
+                currency=currency,
+                currency_scale=scale,
+                amount_minor=-spend_minor,
+                kind="subscription_spend",
+                state="posted",
+                reference_type="bonus_exchange",
+                reference_id=f"bonus-exchange:{user_id}:{exchange_id[:16]}",
+                idempotency_key=f"bonus-exchange:{exchange_id}",
+                reason="partner balance exchange to subscription days",
+                posted_at=datetime.now(UTC),
+            )
+        else:
+            balance_minor = await user_balance_dal.balance_minor(session, user_id, currency)
+            if days > int(balance_minor // price_minor):
+                await session.rollback()
+                return _json_error(
+                    400, "bonus_exchange_insufficient", "Not enough bonus balance"
+                )
+            await user_balance_dal.create_ledger_entry(
+                session,
+                user_id=user_id,
+                currency=currency,
+                currency_scale=scale,
+                amount_minor=-spend_minor,
+                kind="extension_purchase",
+                state="posted",
+                reference_type="bonus_exchange",
+                reference_id=f"bonus-exchange:{user_id}:{exchange_id[:16]}",
+                idempotency_key=f"bonus-exchange:{exchange_id}",
+                reason="bonus balance exchange to subscription days",
+                posted_at=datetime.now(UTC),
+            )
         try:
             new_end_date = await subscription_service.extend_active_subscription_days(
                 session,
