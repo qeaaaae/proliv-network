@@ -9,7 +9,9 @@ export const locations: LocationRecord[] = [
   { id: 'united-kingdom', countryCode: 'gb', nameKey: 'locations.items.unitedKingdom', cityKey: 'locations.cities.unitedKingdom', lat: 51.51, lon: -0.13 },
   { id: 'germany', countryCode: 'de', nameKey: 'locations.items.germany', cityKey: 'locations.cities.germany', lat: 50.11, lon: 8.68 },
   { id: 'estonia', countryCode: 'ee', nameKey: 'locations.items.estonia', cityKey: 'locations.cities.estonia', lat: 59.44, lon: 24.75 },
-  { id: 'finland', countryCode: 'fi', nameKey: 'locations.items.finland', cityKey: 'locations.cities.finland', lat: 60.17, lon: 24.94 }
+  { id: 'finland', countryCode: 'fi', nameKey: 'locations.items.finland', cityKey: 'locations.cities.finland', lat: 60.17, lon: 24.94 },
+  { id: 'netherlands', countryCode: 'nl', nameKey: 'locations.items.netherlands', cityKey: 'locations.cities.netherlands', lat: 52.37, lon: 4.9 },
+  { id: 'kazakhstan', countryCode: 'kz', nameKey: 'locations.items.kazakhstan', cityKey: 'locations.cities.kazakhstan', lat: 43.65, lon: 51.17, portKey: 'locations.portKz' }
 ]
 
 export const homeCity = { lat: 55.76, lon: 37.62 }

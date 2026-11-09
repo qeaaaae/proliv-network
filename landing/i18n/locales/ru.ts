@@ -1,7 +1,7 @@
 export default {
   seo: {
     title: 'Proliv Network - быстрый приватный VPN с LTE-доступом',
-    description: 'VPN-сервис: четыре локации с портом 10 Гбит/с, резервный LTE-доступ, 300 ГБ трафика в месяц с переносом остатка и 3 устройства. Подключение от 179 ₽.',
+    description: 'VPN-сервис: шесть локаций с портами до 10 Гбит/с, резервный LTE-доступ, 500 ГБ трафика в месяц с переносом остатка и устройствами без лимита. Подключение от 179 ₽.',
     imageAlt: 'Баннер Proliv Network с адресом proliv-network.xyz'
   },
   brand: {
@@ -12,7 +12,7 @@ export default {
   },
   actions: {
     cabinet: 'Кабинет',
-    startTrial: 'Попробовать за 15 ₽',
+    startTrial: 'Попробовать бесплатно',
     viewPricing: 'Выбрать срок',
     chooseInCabinet: 'Выбрать в кабинете'
   },
@@ -26,30 +26,35 @@ export default {
     facts: {
       priceLabel: 'за месяц',
       trialValue: '3 дня',
-      trialLabel: 'за 15 ₽',
-      trafficValue: '300 ГБ',
+      trialLabel: 'бесплатно',
+      trafficValue: '500 ГБ',
       trafficLabel: 'трафика в месяц, остаток переносится',
-      countriesValue: '4 страны',
-      countriesLabel: 'порт 10 Гбит⁠/⁠с'
+      countriesValue: '6 стран',
+      countriesLabel: 'порты до 10 Гбит⁠/⁠с'
     }
   },
   locations: {
-    titleBefore: 'Четыре локации',
+    titleBefore: 'Шесть локаций',
     titleAccent: 'Порт 10 Гбит⁠/⁠с',
-    titleAfter: 'на каждой',
+    titleAfter: 'на европейских',
     lead: 'Все локации входят в тариф. Переключайтесь между ними в приложении',
     port: '10 Гбит⁠/⁠с',
+    portKz: '200 Мбит⁠/⁠с',
     items: {
       germany: 'Германия',
       estonia: 'Эстония',
       finland: 'Финляндия',
-      unitedKingdom: 'Великобритания'
+      unitedKingdom: 'Великобритания',
+      netherlands: 'Нидерланды',
+      kazakhstan: 'Казахстан'
     },
     cities: {
       germany: 'Франкфурт',
       estonia: 'Таллин',
       finland: 'Хельсинки',
-      unitedKingdom: 'Лондон'
+      unitedKingdom: 'Лондон',
+      netherlands: 'Амстердам',
+      kazakhstan: 'Актау'
     }
   },
   lte: {
@@ -104,22 +109,19 @@ export default {
       m12: '12 месяцев'
     },
     included: {
-      trafficValue: '300 ГБ',
+      trafficValue: '500 ГБ',
       trafficLabel: 'трафика в месяц с переносом остатка',
-      devicesValue: '3',
-      devicesLabel: 'устройства',
-      locationsValue: '4',
-      locationsLabel: 'локации',
+      devicesValue: '∞',
+      devicesLabel: 'устройств без лимита',
+      locationsValue: '6',
+      locationsLabel: 'локаций',
       lteValue: '1',
       lteLabel: 'LTE-сервер'
     },
     addons: {
       trafficTitle: 'Дополнительный трафик',
       trafficPrice: 'от 49 ₽',
-      trafficNote: 'Пакеты 100 и 500 ГБ',
-      deviceTitle: 'Дополнительное устройство',
-      devicePrice: '29 ₽',
-      deviceNote: 'За устройство в месяц'
+      trafficNote: 'Пакеты 100 и 500 ГБ'
     }
   },
   connect: {
@@ -128,7 +130,7 @@ export default {
     steps: {
       trial: {
         title: 'Возьмите пробный период',
-        text: '3 дня за 15 ₽ в личном кабинете или в Telegram-⁠боте'
+        text: '3 дня бесплатно в личном кабинете или в Telegram-⁠боте'
       },
       app: {
         title: 'Установите приложение',
@@ -156,15 +158,15 @@ export default {
     items: {
       trial: {
         question: 'Как работает пробный период?',
-        answer: 'Пробный период длится 3 дня и стоит 15 ₽. Подключается в личном кабинете. Чтобы продолжить, выберите срок в кабинете'
+        answer: 'Пробный период длится 3 дня и бесплатен. Подключается в личном кабинете. Чтобы продолжить, выберите срок в кабинете'
       },
       devices: {
         question: 'Сколько устройств можно подключить?',
-        answer: 'В тариф входят 3 устройства. Каждое дополнительное устройство стоит 29 ₽ в месяц'
+        answer: 'Без ограничений: подключайте сколько угодно устройств'
       },
       traffic: {
         question: 'Что будет, если закончится трафик?',
-        answer: 'В тариф входит 300 ГБ в месяц, а неизрасходованный трафик переносится на следующий месяц. Дополнительный трафик продаётся пакетами: 100 ГБ за 49 ₽ и 500 ГБ за 149 ₽'
+        answer: 'В тариф входит 500 ГБ в месяц, а неизрасходованный трафик переносится на следующий месяц. Дополнительный трафик продаётся пакетами: 100 ГБ за 49 ₽ и 500 ГБ за 149 ₽'
       },
       direct: {
         question: 'Нужно ли выключать Proliv для российских сайтов?',
@@ -172,7 +174,7 @@ export default {
       },
       locations: {
         question: 'Можно ли менять страну?',
-        answer: 'Да. Все четыре локации и резервный LTE-⁠сервер входят в тариф, переключайтесь между ними в приложении'
+        answer: 'Да. Все шесть локаций и резервный LTE-⁠сервер входят в тариф, переключайтесь между ними в приложении'
       },
       payment: {
         question: 'Как оплатить?',
@@ -182,15 +184,15 @@ export default {
   },
   invite: {
     tabTitle: 'Приглашение',
-    seoDescription: 'Приглашение в Proliv Network: 3 дня за 15 ₽ и скидка на первую покупку.',
+    seoDescription: 'Приглашение в Proliv Network: 3 дня бесплатно и скидка на первую покупку.',
     about: 'О сервисе',
     titleBefore: 'Вас',
     titleAccent: 'пригласили',
     titleAfter: 'в Proliv',
-    description: 'Друг поделился с вами ссылкой. Попробуйте 3 дня за 15 ₽, а к первой покупке получите скидку',
+    description: 'Друг поделился с вами ссылкой. Попробуйте 3 дня бесплатно, а к первой покупке получите скидку',
     passTitle: 'Приглашение в Proliv Network',
     passValue: '3 дня',
-    passValueNote: 'за 15 ₽',
+    passValueNote: 'бесплатно',
     passNote: 'Приветственный бонус по ссылке друга',
     discountValue: '10%',
     discountNote: 'скидка на первую покупку',
@@ -198,11 +200,11 @@ export default {
     openTelegram: 'Открыть в Telegram',
     benefitsTitleAccent: 'Что даёт',
     benefitsTitleAfter: 'Proliv',
-    benefitsLead: 'Один тариф: 300 ГБ трафика в месяц с переносом остатка и 3 устройства',
+    benefitsLead: 'Один тариф: 500 ГБ трафика в месяц с переносом остатка и без лимита устройств',
     benefits: {
       locations: {
-        title: 'Четыре страны',
-        text: 'Великобритания, Германия, Эстония и Финляндия. Порт 10 Гбит/с на каждой'
+        title: 'Шесть стран',
+        text: 'Великобритания, Германия, Эстония, Финляндия, Нидерланды и Казахстан. Порт до 10 Гбит/с'
       },
       lte: {
         title: 'LTE-⁠доступ',
@@ -220,7 +222,7 @@ export default {
   },
   finalCta: {
     titleBefore: 'Попробуйте Proliv',
-    titleAccent: '3 дня за 15 ₽',
+    titleAccent: '3 дня бесплатно',
     description: 'Пробный период подключается через личный кабинет'
   },
   footer: {

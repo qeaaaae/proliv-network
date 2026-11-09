@@ -44,7 +44,6 @@ onBeforeUnmount(() => {
 
 <template>
   <NavigationButton
-    v-if="state !== 'unknown'"
     class="service-status"
     :data-state="state"
     :target="statusUrl"
