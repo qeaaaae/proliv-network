@@ -16,7 +16,7 @@ const { push } = useToast()
 const fmt = useFormat()
 
 interface Tariffs {
-  plan: { name: string; spec: string; devices: number }
+  plan: { name: string; spec: string; devices: number | null }
   periods: { id: string; days: number; label: string; price: number; oldPrice: number | null }[]
   extras: { id: string; kind: 'traffic' | 'device'; title: string; price: number }[]
   methods: { id: string; title: string; icon: string | null }[]
@@ -224,8 +224,12 @@ const ORDER_STATUS: Record<Order['status'], string> = {
 
           <div class="plan-feats">
             <span class="plan-feat">
-              <Smartphone :size="13" />{{ data?.plan.devices ?? 0 }}
-              {{ fmt.plural(data?.plan.devices ?? 0, 'устройство', 'устройства', 'устройств') }}
+              <Smartphone :size="13" />
+              <template v-if="data?.plan.devices">
+                {{ data.plan.devices }}
+                {{ fmt.plural(data.plan.devices, 'устройство', 'устройства', 'устройств') }}
+              </template>
+              <template v-else>Устройства без лимита</template>
             </span>
             <span class="plan-feat"><ShieldCheck :size="13" />VLESS Reality</span>
           </div>
@@ -361,7 +365,7 @@ const ORDER_STATUS: Record<Order['status'], string> = {
     <!-- Докупка -->
     <section v-if="data?.extras?.length" class="panel" style="margin-top: 14px">
       <div class="panel__title"><Plus :size="17" />Докупить к подписке</div>
-      <div v-for="e in data?.extras" :key="e.id" class="row-line">
+      <div v-for="e in data?.extras" :key="e.id" class="row-line row-line--flow">
         <span class="row-line__icon">
           <Smartphone v-if="e.kind === 'device'" :size="15" />
           <Gauge v-else :size="15" />
@@ -370,8 +374,10 @@ const ORDER_STATUS: Record<Order['status'], string> = {
           <span class="row-line__label">{{ e.title }}</span>
           <span class="row-line__hint">{{ e.kind === 'device' ? 'Доп. устройства к подписке' : 'Доп. трафик на месяц' }}</span>
         </span>
-        <span class="row-line__value numeric" style="font-size: 14px">{{ fmt.rub(e.price) }}</span>
-        <button class="btn btn--ghost btn--sm" :disabled="pending" @click="buyExtra(e.id)">Купить</button>
+        <span class="row-line__tail">
+          <span class="row-line__value numeric" style="font-size: 14px">{{ fmt.rub(e.price) }}</span>
+          <button class="btn btn--ghost btn--sm" :disabled="pending" @click="buyExtra(e.id)">Купить</button>
+        </span>
       </div>
     </section>
 
@@ -379,36 +385,34 @@ const ORDER_STATUS: Record<Order['status'], string> = {
     <section v-if="ordersData?.orders?.length" id="orders" class="panel" style="margin-top: 14px">
       <div class="panel__title"><ReceiptText :size="17" />История покупок</div>
       <div>
-        <div v-for="o in ordersData.orders" :key="o.id" class="row-line">
+        <div v-for="o in ordersData.orders" :key="o.id" class="row-line row-line--flow">
           <span class="row-line__icon"><ReceiptText :size="15" /></span>
           <span class="row-line__body">
             <span class="row-line__label">{{ o.title }}</span>
             <span class="row-line__hint">{{ o.id }} · {{ fmt.date(o.at) }}</span>
           </span>
-          <span class="row-line__value numeric" style="margin-right: 10px">
-            {{ o.amount ? fmt.rub(o.amount) : '—' }}
+          <span class="row-line__tail">
+            <span class="row-line__value numeric">{{ o.amount ? fmt.rub(o.amount) : '—' }}</span>
+            <a
+              v-if="o.status === 'pending' && o.checkoutUrl"
+              :href="o.checkoutUrl"
+              target="_blank"
+              rel="noopener"
+              class="btn btn--ghost btn--sm"
+            >
+              Оплатить
+            </a>
+            <button
+              v-if="o.status === 'pending'"
+              class="btn btn--ghost btn--sm"
+              :disabled="cancelPending === o.id"
+              @click="cancelOrder(o.id)"
+            >
+              <LoaderCircle v-if="cancelPending === o.id" :size="13" class="spinner" />
+              Отменить
+            </button>
+            <span class="order-status" :class="`order-status--${o.status}`">{{ ORDER_STATUS[o.status] }}</span>
           </span>
-          <a
-            v-if="o.status === 'pending' && o.checkoutUrl"
-            :href="o.checkoutUrl"
-            target="_blank"
-            rel="noopener"
-            class="btn btn--ghost btn--sm"
-            style="margin-right: 8px"
-          >
-            Оплатить
-          </a>
-          <button
-            v-if="o.status === 'pending'"
-            class="btn btn--ghost btn--sm"
-            style="margin-right: 8px"
-            :disabled="cancelPending === o.id"
-            @click="cancelOrder(o.id)"
-          >
-            <LoaderCircle v-if="cancelPending === o.id" :size="13" class="spinner" />
-            Отменить
-          </button>
-          <span class="order-status" :class="`order-status--${o.status}`">{{ ORDER_STATUS[o.status] }}</span>
         </div>
       </div>
     </section>

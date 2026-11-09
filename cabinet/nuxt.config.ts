@@ -30,8 +30,17 @@ export default defineNuxtConfig({
         { name: 'theme-color', content: '#0a0c0e' },
         { name: 'format-detection', content: 'telephone=no' },
         { name: 'robots', content: 'noindex, nofollow' },
+        // PWA / «на экран домой»
+        { name: 'mobile-web-app-capable', content: 'yes' },
+        { name: 'apple-mobile-web-app-capable', content: 'yes' },
+        { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' },
+        { name: 'apple-mobile-web-app-title', content: 'Proliv' },
       ],
-      link: [{ rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
+      link: [
+        { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' },
+        { rel: 'manifest', href: '/manifest.webmanifest' },
+        { rel: 'apple-touch-icon', href: '/icons/apple-touch-icon.png' },
+      ],
       // Telegram Mini App API (window.Telegram.WebApp) - нужен для initData-авторизации
       script: [{ src: 'https://telegram.org/js/telegram-web-app.js' }],
     },
