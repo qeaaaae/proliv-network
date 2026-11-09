@@ -34,8 +34,7 @@ const included = computed(() => [
 ])
 
 const addons = computed(() => [
-  { title: t('pricing.addons.trafficTitle'), note: t('pricing.addons.trafficNote'), price: t('pricing.addons.trafficPrice') },
-  { title: t('pricing.addons.deviceTitle'), note: t('pricing.addons.deviceNote'), price: t('pricing.addons.devicePrice') }
+  { title: t('pricing.addons.trafficTitle'), note: t('pricing.addons.trafficNote'), price: t('pricing.addons.trafficPrice') }
 ])
 </script>
 

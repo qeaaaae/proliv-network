@@ -62,7 +62,7 @@ onBeforeUnmount(stopTour)
               <img :src="flagUrls[location.countryCode]" alt="" width="28" height="20">
               <span class="atlas-country">{{ t(location.nameKey) }}</span>
               <span class="atlas-city">{{ t(location.cityKey) }}</span>
-              <span class="atlas-port numeric">{{ t('locations.port') }}</span>
+              <span class="atlas-port numeric">{{ t(location.portKey ?? 'locations.port') }}</span>
               <span v-if="touring && activeId === location.id" :key="activeId" class="atlas-timer" aria-hidden="true" />
             </button>
           </li>
