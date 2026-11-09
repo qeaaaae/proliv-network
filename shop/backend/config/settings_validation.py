@@ -108,6 +108,8 @@ class SettingsValidationMixin:
         "BACKUP_CHAT_ID",
         "BACKUP_THREAD_ID",
         "REQUIRED_CHANNEL_ID",
+        "ADMIN_POST_CHAT_ID",
+        "GIVEAWAY_CHANNEL_ID",
         mode="before",
     )
     @classmethod
@@ -119,6 +121,7 @@ class SettingsValidationMixin:
 
     @field_validator(
         "REQUIRED_CHANNEL_LINK",
+        "GIVEAWAY_CHANNEL_LINK",
         "CRYPT4_REDIRECT_URL",
         "PRIVACY_POLICY_URL",
         "USER_AGREEMENT_URL",

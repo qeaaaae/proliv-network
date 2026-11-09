@@ -2,7 +2,7 @@ import asyncio
 import html
 import json
 import logging
-import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from aiogram import Router, types
@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 router = Router(name="admin_nodes_status_router")
 
 STATUS_FILE = Path("/status/status.json")
+_MSK = timezone(timedelta(hours=3))
 
 
 @router.message(Command("nodes"))
@@ -78,7 +79,7 @@ async def nodes_status_command_handler(
 
     updated = data.get("updated_at")
     if updated:
-        stamp = time.strftime("%d.%m %H:%M", time.gmtime(updated))
+        stamp = datetime.fromtimestamp(updated, tz=_MSK).strftime("%d.%m %H:%M")
         blocks.append(f"<i>{_('admin_nodes_updated')}: {stamp}</i>")
 
     await message.answer("\n\n".join(blocks), parse_mode="HTML", disable_web_page_preview=True)

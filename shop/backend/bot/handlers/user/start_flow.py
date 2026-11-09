@@ -70,10 +70,11 @@ def _bot_started_source(
     ad_param_match: re.Match | None,
     ticket_match: re.Match | None,
     notifications_match: re.Match | None,
+    giveaway_match: re.Match | None = None,
 ) -> BotStartedSource:
     if ref_match or partner_match or page_ref_match:
         return "referral"
-    if promo_match:
+    if promo_match or giveaway_match:
         return "promo"
     if ad_param_match:
         return "ad"
@@ -99,12 +100,14 @@ def _bot_started_source(
     CommandStart(magic=F.args.regexp(r"^admin_ticket_(\d+)$").as_("admin_ticket_match"))
 )
 @router.message(CommandStart(magic=F.args.regexp(r"^ticket_(\d+)$").as_("ticket_match")))
+@router.message(CommandStart(magic=F.args.regexp(r"^giveaway_(\d+)$").as_("giveaway_match")))
 @router.message(CommandStart(magic=F.args.regexp(r"^notifications$").as_("notifications_match")))
 @router.message(CommandStart(magic=F.args.regexp(r"^page_ref$").as_("page_ref_match")))
+@router.message(CommandStart(magic=F.args.regexp(r"^buy$").as_("buy_match")))
 @router.message(
     CommandStart(
         magic=F.args.regexp(
-            r"^(?!ref_|p_|promo_|admin_user_|admin_ticket_|ticket_|notifications$|page_ref$|webapp_auth_)([A-Za-z0-9_\-]{2,64})$"
+            r"^(?!ref_|p_|promo_|admin_user_|admin_ticket_|ticket_|giveaway_|notifications$|page_ref$|buy$|webapp_auth_)([A-Za-z0-9_\-]{2,64})$"
         ).as_("ad_param_match")
     )
 )
@@ -126,6 +129,8 @@ async def start_command_handler(
     admin_ticket_match: re.Match | None = None,
     ticket_match: re.Match | None = None,
     notifications_match: re.Match | None = None,
+    giveaway_match: re.Match | None = None,
+    buy_match: re.Match | None = None,
 ) -> None:
     await state.clear()
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
@@ -144,6 +149,7 @@ async def start_command_handler(
         ad_param_match=ad_param_match,
         ticket_match=ticket_match,
         notifications_match=notifications_match,
+        giveaway_match=giveaway_match,
     )
 
     from bot.services.account_roles import bootstrap_configured_owner, is_admin
@@ -560,6 +566,24 @@ async def start_command_handler(
         start_param=start_param,
     )
 
+    if giveaway_match and db_user is not None:
+        from bot.handlers.user.giveaway import join_giveaway_from_start
+
+        continue_flow = await join_giveaway_from_start(
+            message,
+            session=session,
+            settings=settings,
+            i18n=i18n,
+            current_lang=current_lang,
+            subscription_service=subscription_service,
+            db_user=db_user,
+            giveaway_id=int(giveaway_match.group(1)),
+        )
+        if not continue_flow:
+            # A dedicated prompt (channel check failed / not a member) was
+            # already shown with its own retry button - do not double-prompt.
+            return
+
     if not await ensure_required_channel_subscription(
         message, settings, i18n, current_lang, session, db_user
     ):
@@ -715,6 +739,15 @@ async def start_command_handler(
         await user_referral_handlers.referral_command_handler(
             message, settings, i18n_data, referral_service, message_bot(message), session
         )
+        return
+
+    if buy_match:
+        # Ad deep link straight to the purchase screen (tariff selection).
+        from bot.handlers.user.subscription.core_purchase import (
+            display_subscription_options,
+        )
+
+        await display_subscription_options(message, i18n_data, settings, session)
         return
 
     await send_main_menu(message, settings, i18n_data, subscription_service, session, is_edit=False)

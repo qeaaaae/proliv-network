@@ -4,9 +4,13 @@ from . import (
     ads,
     broadcast,
     common,
+    giveaway,
+    ip_check,
     logs_admin,
     nodes_status,
     payments,
+    post,
+    purchases,
     statistics,
     support_admin,
     sync_admin,
@@ -26,6 +30,10 @@ admin_router_aggregate.include_router(logs_admin.router)
 admin_router_aggregate.include_router(payments.router)
 admin_router_aggregate.include_router(ads.router)
 admin_router_aggregate.include_router(nodes_status.router)
+admin_router_aggregate.include_router(ip_check.router)
 admin_router_aggregate.include_router(support_admin.router)
+admin_router_aggregate.include_router(post.router)
+admin_router_aggregate.include_router(giveaway.router)
+admin_router_aggregate.include_router(purchases.router)
 
 __all__ = ("admin_router_aggregate",)

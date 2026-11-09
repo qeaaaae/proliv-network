@@ -88,6 +88,13 @@ class RegularTopupPeriod(BaseModel):
     strategy_changed: bool = False
 
 
+def _cap_rolled_bytes(rolled: int, cap_bytes: int | None) -> int:
+    """A tariff rollover cap limits how much unused quota crosses each reset."""
+    if cap_bytes is None:
+        return rolled
+    return min(rolled, max(0, int(cap_bytes)))
+
+
 def _state_rollable_allowance(state: RegularTopupPeriod) -> int:
     """Quota that may roll over at the end of the snapshot's period."""
     if state.unlimited:
@@ -272,6 +279,7 @@ async def _history_consumption(
     current_period_start: datetime,
     ended_used: int,
     balance: int,
+    rollover_cap_bytes: int | None = None,
 ) -> tuple[int, int] | None:
     boundaries = regular_period_boundaries(
         state.period_start_at, current_period_start, state.traffic_strategy
@@ -298,7 +306,7 @@ async def _history_consumption(
         allowance, rollable = await _historical_allowance(
             session, sub, tariff, source, state, start, end, moments
         )
-        rolled += max(0, rollable - used)
+        rolled += _cap_rolled_bytes(max(0, rollable - used), rollover_cap_bytes)
         known_overflow = state.observed_overflow_bytes if index == 0 else 0
         overflow = max(known_overflow, max(0, used - allowance) if allowance > 0 else 0)
         result = consume_topup_overflow(
@@ -331,6 +339,9 @@ async def settle_regular_topup(
     current_date = aware_utc(period_start) or aware_utc(previous_period_start) or now
     strategy = normalize_traffic_limit_strategy(traffic_strategy, default="MONTH")
     rollover = bool(getattr(tariff, "traffic_rollover", False))
+    rollover_cap_bytes = (
+        getattr(tariff, "traffic_rollover_cap_bytes", None) if rollover else None
+    )
     state = regular_topup_period(sub)
     if state is not None and (
         state.panel_user_uuid != str(getattr(sub, "panel_user_uuid", "") or "")
@@ -365,7 +376,9 @@ async def settle_regular_topup(
             periods_ended = traffic_periods_between(
                 state.period_start_at, current_date, state.traffic_strategy
             )
-            rolled = _state_rollable_allowance(state) * max(1, periods_ended)
+            rolled = _cap_rolled_bytes(
+                _state_rollable_allowance(state), rollover_cap_bytes
+            ) * max(1, periods_ended)
             sub.topup_balance_bytes = balance + rolled
             if rolled:
                 logger.info(
@@ -425,7 +438,7 @@ async def settle_regular_topup(
             balance_bytes=balance, traffic_used_bytes=overflow, allowance_bytes=0
         ).consumed_bytes
         if rollover:
-            rolled = max(0, rollable - ended_used)
+            rolled = _cap_rolled_bytes(max(0, rollable - ended_used), rollover_cap_bytes)
     elif same_strategy and (balance > 0 or rollover):
         history = await _history_consumption(
             session,
@@ -437,6 +450,7 @@ async def settle_regular_topup(
             current_date,
             ended_used,
             balance,
+            rollover_cap_bytes,
         )
         if history is not None:
             consumed, history_rolled = history
@@ -450,10 +464,19 @@ async def settle_regular_topup(
             allowance_bytes=0,
         ).consumed_bytes
         if rollover:
-            # With murky period boundaries the last observed quota is the only
-            # provable one; charging the whole ended usage against it stays
-            # conservative and can never over-credit the balance.
-            rolled = max(0, _state_rollable_allowance(state) - ended_used)
+            # With murky period boundaries the per-period usage split is
+            # unknown. Packing the confirmed usage into as few periods as
+            # possible yields the smallest provable roll: periods that could
+            # have been idle still roll their capped quota, while the bound
+            # can never over-credit vs any real usage distribution.
+            rollable = _state_rollable_allowance(state)
+            remaining_used = ended_used
+            rolled = 0
+            for _ in range(max(1, periods)):
+                rolled += _cap_rolled_bytes(
+                    max(0, rollable - remaining_used), rollover_cap_bytes
+                )
+                remaining_used = max(0, remaining_used - rollable)
         if balance > consumed:
             logger.warning(
                 "Incomplete regular traffic history for subscription %s across %s periods; "

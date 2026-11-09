@@ -59,7 +59,13 @@ class ChannelSubscriptionMiddleware(BaseMiddleware):
         if (
             callback_query
             and callback_query.data
-            and callback_query.data == "channel_subscription:verify"
+            and (
+                callback_query.data == "channel_subscription:verify"
+                # Giveaway retry buttons must reach the join handler even for
+                # users whose channel flag is not verified yet - the handler
+                # re-checks membership itself.
+                or callback_query.data.startswith("giveaway:")
+            )
         ):
             return await handler(event, data)
 
