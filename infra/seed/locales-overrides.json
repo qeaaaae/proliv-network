@@ -6,9 +6,10 @@
     "menu_support_button": "💬 Поддержка Proliv",
     "menu_info_button": "ℹ️ О Proliv",
     "bot_command_start_description": "Proliv Network - главное меню",
-    "referral_share_intro": "🚀 Привет! Попробуй Proliv Network - быстрый VPN в UK, Эстонии, Германии и Финляндии.\n\n🎁 По моей ссылке тебе будет скидка на первую покупку!",
-    "referral_friend_message": "🚀 Привет! Попробуй Proliv Network - быстрый VPN в UK, Эстонии, Германии и Финляндии.\n\n🎁 По моей ссылке тебе будет скидка на первую покупку!\n\n{referral_link}",
-    "referral_friend_message_with_webapp": "🚀 Привет! Попробуй Proliv Network - быстрый VPN в UK, Эстонии, Германии и Финляндии.\n\n🎁 По моей ссылке тебе будет скидка на первую покупку!\n\nTelegram: {referral_link}\nWeb: {webapp_referral_link}"
+    "subscription_purchase_description_default": "🛡 <b>Proliv Network</b> — быстрый приватный VPN без лишних слов\n\n⚡️ <b>5 локаций</b> с портом 10 Гбит/с — Эстония, Великобритания, Германия, Финляндия, Нидерланды\n📱 <b>Устройства без лимита</b> + резервный LTE-доступ\n♾ <b>500 ГБ</b> трафика в месяц — остаток до 150 ГБ переносится на следующий\n🔒 Белые списки и стабильный доступ к нужным сервисам\n\nПодключение от <b>179 ₽</b> — выберите срок ниже.",
+    "referral_share_intro": "🚀 Привет! Попробуй Proliv Network - быстрый VPN в UK, Эстонии, Германии, Финляндии и Нидерландах.\n\n🎁 По моей ссылке тебе будет скидка на первую покупку!",
+    "referral_friend_message": "🚀 Привет! Попробуй Proliv Network - быстрый VPN в UK, Эстонии, Германии, Финляндии и Нидерландах.\n\n🎁 По моей ссылке тебе будет скидка на первую покупку!\n\n{referral_link}",
+    "referral_friend_message_with_webapp": "🚀 Привет! Попробуй Proliv Network - быстрый VPN в UK, Эстонии, Германии, Финляндии и Нидерландах.\n\n🎁 По моей ссылке тебе будет скидка на первую покупку!\n\nTelegram: {referral_link}\nWeb: {webapp_referral_link}"
   },
   "en": {
     "welcome": "Welcome to Proliv Network, {user_name}!",
@@ -17,8 +18,9 @@
     "menu_support_button": "💬 Proliv Support",
     "menu_info_button": "ℹ️ About Proliv",
     "bot_command_start_description": "Proliv Network - main menu",
-    "referral_share_intro": "🚀 Hi! Try Proliv Network - fast VPN in the UK, Estonia, Germany and Finland.\n\n🎁 My link gives you a discount on your first purchase!",
-    "referral_friend_message": "🚀 Hi! Try Proliv Network - fast VPN in the UK, Estonia, Germany and Finland.\n\n🎁 My link gives you a discount on your first purchase!\n\n{referral_link}",
-    "referral_friend_message_with_webapp": "🚀 Hi! Try Proliv Network - fast VPN in the UK, Estonia, Germany and Finland.\n\n🎁 My link gives you a discount on your first purchase!\n\nTelegram: {referral_link}\nWeb: {webapp_referral_link}"
+    "subscription_purchase_description_default": "🛡 <b>Proliv Network</b> — fast private VPN, no nonsense\n\n⚡️ <b>5 locations</b> on 10 Gbit/s ports — Estonia, UK, Germany, Finland, Netherlands\n📱 <b>Unlimited devices</b> + backup LTE access\n♾ <b>500 GB</b> of traffic per month — up to 150 GB rolls over\n🔒 Whitelists and stable access to the services you need\n\nFrom <b>179 RUB</b> — pick a period below.",
+    "referral_share_intro": "🚀 Hi! Try Proliv Network - fast VPN in the UK, Estonia, Germany, Finland and the Netherlands.\n\n🎁 My link gives you a discount on your first purchase!",
+    "referral_friend_message": "🚀 Hi! Try Proliv Network - fast VPN in the UK, Estonia, Germany, Finland and the Netherlands.\n\n🎁 My link gives you a discount on your first purchase!\n\n{referral_link}",
+    "referral_friend_message_with_webapp": "🚀 Hi! Try Proliv Network - fast VPN in the UK, Estonia, Germany, Finland and the Netherlands.\n\n🎁 My link gives you a discount on your first purchase!\n\nTelegram: {referral_link}\nWeb: {webapp_referral_link}"
   }
 }
