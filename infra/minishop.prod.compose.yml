@@ -13,7 +13,9 @@ services:
       # Прод-режим: никаких dev-флагов. auto -> live при production.
       APP_RUNTIME_MODE: 'production'
       QA_AUTH_ENABLED: 'False'
-      EMAIL_LOGIN_ENABLED: 'False'
+      # Email-вход включён: SMTP (Resend) настроен в shop/.env, QA-auth остаётся
+      # выключенным - коды уходят только письмом.
+      EMAIL_LOGIN_ENABLED: 'True'
       WEBAPP_SESSION_SECRET: ${WEBAPP_SESSION_SECRET:?set in shop/.env}
       MY_DEVICES_SECTION_ENABLED: 'True'
       SUBSCRIPTION_REISSUE_ENABLED: 'True'
@@ -26,7 +28,7 @@ services:
     environment:
       APP_RUNTIME_MODE: 'production'
       QA_AUTH_ENABLED: 'False'
-      EMAIL_LOGIN_ENABLED: 'False'
+      EMAIL_LOGIN_ENABLED: 'True'
       WEBAPP_SESSION_SECRET: ${WEBAPP_SESSION_SECRET:?set in shop/.env}
       WEBAPP_ADMIN_URL: 'https://admin.proliv-network.xyz'
     volumes:

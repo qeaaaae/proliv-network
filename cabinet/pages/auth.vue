@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { LoaderCircle, Send } from '@lucide/vue'
+import { Eye, EyeOff, LoaderCircle, Mail, Send } from '@lucide/vue'
 
 definePageMeta({ layout: false })
 useHead({ title: 'Вход - Proliv Network' })
@@ -24,6 +24,10 @@ async function goNext() {
   await ensure()
   referral.clear()
   return navigateTo(safeNext())
+}
+
+function errMessage(e: unknown, fallback: string): string {
+  return (e as { data?: { statusMessage?: string } })?.data?.statusMessage || fallback
 }
 
 async function onTelegramAuth(user: Record<string, unknown>) {
@@ -55,6 +59,98 @@ function onTelegramOAuth() {
   window.location.href = `/api/auth/telegram/start${params.size ? `?${params}` : ''}`
 }
 
+// ---------- Email-вход: пароль или одноразовый код из письма ----------
+// Регистрации отдельно нет: кодом из письма можно войти и без аккаунта -
+// бэкенд создаст его на первом verify. Пароль задаётся потом в настройках.
+const emailMode = ref<'password' | 'code'>('password')
+const email = ref('')
+const emailPassword = ref('')
+const showPassword = ref(false)
+const emailCode = ref('')
+const codeSent = ref(false)
+const emailPending = ref(false)
+const resendIn = ref(0)
+let resendTimer: ReturnType<typeof setInterval> | undefined
+
+const emailValid = computed(() => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email.value.trim()))
+
+function startResendCooldown(seconds: number) {
+  resendIn.value = seconds
+  clearInterval(resendTimer)
+  resendTimer = setInterval(() => {
+    resendIn.value -= 1
+    if (resendIn.value <= 0) clearInterval(resendTimer)
+  }, 1000)
+}
+
+onBeforeUnmount(() => clearInterval(resendTimer))
+
+async function requestEmailCode() {
+  if (!emailValid.value || emailPending.value || resendIn.value > 0) return
+  emailPending.value = true
+  try {
+    const referralCode = referral.code()
+    await $fetch('/api/auth/email/request', {
+      method: 'POST',
+      body: { email: email.value.trim(), referralCode: referralCode || undefined },
+    })
+    codeSent.value = true
+    startResendCooldown(60)
+    push('Код отправлен - проверьте почту')
+  } catch (e) {
+    push(errMessage(e, 'Не удалось отправить код'), 'error')
+  } finally {
+    emailPending.value = false
+  }
+}
+
+function resetEmailCode() {
+  codeSent.value = false
+  emailCode.value = ''
+}
+
+async function verifyEmailCode() {
+  if (!emailCode.value.trim() || emailPending.value) return
+  emailPending.value = true
+  try {
+    const referralCode = referral.code()
+    await $fetch('/api/auth/email/verify', {
+      method: 'POST',
+      body: {
+        email: email.value.trim(),
+        code: emailCode.value.trim(),
+        referralCode: referralCode || undefined,
+      },
+    })
+    await goNext()
+  } catch (e) {
+    push(errMessage(e, 'Неверный код'), 'error')
+  } finally {
+    emailPending.value = false
+  }
+}
+
+async function loginEmailPassword() {
+  if (!emailValid.value || !emailPassword.value || emailPending.value) return
+  emailPending.value = true
+  try {
+    await $fetch('/api/auth/email', {
+      method: 'POST',
+      body: { email: email.value.trim(), password: emailPassword.value },
+    })
+    await goNext()
+  } catch (e) {
+    push(errMessage(e, 'Неверная почта или пароль'), 'error')
+  } finally {
+    emailPending.value = false
+  }
+}
+
+function submitEmail() {
+  if (emailMode.value === 'password') return loginEmailPassword()
+  return codeSent.value ? verifyEmailCode() : requestEmailCode()
+}
+
 const isMiniApp = ref(false)
 
 // Внутри Telegram Mini App входим автоматически по initData
@@ -64,6 +160,27 @@ onMounted(async () => {
     push('Не удалось войти через Telegram. Попробуйте ещё раз', 'error')
     history.replaceState(null, '', '/auth')
   }
+
+  // Magic link из письма: /auth?login_token=... -> сразу обмениваем на сессию
+  const loginToken = route.query.login_token
+  if (typeof loginToken === 'string' && loginToken) {
+    pending.value = true
+    try {
+      const referralCode = referral.code()
+      await $fetch('/api/auth/email/magic', {
+        method: 'POST',
+        body: { token: loginToken, referralCode: referralCode || undefined },
+      })
+      await goNext()
+      return
+    } catch (e) {
+      push(errMessage(e, 'Ссылка недействительна или истекла'), 'error')
+      history.replaceState(null, '', '/auth')
+    } finally {
+      pending.value = false
+    }
+  }
+
   const initData = (window as { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp?.initData
   if (!initData || pending.value) return
   isMiniApp.value = true
@@ -76,7 +193,7 @@ onMounted(async () => {
     })
     await goNext()
   } catch {
-    // остаёмся на странице входа - можно войти через виджет
+    // остаёмся на странице входа - можно войти через виджет или почту
   } finally {
     pending.value = false
   }
@@ -113,6 +230,112 @@ onMounted(async () => {
             @auth="onTelegramAuth"
           />
         </div>
+
+        <div class="auth-divider"><span>или по почте</span></div>
+
+        <div class="auth-tabs">
+          <span class="auth-tabs__pill" :class="{ 'is-right': emailMode === 'code' }" aria-hidden="true" />
+          <button
+            class="auth-tab"
+            type="button"
+            :class="{ 'is-active': emailMode === 'password' }"
+            @click="emailMode = 'password'"
+          >Пароль</button>
+          <button
+            class="auth-tab"
+            type="button"
+            :class="{ 'is-active': emailMode === 'code' }"
+            @click="emailMode = 'code'"
+          >Код из письма</button>
+        </div>
+
+        <form class="stack" style="gap: 12px; text-align: left" @submit.prevent="submitEmail">
+          <div class="field">
+            <span>Email</span>
+            <input
+              v-model="email"
+              class="input"
+              type="email"
+              autocomplete="email"
+              placeholder="name@example.com"
+              :disabled="emailMode === 'code' && codeSent"
+            />
+          </div>
+
+          <template v-if="emailMode === 'password'">
+            <div class="field">
+              <span>Пароль</span>
+              <div class="input-eye">
+                <input
+                  v-model="emailPassword"
+                  class="input"
+                  :type="showPassword ? 'text' : 'password'"
+                  autocomplete="current-password"
+                  placeholder="••••••••"
+                />
+                <button
+                  type="button"
+                  class="input-eye__btn"
+                  :aria-label="showPassword ? 'Скрыть пароль' : 'Показать пароль'"
+                  @click="showPassword = !showPassword"
+                >
+                  <EyeOff v-if="showPassword" :size="16" />
+                  <Eye v-else :size="16" />
+                </button>
+              </div>
+            </div>
+
+            <p class="muted" style="font-size: 12px; line-height: 1.45">
+              Пароля ещё нет? Войдите по коду из письма - пароль можно задать
+              потом в настройках аккаунта.
+            </p>
+
+            <button
+              class="btn btn--primary btn--block"
+              type="submit"
+              :disabled="emailPending || !emailValid || !emailPassword"
+            >
+              <LoaderCircle v-if="emailPending" :size="16" class="spinner" />
+              <Mail v-else :size="16" />
+              Войти по почте
+            </button>
+          </template>
+
+          <template v-else>
+            <div v-if="codeSent" class="field">
+              <span>Код из письма</span>
+              <input
+                v-model="emailCode"
+                class="input"
+                inputmode="numeric"
+                autocomplete="one-time-code"
+                maxlength="6"
+                placeholder="123456"
+              />
+            </div>
+
+            <button
+              class="btn btn--primary btn--block"
+              type="submit"
+              :disabled="
+                emailPending
+                || !emailValid
+                || (codeSent ? !emailCode.trim() : resendIn > 0)
+              "
+            >
+              <LoaderCircle v-if="emailPending" :size="16" class="spinner" />
+              <Mail v-else :size="16" />
+              {{ codeSent ? 'Войти' : 'Получить код' }}
+            </button>
+
+            <div v-if="codeSent" class="auth-forgot" style="justify-content: space-between">
+              <button type="button" class="link" :disabled="resendIn > 0" @click="requestEmailCode">
+                Отправить код ещё раз{{ resendIn ? ` (${resendIn} c)` : '' }}
+              </button>
+              <button type="button" class="link" @click="resetEmailCode">Сменить почту</button>
+            </div>
+          </template>
+        </form>
 
         <p class="auth-terms muted" style="margin-top: 16px">
           При входе вы принимаете пользовательское соглашение

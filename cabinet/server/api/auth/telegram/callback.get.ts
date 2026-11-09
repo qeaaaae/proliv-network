@@ -1,8 +1,10 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
-import { deleteCookie, getCookie, getQuery, sendRedirect } from 'h3'
+import { deleteCookie, getCookie, getQuery, sendRedirect, type H3Event } from 'h3'
 import { ofetch } from 'ofetch'
-import { setSession } from '../../../utils/session'
-import { shopApiUrl } from '../../../utils/backend'
+import { getCabinetSession, setSession } from '../../../utils/session'
+import { shopApiUrl, shopFetch } from '../../../utils/backend'
+import { setSessionFromShopToken, type ShopAuthTokenResponse } from '../../../utils/emailAuth'
+import { setTgMergeProof } from '../../../utils/telegramMerge'
 
 // Callback Telegram OIDC: Telegram прислал ?code&state, меняем code на
 // id_token (Basic client_id:client_secret, PKCE verifier из куки), затем
@@ -15,6 +17,7 @@ interface StatePayload {
   nonce: string
   ref?: string
   next?: string
+  purpose?: string
   exp: number
 }
 
@@ -53,6 +56,38 @@ function decodeIdTokenSub(token: string): { id?: number; name?: string; username
     }
   } catch {
     return {}
+  }
+}
+
+// Режим purpose=link: id_token+nonce идут не в /api/auth/token, а в
+// /api/account/telegram/link - привязка TG к текущей сессии. Если TG уже
+// занят другим аккаунтом (409 account_merge_required) - кладём id_token+nonce
+// в подписанную merge-куки и ведём на диалог объединения в /account.
+async function linkTelegramToAccount(event: H3Event, idToken: string, saved: StatePayload) {
+  const back = (target: string) => sendRedirect(event, `/account?tg=${target}`, 302)
+  if (!getCabinetSession(event)?.apiToken) return sendRedirect(event, '/auth', 302)
+  try {
+    const res = await shopFetch<ShopAuthTokenResponse>(event, '/api/account/telegram/link', {
+      method: 'POST',
+      body: { id_token: idToken, nonce: saved.nonce },
+    })
+    await setSessionFromShopToken(event, res, 'User')
+    return back('linked')
+  } catch (err) {
+    const code = (err as { data?: { error?: string } })?.data?.error || 'link_failed'
+    if (code === 'account_merge_required') {
+      const claims = decodeIdTokenSub(idToken)
+      setTgMergeProof(event, {
+        idt: idToken,
+        nonce: saved.nonce,
+        tgId: claims.id,
+        tgUsername: claims.username,
+        tgName: claims.name,
+      })
+      return back('merge')
+    }
+    console.error('[tg-oauth] link failed:', code)
+    return back(`error&e=${encodeURIComponent(code)}`)
   }
 }
 
@@ -112,6 +147,10 @@ export default defineEventHandler(async (event) => {
     return fail('exchange_failed')
   }
   if (!idToken) return fail('exchange_failed')
+
+  if (saved.purpose === 'link') {
+    return linkTelegramToAccount(event, idToken, saved)
+  }
 
   let shopRes: { token?: string; csrf_token?: string; telegram_id?: number; user_id?: number }
   try {

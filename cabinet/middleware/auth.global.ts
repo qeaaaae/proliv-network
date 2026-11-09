@@ -12,7 +12,17 @@ export default defineNuxtRouteMiddleware(async (to) => {
     return
   }
   if (!user.value) {
-    return navigateTo({ path: '/auth', query: to.fullPath !== '/' ? { next: to.fullPath } : {} })
+    // Magic link из письма (/?login_token=...) - переносим токен на /auth,
+    // там он обменяется на сессию. next не ставим - иначе вернёмся на / с
+    // уже погашенным токеном.
+    const query: Record<string, string> = {}
+    const loginToken = to.query.login_token
+    if (typeof loginToken === 'string' && loginToken) {
+      query.login_token = loginToken
+    } else if (to.fullPath !== '/') {
+      query.next = to.fullPath
+    }
+    return navigateTo({ path: '/auth', query })
   }
   // Промо-диплинк (?startapp=promo_<code>): ведём на /account, где код
   // встанет в поле промокода - активирует его юзер кнопкой «Применить».

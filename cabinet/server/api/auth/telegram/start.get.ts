@@ -2,6 +2,7 @@ import { createHmac, randomBytes } from 'node:crypto'
 import { getQuery, getRequestHost, getRequestProtocol, setCookie, sendRedirect } from 'h3'
 import { ofetch } from 'ofetch'
 import { shopApiUrl } from '../../../utils/backend'
+import { getCabinetSession } from '../../../utils/session'
 
 // Telegram OIDC authorization code flow (официальный, с PKCE):
 // генерим code_verifier/state, забираем backend-nonce, редиректим браузер
@@ -22,6 +23,14 @@ export default defineEventHandler(async (event) => {
   const backend = shopApiUrl(event)
   if (!backend || !config.telegramOauthClientSecret) {
     throw createError({ statusCode: 503, statusMessage: 'Telegram OAuth is not configured' })
+  }
+
+  const q = getQuery(event)
+  // purpose=link - привязка TG к уже залогиненному аккаунту (из настроек входа);
+  // без сессии привязывать не к чему - на форму входа.
+  const purpose = String(q.purpose || '') === 'link' ? 'link' : ''
+  if (purpose === 'link' && !getCabinetSession(event)?.apiToken) {
+    return sendRedirect(event, '/auth', 302)
   }
 
   // backend выдаёт подписанный nonce - minishop проверит его при обмене id_token
@@ -46,7 +55,6 @@ export default defineEventHandler(async (event) => {
   // Реферальный код из ?ref= и целевой путь из ?next= проносим через
   // подписанный state - в callback ref уйдёт в /api/auth/token как
   // referral_code, next - в редирект после логина (диплинки /trial и т.п.)
-  const q = getQuery(event)
   const ref = String(q.ref || '').slice(0, 64)
   const rawNext = String(q.next || '')
   const next = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext.slice(0, 200) : ''
@@ -57,6 +65,7 @@ export default defineEventHandler(async (event) => {
     nonce: nonceRes.nonce,
     ref: ref || undefined,
     next: next || undefined,
+    purpose: purpose || undefined,
     exp: Date.now() + STATE_TTL * 1000,
   })))
   const sessionSecret = config.sessionSecret || config.botToken || 'dev-insecure-secret'

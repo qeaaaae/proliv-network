@@ -17,7 +17,9 @@ export default defineEventHandler(async (event) => {
   return {
     email: u.email ?? null,
     hasPassword: u.password_auth_enabled ?? false,
-    telegram: { username: u.username ?? user.username, id: u.telegram_id ?? user.id },
+    // У email-only аккаунта telegram_id = null - не подставляем session.id,
+    // это внутренний user_id minishop, а не телеграм.
+    telegram: { username: u.username ?? null, id: u.telegram_id ?? null },
     twoFa: false,
   }
 })
