@@ -17,7 +17,7 @@ export default defineEventHandler(async (event) => {
     const photo = me.user?.telegram_photo_url
     return {
       id: safe.id,
-      name: me.user?.first_name || safe.name,
+      name: me.user?.first_name || me.user?.username || safe.name,
       username: me.user?.username ?? safe.username,
       photoUrl: photo
         ? photo.startsWith('/api/')

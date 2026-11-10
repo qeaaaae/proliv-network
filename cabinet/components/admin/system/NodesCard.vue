@@ -148,52 +148,56 @@ function fmtCount(value: number | string | null | undefined): string {
     <p v-if="!nodeRows.length" class="admin-note">
       {{ loading ? 'Загрузка...' : 'Нет данных - панель не вернула статистику нод.' }}
     </p>
-    <table v-else class="admin-table">
-      <thead>
-        <tr>
-          <th>Нода</th>
-          <th>Онлайн</th>
-          <th>Трафик</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="node in nodeRows" :key="node.key">
-          <td>
-            {{ flag(node.countryCode) }} {{ node.label }}
-            <AdminBadge v-if="node.countryCode" tone="muted">{{ node.countryCode }}</AdminBadge>
-          </td>
-          <td>
-            <AdminBadge v-if="node.online !== null" :tone="node.online > 0 ? 'success' : 'muted'">
-              {{ node.online }}
-            </AdminBadge>
-            <span v-else class="admin-note">-</span>
-          </td>
-          <td>{{ fmtBytes(node.bytes) }}</td>
-        </tr>
-      </tbody>
-    </table>
+    <div v-else class="admin-table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>Нода</th>
+            <th>Онлайн</th>
+            <th>Трафик</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="node in nodeRows" :key="node.key">
+            <td>
+              {{ flag(node.countryCode) }} {{ node.label }}
+              <AdminBadge v-if="node.countryCode" tone="muted">{{ node.countryCode }}</AdminBadge>
+            </td>
+            <td>
+              <AdminBadge v-if="node.online !== null" :tone="node.online > 0 ? 'success' : 'muted'">
+                {{ node.online }}
+              </AdminBadge>
+              <span v-else class="admin-note">-</span>
+            </td>
+            <td>{{ fmtBytes(node.bytes) }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
     <h3 class="admin-sub">Внутренние сквады</h3>
     <p v-if="squadsError" class="admin-note admin-error">{{ squadsError }}</p>
     <p v-else-if="!squads || !squads.length" class="admin-note">
       {{ loading ? 'Загрузка...' : 'Нет данных - панель не вернула сквады.' }}
     </p>
-    <table v-else class="admin-table">
-      <thead>
-        <tr>
-          <th>Сквад</th>
-          <th>Участников</th>
-          <th>Активных инбаундов</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="squad in squads" :key="squad.uuid">
-          <td>{{ squad.name }}</td>
-          <td>{{ fmtCount(squad.members_count) }}</td>
-          <td>{{ fmtCount(squad.active_inbounds_count) }}</td>
-        </tr>
-      </tbody>
-    </table>
+    <div v-else class="admin-table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>Сквад</th>
+            <th>Участников</th>
+            <th>Активных инбаундов</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="squad in squads" :key="squad.uuid">
+            <td>{{ squad.name }}</td>
+            <td>{{ fmtCount(squad.members_count) }}</td>
+            <td>{{ fmtCount(squad.active_inbounds_count) }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </section>
 </template>
 

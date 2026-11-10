@@ -3,17 +3,54 @@
 Рабочая схема на примере Эстонии. Цель: прятать VLESS-xhttp за публичный CDN,
 чтобы мобильные операторы видели обычный HTTPS к медиа-домену.
 
-## Факт на проде (обновлено 2026-11-08: сплит LTE на отдельные ноды)
+## Факт на проде (обновлено 2026-11-10: каскад через РФ-релей)
 
-- EE: `ee.` -> **Yandex CDN (yccdn)**, edge -> `ee-src:443` -> nginx -> xray xhttp `:9445`
+```
+клиент -> yccdn edge -> rf-src (RF :443, nginx stream ssl_preread)
+       -> ee-src/de-src :443 REALITY -> nginx :8443 -> xhttp :9445
+```
+
+- **RF-нода `48.102.213.215` (serv.host, ssh `proliv-node-rf`)** - тупой
+  TCP-релей, TLS НЕ терминирует, xray/remnanode нет, в панели не
+  зарегистрирована. nginx stream на `:443` роутит по SNI
+  (`/etc/nginx/stream-enabled/lte-cdn-relay.conf`): SNI=front-домен
+  (`Заголовок Host` ресурса CDN) -> upstream `ee-src:443` или `de-src:443`.
+- Оба CDN-ресурса (ee. + de.) смотрят в **одну** origin-группу `rf-src`
+  -> `rf-src.proliv-network.xyz` (A -> 48.102.213.215, Cloud DNS).
+  Старые группы `common-ee-src-*`/`common-de-src-*` неиспользуемы.
+- На EU-нодах **ноль правок**: vhost'ы/серты/xhttp как были. Трафик от
+  эджа приходит с IP РФ; в `xhttp_access.log` всё равно `127.0.0.1`
+  (steal). Юзерские uuid доезжают до EU целиком - учёт на LTE-нодах
+  панели не меняется.
+- Харденинг РФ по эталону нод: ufw (443 + 80 + 22 limit + 40 сканер-банов),
+  sshd key-only, ping off, bbr/fq/tfo. Backup-ключ панели добавлен
+  (nodecheck).
+- **Декой на РФ (2026-11-10):** сайт-маскировка ООО «СтанкоПрецизион»
+  (ЧПУ-станки, 4 страницы, `/var/www/site`, сиды `infra/decoy-rf/`).
+  `:80` default_server отдаёт сайт по любому имени/IP; SNI
+  `rf-src.proliv-network.xyz` в stream-мапе -> `127.0.0.1:8443`
+  (LE-серт webroot'ом через `:80`, certbot.timer на авто-renew).
+  Чужой/пустой SNI на `:443` -> RST. Т.е. картинка хоста: русская
+  контора с сайтом на 80/443 + TLS-бекенд у Яндекс-CDN.
+- Проверка релея с самой РФ: `curl -sk --resolve ee.proliv-network.xyz:443:127.0.0.1
+  https://ee.proliv-network.xyz/media/feed/preview/?sess_id=t` -> `400`.
+  nodecheck.sh: секция "RF CDN relay" (nginx + оба upstream).
+
+## Предыдущее состояние (сплит LTE на отдельные ноды, 2026-11-08)
+
+- EE: `ee.` -> **Yandex CDN (yccdn)**, edge -> `ee-src:443` -> **xray REALITY self-steal**
+  -> nginx `127.0.0.1:8443` -> xray xhttp `:9445`
   (контейнер `remnanode-lte`, нода `EE-Node-LTE`, cm=1.7).
-  REALITY-EE живёт на `:10443` на `EE-Node-01` (cm=1.0), хост `🇪🇪 Эстония`
-  снова **включён** - у EE теперь и обычная локация, и LTE.
+  С 2026-11-09 схема = DE: `:443` отдан REALITY (`VLESS-TCP-Reality-EE-443`),
+  хост `🇪🇪 Эстония` = `ee-src:443`; legacy `:10443` удалён в тот же день.
+  С 2026-11-10 edge ходит через РФ-релей (см. выше), сама схема на ноде не менялась.
 - DE: `de.` -> Yandex CDN (yccdn), edge -> `de-src:443` -> xray REALITY self-steal ->
   nginx `:8443` -> xray xhttp `:9445` (контейнер `remnanode-lte`, нода `DE-Node-LTE`, cm=1.7).
 - LTE-трафик учитывается отдельно от обычного: у LTE-нод `consumptionMultiplier=1.7`
-  (CDN-трафик платный), у базовых = 1.0. Поэтому в remark вручную пишем `1.7x`:
-  `🇪🇪 1.7x LTE Эстония`, `🇩🇪 1.7x LTE Германия`.
+  (CDN-трафик платный), у базовых = 1.0. В remark - множитель без привязки к
+  стране: с 2026-11-10 хосты называются `🇪🇺 x2 LTE доступ №1` (ee) и
+  `🇪🇺 x2 LTE доступ №2` (de); ранее были `🇪🇪 2x LTE Эстония` /
+  `🇩🇪 2x LTE Германия`.
 - В подписке хосты выглядят как `VLESS·XHTTP·TLS·JSON` (Happ).
 
 ## LTE-ноды (вторая нода на том же VPS, 2026-11-08)
@@ -65,6 +102,77 @@ REALITY на той же ноде вынесен с 443 на `10443`, потом
 В отличие от DE, REALITY-стейплинг для CDN-пути **не используем** - эдж ходит в
 nginx :443 напрямую (как было и с CDNvideo), переделывать не стали.
 
+**МИГРИРОВАНО 2026-11-09 (правило AGENTS.md #8):** публичный `:443` на EE теперь
+REALITY (инбаунд `VLESS-TCP-Reality-EE-443` `f974d9d7-a384-4f98-8bb3-ae0683bcb5e2`,
+клон старого 10443 с тем же privateKey/dest `127.0.0.1:8443`), nginx убран с
+публичного :443 в `127.0.0.1:8443` (vhost'ы `proliv-tls`/`proliv-tls-src` приведены
+к паритету: `/media/feed/preview`+`/api/xhttp` -> `:9445`, `/api/ws` -> `:9443`),
+`proliv-cdn` и протухшие `*.bak-9445` (со старым `:9444`) убраны из sites-enabled
+в `/root/`. Хост `🇪🇪 Эстония` = `ee-src:443`. Старый `VLESS-TCP-Reality-EE:10443`
+**удалён в тот же день** (профиль/нода/сквад) - клиенты со старыми ссылками
+получают `ee-src:443` после обновления подписки. Бэкапы:
+`/root/ee-profile-pre443-backup.json`, `/root/ee-host-pre443-backup.json` на
+proliv-main, `/root/proliv-tls*.bak-443mig` на EE.
+
+**`ssl_reject_handshake` на `127.0.0.1:8443` - ВЕЗДЕ (6/6 нод):** файл
+`proliv-tls-reject` (default_server). Чужой SNI через steal получает TLS-reset.
+Для NL (Ubuntu 20.04) и KZ (22.04), где штатный nginx 1.18 не умел
+`ssl_reject_handshake`, nginx обновлён с .deb из pool nginx.org: NL -> 1.28.0,
+KZ -> 1.28.3 (`/root/nginx_bak_upg_*` - бэкапы /etc/nginx до апгрейда; пакет
+перезаписал nginx.conf - восстановлен из бэкапа, иначе пропадает
+`sites-enabled`). ssh на KZ: `proliv-node-kz` (79.183.193.149, ключ `~/.ssh/proliv`).
+На KZ остался косметический warn `listen ... http2` deprecated в `proliv-dest`.
+
+**ИНЦИДЕНТ 2026-11-10 - NL упал с ~19:36 09.11 по ~15:25 10.11:** сборка
+`nginx 1.28.0-1~focal` из pool nginx.org для focal ломает TLS 1.3 - её
+:8443 неготировал только TLS 1.2 (alert `protocol_version`). REALITY требует
+TLS 1.3-хендшейк dest'а для мимикри (`isHandshakeComplete: false` ->
+`target sent incorrect server hello`), поэтому ВСЕ валидные клиенты помечались
+невалидными и стылились (клиент видел настоящий LE-серт -> "received real
+certificate"). Диагностика: auth в debug-логе проходит нормально, падает
+именно стил-хендшейк; `openssl s_client -tls1_3` к `127.0.0.1:8443` -> alert.
+**Фикс:** откат на штатный `nginx 1.18.0-0ubuntu1.7` (TLS 1.3 с системным
+libssl1.1 работает), `ssl_reject_handshake` заменён паттерном для <1.19.4:
+default_server с self-signed `snakeoil.pem` (CN=localhost) + `return 444` -
+чужой SNI получает обрыв без утечки домена. Ставить nginx из pool nginx.org
+на focal НЕЛЬЗЯ. На KZ 1.28.3 (Ubuntu 22.04, OpenSSL 3.0.2) - TLS 1.3 в
+порядке, не трогать.
+
+**Фул-харденинг всех нод (2026-11-09, 6/6):**
+
+- `server_tokens off` + `ssl_protocols TLSv1.2 TLSv1.3` в http{} на всех.
+  Server-заголовок теперь голый `nginx` без версии/ОС.
+- Ping выключен: `net.ipv4.icmp_echo_ignore_all=1` в `/etc/ufw/sysctl.conf`
+  (ufw при reload перетирает `/etc/sysctl.d/*` — править только там) + live
+  sysctl + `echo-request -> DROP` в `before.rules`/`before6.rules` (v4+v6).
+- sshd: `PasswordAuthentication no`, `PermitRootLogin prohibit-password`,
+  `ufw limit 22/tcp`.
+- Наружу только 22/80/443 (+ 2222/2223 только с IP панели). `:8444` (legacy
+  WS-вход) переведён на `127.0.0.1` в `sites-enabled/proliv-ws` на DE/UK/EE,
+  UFW-правило снято. На NL `:8444` = yt-socks (python3), уже ограничен
+  UFW списком IP нод — оставлен.
+- `telemt` (MTProto) живёт только на FI (`:465`, UFW allow). На EE остановлен
+  и снят с автозапуска (`systemctl disable --now`), правила `465/2083/10443`
+  удалены.
+- FI: ufw вообще не стоял — установлен и настроен с нуля (deny in/allow out,
+  22 limit, 80, 443, 465, 2222 с панели).
+- Бан сканеров: 40 v4 DENY-правил (Censys 16x/24, Shodan ~10 сетей,
+  Shadowserver 5, Expanse 3) через `ufw insert`; v6 — DROP-цепочкой в
+  `before6.rules` (ufw не умеет insert для v6).
+- Проверка: свой SNI -> 200 на всех, чужой -> TLS-reset, `icmp_echo_ignore_all=1`,
+  пинг нода->нода молчит.
+- Декои: у каждой ноды локализованный сайт с geo-метой под локацию
+  (de/en/et/fi/nl/kk lang + placename/geo.region/ICBM).
+
+**Зависимость: YouTube у всех локаций идёт через NL.** В xray-конфиге всех
+нод глобальный routing: домены `geosite:youtube`, `googlevideo`, `ytimg`,
+`ggpht`, `youtube-nocookie`, `youtubei.googleapis.com`, `youtube.googleapis.com`
+-> outbound `yt-via-nl` -> socks5 `87.58.201.121:8444` (python3 на NL, креды
+`iv1dgh3bma`, UFW пускает только IP нод). YT выходит в сеть с IP нидерландов
+независимо от выбранной локации. Следствие: падение NL или его :8444 ломает
+ютуб ВЕЗДЕ, даже если сам выход локации жив. Проверка с любой ноды:
+`curl -x socks5://iv1dgh3bma:***@87.58.201.121:8444 https://www.youtube.com/`.
+
 ## DNS (Яндекс DNS-хостинг зоны proliv-network.xyz)
 
 | Имя | Тип | Значение |
@@ -104,7 +212,7 @@ Yandex CDN-ресурс `ee.proliv-network.xyz`: источник `ee-src.proliv
 | remark | address:port | sni | host | inbound | nodes |
 |--------|--------------|-----|------|---------|-------|
 | `🇪🇪 Эстония` (вкл) | `ee-src.proliv-network.xyz:10443` | `ee.proliv-network.xyz` | — | Reality-EE (EE-Profile) | — |
-| `🇪🇪 1.7x LTE Эстония` | `ee.proliv-network.xyz:443` | `ee.proliv-network.xyz` | `ee.proliv-network.xyz` | XHTTP-CDN-EE-LTE `f0e3e463` (EE-LTE-Profile) | EE-Node-LTE |
+| `🇪🇺 x2 LTE доступ №1` | `ee.proliv-network.xyz:443` | `ee.proliv-network.xyz` | `ee.proliv-network.xyz` | XHTTP-CDN-EE-LTE `f0e3e463` (EE-LTE-Profile) | EE-Node-LTE |
 
 У CDN-хоста: `mode: packet-up`, `path: /media/feed/preview/`, ALPN `h2,http/1.1`,
 fp `chrome`, `nodes: [EE-Node]`.
@@ -157,7 +265,7 @@ fp `chrome`, `nodes: [EE-Node]`.
 `/api/config-profiles`: `response.configProfiles`, GET `/api/hosts`: `response.hosts`.
 
 **EE переведена на этот набор 2026-11-05** при миграции CDNvideo -> yccdn:
-инбаунд `VLESS-XHTTP-CDN-EE` (EE-Profile) + хост `🇪🇪 1.7x LTE Эстония`
+инбаунд `VLESS-XHTTP-CDN-EE` (EE-Profile) + хост `🇪🇺 x2 LTE доступ №1`
 (`499f8118-d8a0-49f2-becf-9627c0069fb8`). Бэкапы на proliv-main:
 `/root/ee-yccdn-profile-backup.json`, `/root/ee-yccdn-host-backup.json`.
 Клиенты подтягивают новый extra при обновлении подписки (Happ рефрешит сам).
@@ -269,7 +377,7 @@ DNS: `de` CNAME -> `*.topology.gslb.yccdn.ru`; `de-src` A -> `13.143.192.49`.
 | remark | address:port | sni | host | inbound | nodes |
 |--------|--------------|-----|------|---------|-------|
 | `🇩🇪 Германия` | `de-src.proliv-network.xyz:443` | `de.proliv-network.xyz` | — | Reality (Default-Profile) | — |
-| `🇩🇪 1.7x LTE Германия` | `de.proliv-network.xyz:443` | `de.proliv-network.xyz` | `de.proliv-network.xyz` | XHTTP-CDN-DE-LTE `7cae8e70` (DE-LTE-Profile) | DE-Node-LTE |
+| `🇪🇺 x2 LTE доступ №2` | `de.proliv-network.xyz:443` | `de.proliv-network.xyz` | `de.proliv-network.xyz` | XHTTP-CDN-DE-LTE `7cae8e70` (DE-LTE-Profile) | DE-Node-LTE |
 
 Проверка орджина до переключения CDN:
 `curl -o /dev/null -w '%{http_code}' https://de-src.proliv-network.xyz/media/feed/preview/?sess_id=t`

@@ -17,3 +17,8 @@ for h in 31.76.70.98 31.76.60.63 13.143.192.49 179.253.82.201 87.58.201.121 79.1
     -o UserKnownHostsFile=/opt/proliv/status/known_hosts \
     root@$h 'docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | head -4' 2>&1 | head -5
 done
+echo "=== RF CDN relay 48.102.213.215 (nginx stream, ee/de upstreams) ==="
+ssh -i /root/.ssh/backup_ed25519 -o BatchMode=yes -o ConnectTimeout=5 \
+  -o StrictHostKeyChecking=accept-new \
+  -o UserKnownHostsFile=/opt/proliv/status/known_hosts \
+  root@48.102.213.215 'systemctl is-active nginx; ss -tln | grep -c ":443 "; for d in ee de; do code=$(curl -sk -o /dev/null -w "%{http_code}" --resolve "$d.proliv-network.xyz:443:127.0.0.1" --connect-timeout 5 "https://$d.proliv-network.xyz/media/feed/preview/?sess_id=t"); echo "$d->$code"; done' 2>&1 | head -8

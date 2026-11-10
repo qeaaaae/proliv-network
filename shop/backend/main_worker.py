@@ -556,6 +556,28 @@ async def _purchase_reminder_task(ctx: PluginContext) -> None:
     ).run()
 
 
+async def _winback_survey_task(ctx: PluginContext) -> None:
+    from bot.services.winback_survey_worker import WinbackSurveyWorker
+
+    await WinbackSurveyWorker(
+        settings=ctx.settings,
+        session_factory=ctx.require_session_factory(),
+        i18n=ctx.require_i18n(),
+        bot=ctx.bot,
+    ).run()
+
+
+async def _notrial_survey_task(ctx: PluginContext) -> None:
+    from bot.services.notrial_survey_worker import NotrialSurveyWorker
+
+    await NotrialSurveyWorker(
+        settings=ctx.settings,
+        session_factory=ctx.require_session_factory(),
+        i18n=ctx.require_i18n(),
+        bot=ctx.bot,
+    ).run()
+
+
 async def _outbound_settings_refresh_task(ctx: PluginContext) -> None:
     keys = outbound_runtime_setting_keys()
     while True:
@@ -619,6 +641,8 @@ def _core_worker_tasks() -> list[WorkerTaskSpec]:
         WorkerTaskSpec(name="LteTrafficAlertWorker", factory=_lte_traffic_alert_task),
         WorkerTaskSpec(name="GiveawayDrawWorker", factory=_giveaway_draw_task),
         WorkerTaskSpec(name="PurchaseReminderWorker", factory=_purchase_reminder_task),
+        WorkerTaskSpec(name="WinbackSurveyWorker", factory=_winback_survey_task),
+        WorkerTaskSpec(name="NotrialSurveyWorker", factory=_notrial_survey_task),
         WorkerTaskSpec(name="AdminBroadcastWorker", factory=_admin_broadcast_task),
         WorkerTaskSpec(name="BackupWorker", factory=_backup_worker_task),
         WorkerTaskSpec(name="PanelSyncLoop", factory=_panel_sync_loop),

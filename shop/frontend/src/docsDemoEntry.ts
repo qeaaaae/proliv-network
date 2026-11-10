@@ -171,12 +171,26 @@ async function bootstrap(): Promise<void> {
       return;
     }
     if (window.location.pathname.replace(/\/$/, "").endsWith("/unsubscribe")) {
+      const theme = computeThemeView({
+        themePreviewDraft: null,
+        themePreviewKey: params.get("theme_preview"),
+        data: DEV_MOCK.data,
+        user: DEV_MOCK.data.user || {},
+        screen: "home",
+        cfgThemesCatalog: DEV_MOCK.config.themesCatalog,
+        primaryColor: String(DEV_MOCK.config.primaryColor || "#00fe7a"),
+        userThemeModeEnabled: false,
+      });
       mount(NotificationUnsubscribeApp, {
         target,
         props: {
           request: (path: string, options: RequestInit = {}) => mockApi(path, options),
           brandTitle: String(DEV_MOCK.config.title || ""),
           logoUrl: String(DEV_MOCK.config.logoUrl || ""),
+          shellStyle: theme.shellStyle,
+          shellThemeClass: theme.shellThemeClass,
+          shellToneClass: theme.shellToneClass,
+          themeCssHref: theme.shellThemeCssHref || "",
         },
       });
       return;

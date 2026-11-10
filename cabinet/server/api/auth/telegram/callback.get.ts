@@ -174,7 +174,7 @@ export default defineEventHandler(async (event) => {
   const claims = decodeIdTokenSub(idToken)
   setSession(event, {
     id: Number(shopRes.telegram_id ?? claims.id ?? shopRes.user_id ?? 0),
-    name: claims.name || 'User',
+    name: claims.name || claims.username || 'User',
     username: claims.username,
     photoUrl: claims.photo_url,
     apiToken: shopRes.token,

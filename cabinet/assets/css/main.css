@@ -1124,6 +1124,27 @@ textarea {
   .step__actions--row {
     grid-template-columns: 1fr;
   }
+
+  /* 4 таба платформ в одну строку не влезают (~440px) и обрезают последний -
+     укладываем 2x2. Плавающая плашка меряет только X, поэтому гасим её и
+     подсвечиваем активный таб фоном (тот же --plate, что и плашка). */
+  .install-platforms {
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+
+  .install-platforms .pills__item {
+    flex: 1 1 40%;
+    min-width: 0;
+  }
+
+  .install-platforms .pills__indicator {
+    display: none;
+  }
+
+  .pills.install-platforms .pills__item.is-active {
+    background: var(--plate);
+  }
 }
 
 /* ---------- bottom nav ---------- */

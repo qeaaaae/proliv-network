@@ -101,38 +101,40 @@ function candidateLabel(user: RoleCandidate): string {
 
     <template v-if="roles">
       <p v-if="!roles.length" class="admin-note">Ролей нет.</p>
-      <table v-else class="admin-table">
-        <thead>
-          <tr>
-            <th>Пользователь</th>
-            <th>Роль</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in roles" :key="`${row.user_id}:${row.role}`">
-            <td>
-              <div class="sys-role-user">
-                <span>{{ row.email || row.minishop_id || `#${row.user_id}` }}</span>
-                <span class="admin-note">id {{ row.user_id }}{{ row.minishop_id && row.email ? ` · ${row.minishop_id}` : '' }}</span>
-              </div>
-            </td>
-            <td>
-              <AdminBadge :tone="roleTone(row.role)">{{ roleLabel(row.role) }}</AdminBadge>
-            </td>
-            <td class="sys-role-actions">
-              <button
-                class="admin-btn ghost"
-                :disabled="busy || row.user_id === meId"
-                :title="row.user_id === meId ? 'Нельзя снять роль с себя' : 'Снять роль'"
-                @click="emit('revoke', { user_id: row.user_id, role: row.role })"
-              >
-                Снять
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div v-else class="admin-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Пользователь</th>
+              <th>Роль</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in roles" :key="`${row.user_id}:${row.role}`">
+              <td>
+                <div class="sys-role-user">
+                  <span>{{ row.email || row.minishop_id || `#${row.user_id}` }}</span>
+                  <span class="admin-note">id {{ row.user_id }}{{ row.minishop_id && row.email ? ` · ${row.minishop_id}` : '' }}</span>
+                </div>
+              </td>
+              <td>
+                <AdminBadge :tone="roleTone(row.role)">{{ roleLabel(row.role) }}</AdminBadge>
+              </td>
+              <td class="sys-role-actions">
+                <button
+                  class="admin-btn ghost"
+                  :disabled="busy || row.user_id === meId"
+                  :title="row.user_id === meId ? 'Нельзя снять роль с себя' : 'Снять роль'"
+                  @click="emit('revoke', { user_id: row.user_id, role: row.role })"
+                >
+                  Снять
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <h3 class="admin-sub">Выдать роль</h3>
       <div class="sys-grant">

@@ -126,5 +126,6 @@ watch(
 .adm-users-invitee-main {
   display: grid;
   gap: 2px;
+  min-width: 0;
 }
 </style>

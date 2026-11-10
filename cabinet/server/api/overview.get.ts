@@ -35,7 +35,7 @@ export default defineEventHandler(async (event) => {
   return {
     user: {
       id: me.user?.id ?? user.id,
-      name: me.user?.first_name || user.name,
+      name: me.user?.first_name || me.user?.username || user.name,
       username: me.user?.username ?? user.username,
       photoUrl: me.user?.telegram_photo_url || user.photoUrl,
     },

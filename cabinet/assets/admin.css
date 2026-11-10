@@ -521,9 +521,11 @@
     align-items: center;
     gap: 4px 12px;
     min-width: 0;
+    max-width: none;
     border: 0;
     padding: 2px 0;
     text-align: right;
+    overflow-wrap: anywhere;
   }
   .admin-table td::before {
     content: attr(data-label);
@@ -532,6 +534,7 @@
     text-align: left;
   }
   .admin-table td > * {
+    grid-column: 2;
     min-width: 0;
     justify-self: end;
     overflow-wrap: anywhere;
@@ -556,6 +559,11 @@
   .admin-page-head .admin-row,
   .admin-pager {
     row-gap: 6px;
+  }
+  /* инпуты <16px заставляют iOS зумить страницу при фокусе (как .input в main.css) */
+  :where(.admin-shell, .adm-modal) input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']),
+  :where(.admin-shell, .adm-modal) textarea {
+    font-size: 16px;
   }
 }
 

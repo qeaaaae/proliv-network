@@ -18,9 +18,21 @@
     request?: RequestFn;
     brandTitle?: string;
     logoUrl?: string;
+    shellStyle?: string;
+    shellThemeClass?: string;
+    shellToneClass?: string;
+    themeCssHref?: string;
   };
 
-  let { request = undefined, brandTitle = "", logoUrl = "" }: Props = $props();
+  let {
+    request = undefined,
+    brandTitle = "",
+    logoUrl = "",
+    shellStyle = "",
+    shellThemeClass = "",
+    shellToneClass = "theme-dark",
+    themeCssHref = "",
+  }: Props = $props();
   const injectedConfig = (readJsonScript("webapp-config") || {}) as Record<string, unknown>;
   const injectedMessages = (readJsonScript("i18n") || {}) as Record<string, unknown>;
   const brand = $derived(
@@ -122,56 +134,62 @@
   onMount(load);
 </script>
 
-<main class="unsubscribe-page">
-  <section class="unsubscribe-shell">
-    <header class="unsubscribe-brand">
-      <img src={brand.logoUrl} alt="" />
-      <strong>{brand.title}</strong>
-    </header>
+<svelte:head>
+  {#if themeCssHref}<link rel="stylesheet" href={themeCssHref} />{/if}
+</svelte:head>
 
-    {#if loading}
-      <div class="unsubscribe-state">{text("wa_unsubscribe_loading", fallback.loading)}</div>
-    {:else if error}
-      <div class="unsubscribe-state unsubscribe-state--error">{error}</div>
-    {:else}
-      {#if email}<div class="unsubscribe-email">{email}</div>{/if}
-      <NotificationPreferencesPanel
-        {preferences}
-        emailOnly
-        disabled={saving}
-        title={text("wa_unsubscribe_title", fallback.title)}
-        description={text("wa_unsubscribe_hint", fallback.description)}
-        marketingLabel={text("wa_notification_preferences_marketing", fallback.marketing)}
-        marketingHint={text("wa_notification_preferences_marketing_hint", fallback.marketingHint)}
-        systemLabel={text("wa_notification_preferences_system", fallback.system)}
-        systemHint={text("wa_notification_preferences_system_hint", fallback.systemHint)}
-        emailLabel={text("wa_notification_preferences_email", fallback.email)}
-        telegramLabel="Telegram"
-        note={text("wa_notification_preferences_direct_note", fallback.note)}
-        onChange={(next) => {
-          preferences = next;
-          success = false;
-        }}
-      />
-      <Button size="lg" disabled={saving} onclick={save}>
-        {text("wa_unsubscribe_confirm", fallback.confirm)}
-      </Button>
-      {#if success}
-        <div class="unsubscribe-state unsubscribe-state--success">
-          {text("wa_unsubscribe_success", fallback.success, { email })}
-        </div>
+<div class="app-shell {shellToneClass} {shellThemeClass}" style={shellStyle}>
+  <main class="unsubscribe-page">
+    <section class="unsubscribe-shell">
+      <header class="unsubscribe-brand">
+        <img src={brand.logoUrl} alt="" />
+        <strong>{brand.title}</strong>
+      </header>
+
+      {#if loading}
+        <div class="unsubscribe-state">{text("wa_unsubscribe_loading", fallback.loading)}</div>
+      {:else if error}
+        <div class="unsubscribe-state unsubscribe-state--error">{error}</div>
+      {:else}
+        {#if email}<div class="unsubscribe-email">{email}</div>{/if}
+        <NotificationPreferencesPanel
+          {preferences}
+          emailOnly
+          disabled={saving}
+          title={text("wa_unsubscribe_title", fallback.title)}
+          description={text("wa_unsubscribe_hint", fallback.description)}
+          marketingLabel={text("wa_notification_preferences_marketing", fallback.marketing)}
+          marketingHint={text("wa_notification_preferences_marketing_hint", fallback.marketingHint)}
+          systemLabel={text("wa_notification_preferences_system", fallback.system)}
+          systemHint={text("wa_notification_preferences_system_hint", fallback.systemHint)}
+          emailLabel={text("wa_notification_preferences_email", fallback.email)}
+          telegramLabel="Telegram"
+          note={text("wa_notification_preferences_direct_note", fallback.note)}
+          onChange={(next) => {
+            preferences = next;
+            success = false;
+          }}
+        />
+        <Button size="lg" disabled={saving} onclick={save}>
+          {text("wa_unsubscribe_confirm", fallback.confirm)}
+        </Button>
+        {#if success}
+          <div class="unsubscribe-state unsubscribe-state--success">
+            {text("wa_unsubscribe_success", fallback.success, { email })}
+          </div>
+        {/if}
       {/if}
-    {/if}
-  </section>
-</main>
+    </section>
+  </main>
+</div>
 
 <style>
   .unsubscribe-page {
-    min-height: 100vh;
+    min-height: 100dvh;
     display: grid;
     place-items: center;
     padding: 28px 16px;
-    background: var(--background, #070a0e);
+    background: var(--bg, #03070b);
   }
 
   .unsubscribe-shell {
@@ -185,14 +203,14 @@
     align-items: center;
     justify-content: center;
     gap: 10px;
-    color: var(--foreground, #f4f7fa);
+    color: var(--text, #f2f7f4);
   }
 
   .unsubscribe-brand img {
     width: 38px;
     height: 38px;
     object-fit: contain;
-    border-radius: var(--radius-control);
+    border-radius: var(--radius-control, var(--radius, 8px));
   }
 
   .unsubscribe-brand strong {
@@ -202,27 +220,30 @@
   .unsubscribe-email {
     justify-self: center;
     padding: 7px 11px;
-    border: 1px solid var(--border, #26303b);
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
     border-radius: 999px;
-    color: var(--muted-foreground, #9aa3b2);
+    color: var(--muted, #a9b4b0);
     font-size: 12px;
   }
 
   .unsubscribe-state {
     padding: 14px 16px;
-    border: 1px solid var(--border, #26303b);
-    border-radius: var(--radius-card);
-    color: var(--muted-foreground, #9aa3b2);
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+    border-radius: var(--radius-card, var(--radius, 8px));
+    color: var(--muted, #a9b4b0);
     text-align: center;
   }
 
   .unsubscribe-state--success {
-    border-color: color-mix(in srgb, var(--primary, #00fe7a) 55%, transparent);
-    color: var(--primary, #00fe7a);
+    border-color: var(
+      --success-border,
+      color-mix(in srgb, var(--accent, #00fe7a) 55%, transparent)
+    );
+    color: var(--success-text, var(--accent, #00fe7a));
   }
 
   .unsubscribe-state--error {
-    border-color: #6f3038;
-    color: #ff8793;
+    border-color: var(--danger-border, #6f3038);
+    color: var(--danger-text, #ff8793);
   }
 </style>

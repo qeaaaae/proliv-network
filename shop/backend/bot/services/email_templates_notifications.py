@@ -319,7 +319,7 @@ def render_subscription_lifecycle_notification(
     message_html = (
         f'<div style="margin:0 0 16px 0;background:{_BG};border:1px solid {_BORDER};'
         f"border-radius:14px;padding:14px 16px;font-size:14px;line-height:1.55;color:{_TEXT};"
-        f'white-space:pre-wrap;">{html.escape(message_text or "")}</div>'
+        f'white-space:pre-wrap;">{_telegram_html_to_email_html(message_text or "")}</div>'
     )
     body_parts = [_info_rows_html(rows), message_html]
     if safe_dashboard_url:
@@ -336,7 +336,7 @@ def render_subscription_lifecycle_notification(
         accent=accent,
     )
 
-    text_lines = [subject, "", message_text]
+    text_lines = [subject, "", _telegram_html_to_text(message_text)]
     if safe_dashboard_url:
         text_lines.extend(
             [

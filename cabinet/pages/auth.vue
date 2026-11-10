@@ -59,10 +59,11 @@ function onTelegramOAuth() {
   window.location.href = `/api/auth/telegram/start${params.size ? `?${params}` : ''}`
 }
 
-// ---------- Email-вход: пароль или одноразовый код из письма ----------
+// ---------- Email-вход: одноразовый код из письма или пароль ----------
 // Регистрации отдельно нет: кодом из письма можно войти и без аккаунта -
-// бэкенд создаст его на первом verify. Пароль задаётся потом в настройках.
-const emailMode = ref<'password' | 'code'>('password')
+// бэкенд создаст его на первом verify. Поэтому код - основной режим,
+// пароль задаётся потом в настройках.
+const emailMode = ref<'code' | 'password'>('code')
 const email = ref('')
 const emailPassword = ref('')
 const showPassword = ref(false)
@@ -234,19 +235,19 @@ onMounted(async () => {
         <div class="auth-divider"><span>или по почте</span></div>
 
         <div class="auth-tabs">
-          <span class="auth-tabs__pill" :class="{ 'is-right': emailMode === 'code' }" aria-hidden="true" />
-          <button
-            class="auth-tab"
-            type="button"
-            :class="{ 'is-active': emailMode === 'password' }"
-            @click="emailMode = 'password'"
-          >Пароль</button>
+          <span class="auth-tabs__pill" :class="{ 'is-right': emailMode === 'password' }" aria-hidden="true" />
           <button
             class="auth-tab"
             type="button"
             :class="{ 'is-active': emailMode === 'code' }"
             @click="emailMode = 'code'"
           >Код из письма</button>
+          <button
+            class="auth-tab"
+            type="button"
+            :class="{ 'is-active': emailMode === 'password' }"
+            @click="emailMode = 'password'"
+          >Пароль</button>
         </div>
 
         <form class="stack" style="gap: 12px; text-align: left" @submit.prevent="submitEmail">
@@ -262,7 +263,47 @@ onMounted(async () => {
             />
           </div>
 
-          <template v-if="emailMode === 'password'">
+          <template v-if="emailMode === 'code'">
+            <div v-if="codeSent" class="field">
+              <span>Код из письма</span>
+              <input
+                v-model="emailCode"
+                class="input"
+                inputmode="numeric"
+                autocomplete="one-time-code"
+                maxlength="6"
+                placeholder="123456"
+              />
+            </div>
+
+            <p v-if="!codeSent" class="muted" style="font-size: 12px; line-height: 1.45">
+              Аккаунта ещё нет? Он создастся сам при первом входе -
+              отдельная регистрация не нужна.
+            </p>
+
+            <button
+              class="btn btn--primary btn--block"
+              type="submit"
+              :disabled="
+                emailPending
+                || !emailValid
+                || (codeSent ? !emailCode.trim() : resendIn > 0)
+              "
+            >
+              <LoaderCircle v-if="emailPending" :size="16" class="spinner" />
+              <Mail v-else :size="16" />
+              {{ codeSent ? 'Войти' : 'Получить код' }}
+            </button>
+
+            <div v-if="codeSent" class="auth-forgot" style="justify-content: space-between">
+              <button type="button" class="link" :disabled="resendIn > 0" @click="requestEmailCode">
+                Отправить код ещё раз{{ resendIn ? ` (${resendIn} c)` : '' }}
+              </button>
+              <button type="button" class="link" @click="resetEmailCode">Сменить почту</button>
+            </div>
+          </template>
+
+          <template v-else>
             <div class="field">
               <span>Пароль</span>
               <div class="input-eye">
@@ -299,41 +340,6 @@ onMounted(async () => {
               <Mail v-else :size="16" />
               Войти по почте
             </button>
-          </template>
-
-          <template v-else>
-            <div v-if="codeSent" class="field">
-              <span>Код из письма</span>
-              <input
-                v-model="emailCode"
-                class="input"
-                inputmode="numeric"
-                autocomplete="one-time-code"
-                maxlength="6"
-                placeholder="123456"
-              />
-            </div>
-
-            <button
-              class="btn btn--primary btn--block"
-              type="submit"
-              :disabled="
-                emailPending
-                || !emailValid
-                || (codeSent ? !emailCode.trim() : resendIn > 0)
-              "
-            >
-              <LoaderCircle v-if="emailPending" :size="16" class="spinner" />
-              <Mail v-else :size="16" />
-              {{ codeSent ? 'Войти' : 'Получить код' }}
-            </button>
-
-            <div v-if="codeSent" class="auth-forgot" style="justify-content: space-between">
-              <button type="button" class="link" :disabled="resendIn > 0" @click="requestEmailCode">
-                Отправить код ещё раз{{ resendIn ? ` (${resendIn} c)` : '' }}
-              </button>
-              <button type="button" class="link" @click="resetEmailCode">Сменить почту</button>
-            </div>
           </template>
         </form>
 

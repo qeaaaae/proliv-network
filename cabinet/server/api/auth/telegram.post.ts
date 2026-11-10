@@ -43,7 +43,7 @@ export default defineEventHandler(async (event) => {
     const claims = decodeIdToken(idToken)
     setSession(event, {
       id: Number(res.telegram_id ?? claims.id ?? res.user_id ?? 0),
-      name: claims.name || 'User',
+      name: claims.name || claims.username || 'User',
       username: claims.username,
       photoUrl: claims.photo_url,
       apiToken: res.token,
@@ -62,7 +62,7 @@ export default defineEventHandler(async (event) => {
     const tgUser = parseInitDataUser(body.initData)
     setSession(event, {
       id: Number(res.telegram_id ?? tgUser.id ?? res.user_id ?? 0),
-      name: tgUser.name || 'User',
+      name: tgUser.name || tgUser.username || 'User',
       username: tgUser.username,
       photoUrl: tgUser.photo_url,
       apiToken: res.token,
@@ -79,7 +79,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 401, statusMessage: 'Invalid Telegram signature' })
   }
 
-  const name = [body.first_name, body.last_name].filter(Boolean).join(' ') || 'User'
+  const name = [body.first_name, body.last_name].filter(Boolean).join(' ') || body.username || 'User'
 
   if (!backend) {
     setSession(event, {

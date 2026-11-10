@@ -1,7 +1,7 @@
 import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import urlsplit
 
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import SendMessage
@@ -162,7 +162,7 @@ def test_send_stage_records_telegram_and_email_channel_keys(monkeypatch):
     assert bot.messages == [
         {
             "chat_id": 555,
-            "text": "Hi Ada, expires on 2026-06-01",
+            "text": "Hi Ada, expires on 01.06.2026",
             "reply_markup": "markup",
         }
     ]
@@ -454,7 +454,7 @@ def test_email_only_user_gets_neutral_name_direct_copy_and_renewal_login_link(mo
     assert delivery.email_sent is True
     assert bot.messages == []
     content = email_service.messages[0]["content"]
-    assert "Hi dear user, expires on 2026-06-01" in content.text
+    assert "Hi dear user, expires on 01.06.2026" in content.text
     assert "Hi user@example.test" not in content.text
     assert "User -8758169927032035" not in content.text
     assert "Direct email notice" in content.html
@@ -465,14 +465,10 @@ def test_email_only_user_gets_neutral_name_direct_copy_and_renewal_login_link(mo
     )
     url = dashboard_line.removeprefix("Dashboard: ")
     parsed = urlsplit(url)
-    query = parse_qs(parsed.query)
     assert parsed.scheme == "https"
     assert parsed.netloc == "app.example.test"
-    assert query["login"] == ["email_code"]
-    assert query["login_email"] == ["user@example.test"]
-    assert query["after_login"] == ["renew"]
-    assert query["renew"] == ["1"]
-    assert query["renew_tariff"] == ["standard"]
+    assert parsed.path == "/purchases"
+    assert parsed.query == ""
     assert recorded == ["expired:email"]
 
 
@@ -520,5 +516,7 @@ def test_trial_subscription_renewal_link_omits_tariff_for_default_fallback(monke
     dashboard_line = next(
         line for line in content.text.splitlines() if line.startswith("Dashboard: ")
     )
-    query = parse_qs(urlsplit(dashboard_line.removeprefix("Dashboard: ")).query)
-    assert "renew_tariff" not in query
+    parsed = urlsplit(dashboard_line.removeprefix("Dashboard: "))
+    assert parsed.netloc == "app.example.test"
+    assert parsed.path == "/purchases"
+    assert parsed.query == ""

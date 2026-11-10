@@ -91,30 +91,32 @@ const queueRows = computed(() => {
 
     <h3 class="admin-sub">Очередь сообщений бота</h3>
     <p v-if="!queue" class="admin-note">Данные очереди недоступны.</p>
-    <table v-else class="admin-table">
-      <thead>
-        <tr>
-          <th>Очередь</th>
-          <th>В очереди</th>
-          <th>Обработка</th>
-          <th>Отправлено</th>
-          <th>Ошибок</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="row in queueRows" :key="row.label">
-          <td>{{ row.label }}</td>
-          <td>{{ num(row.size) }}</td>
-          <td>
-            <AdminBadge :tone="row.processing ? 'success' : 'muted'">
-              {{ row.processing ? 'Активна' : 'Ожидает' }}
-            </AdminBadge>
-          </td>
-          <td>{{ num(row.sent) }}</td>
-          <td>{{ num(row.failed) }}</td>
-        </tr>
-      </tbody>
-    </table>
+    <div v-else class="admin-table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>Очередь</th>
+            <th>В очереди</th>
+            <th>Обработка</th>
+            <th>Отправлено</th>
+            <th>Ошибок</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in queueRows" :key="row.label">
+            <td>{{ row.label }}</td>
+            <td>{{ num(row.size) }}</td>
+            <td>
+              <AdminBadge :tone="row.processing ? 'success' : 'muted'">
+                {{ row.processing ? 'Активна' : 'Ожидает' }}
+              </AdminBadge>
+            </td>
+            <td>{{ num(row.sent) }}</td>
+            <td>{{ num(row.failed) }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </section>
 </template>
 

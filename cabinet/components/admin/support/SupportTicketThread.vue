@@ -406,7 +406,7 @@ watch(() => props.ticketId, () => {
 }
 .snapshot-grid {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 4px 14px;
   margin: 10px 0 0;
   font-size: 13px;
@@ -416,6 +416,8 @@ watch(() => props.ticketId, () => {
 }
 .snapshot-grid dd {
   margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .meta-row {
   align-items: flex-end;

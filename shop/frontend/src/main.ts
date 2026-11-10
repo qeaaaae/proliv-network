@@ -146,7 +146,26 @@ if (target) {
         },
       });
     } else if (window.location.pathname.replace(/\/$/, "").endsWith("/unsubscribe")) {
-      mount(NotificationUnsubscribeApp, { target });
+      const config = jsonScriptRecord("webapp-config");
+      const theme = computeThemeView({
+        themePreviewDraft: null,
+        themePreviewKey: null,
+        data: null,
+        user: {},
+        screen: "home",
+        cfgThemesCatalog: (config.themesCatalog as Record<string, unknown>) || null,
+        primaryColor: String(config.primaryColor || "#00fe7a"),
+        userThemeModeEnabled: false,
+      });
+      mount(NotificationUnsubscribeApp, {
+        target,
+        props: {
+          shellStyle: theme.shellStyle,
+          shellThemeClass: theme.shellThemeClass,
+          shellToneClass: theme.shellToneClass,
+          themeCssHref: theme.shellThemeCssHref || "",
+        },
+      });
     } else {
       mount(App, { target });
     }

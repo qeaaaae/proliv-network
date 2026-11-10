@@ -502,20 +502,22 @@ watch(() => props.partnerId, load, { immediate: true })
 
     <div v-if="partner.balances && partner.balances.length" class="admin-card-lite">
       <h3>Балансы</h3>
-      <table class="admin-table">
-        <thead>
-          <tr><th>Валюта</th><th>Доступно</th><th>Ожидает</th><th>Резерв</th><th>Всего заработано</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="b in partner.balances" :key="b.currency">
-            <td>{{ b.currency }}</td>
-            <td>{{ fmtMoney(b.available_minor, b.currency_scale, b.currency) }}</td>
-            <td>{{ fmtMoney(b.pending_minor, b.currency_scale, b.currency) }}</td>
-            <td>{{ fmtMoney(b.reserved_minor, b.currency_scale, b.currency) }}</td>
-            <td>{{ fmtMoney(b.lifetime_earned_minor, b.currency_scale, b.currency) }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="admin-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr><th>Валюта</th><th>Доступно</th><th>Ожидает</th><th>Резерв</th><th>Всего заработано</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="b in partner.balances" :key="b.currency">
+              <td>{{ b.currency }}</td>
+              <td>{{ fmtMoney(b.available_minor, b.currency_scale, b.currency) }}</td>
+              <td>{{ fmtMoney(b.pending_minor, b.currency_scale, b.currency) }}</td>
+              <td>{{ fmtMoney(b.reserved_minor, b.currency_scale, b.currency) }}</td>
+              <td>{{ fmtMoney(b.lifetime_earned_minor, b.currency_scale, b.currency) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <div v-if="partner.links && (partner.links.telegram || partner.links.web)" class="admin-card-lite">
@@ -580,99 +582,109 @@ watch(() => props.partnerId, load, { immediate: true })
 
     <div class="admin-card-lite">
       <h3>Клиенты <small v-if="detail">({{ detail.clients_total }})</small></h3>
-      <table v-if="detail?.clients.length" class="admin-table">
-        <thead>
-          <tr><th>Клиент</th><th>Источник</th><th>Дата</th><th>Платежей</th><th>Оборот</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="c in detail.clients.slice(0, TABLE_LIMIT)" :key="c.partner_client_id">
-            <td>{{ c.label }} <small class="admin-note">({{ c.public_client_id }})</small></td>
-            <td>{{ c.source }}</td>
-            <td>{{ fmtDate(c.attributed_at) }}</td>
-            <td>{{ c.payments_count }}</td>
-            <td>{{ fmtMoney(c.gross_minor, c.currency_scale, c.currency || 'RUB') }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div v-if="detail?.clients.length" class="admin-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr><th>Клиент</th><th>Источник</th><th>Дата</th><th>Платежей</th><th>Оборот</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="c in detail.clients.slice(0, TABLE_LIMIT)" :key="c.partner_client_id">
+              <td>{{ c.label }} <small class="admin-note">({{ c.public_client_id }})</small></td>
+              <td>{{ c.source }}</td>
+              <td>{{ fmtDate(c.attributed_at) }}</td>
+              <td>{{ c.payments_count }}</td>
+              <td>{{ fmtMoney(c.gross_minor, c.currency_scale, c.currency || 'RUB') }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       <p v-else class="admin-note">Клиентов пока нет</p>
     </div>
 
     <div class="admin-card-lite">
       <h3>Комиссии <small v-if="detail">({{ detail.commissions_total }})</small></h3>
-      <table v-if="detail?.commissions.length" class="admin-table">
-        <thead>
-          <tr><th>Клиент</th><th>Сумма</th><th>Комиссия</th><th>Ставка</th><th>Статус</th><th>Оплата</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="cm in detail.commissions.slice(0, TABLE_LIMIT)" :key="cm.commission_id">
-            <td>{{ cm.client_label }}</td>
-            <td>{{ fmtMoney(cm.gross_amount_minor, cm.currency_scale, cm.currency) }}</td>
-            <td>{{ fmtMoney(cm.commission_amount_minor, cm.currency_scale, cm.currency) }}</td>
-            <td>{{ pct(cm.commission_bps) }}</td>
-            <td>{{ commissionLabels[cm.status] || cm.status }}</td>
-            <td>{{ fmtDate(cm.source_paid_at) }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div v-if="detail?.commissions.length" class="admin-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr><th>Клиент</th><th>Сумма</th><th>Комиссия</th><th>Ставка</th><th>Статус</th><th>Оплата</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="cm in detail.commissions.slice(0, TABLE_LIMIT)" :key="cm.commission_id">
+              <td>{{ cm.client_label }}</td>
+              <td>{{ fmtMoney(cm.gross_amount_minor, cm.currency_scale, cm.currency) }}</td>
+              <td>{{ fmtMoney(cm.commission_amount_minor, cm.currency_scale, cm.currency) }}</td>
+              <td>{{ pct(cm.commission_bps) }}</td>
+              <td>{{ commissionLabels[cm.status] || cm.status }}</td>
+              <td>{{ fmtDate(cm.source_paid_at) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       <p v-else class="admin-note">Комиссий пока нет</p>
     </div>
 
     <div class="admin-card-lite">
       <h3>Выплаты <small v-if="detail">({{ detail.withdrawals_total }})</small></h3>
-      <table v-if="detail?.withdrawals.length" class="admin-table">
-        <thead>
-          <tr><th>Сумма</th><th>Метод</th><th>Реквизиты</th><th>Статус</th><th>Запрошена</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="w in detail.withdrawals.slice(0, TABLE_LIMIT)" :key="w.withdrawal_id">
-            <td>{{ fmtMoney(w.amount_minor, w.currency_scale, w.currency) }}</td>
-            <td>{{ w.method_id }}</td>
-            <td>{{ w.masked_requisites }}</td>
-            <td>
-              <AdminBadge :tone="withdrawalTones[w.status] || 'default'">
-                {{ withdrawalLabels[w.status] || w.status }}
-              </AdminBadge>
-            </td>
-            <td>{{ fmtDate(w.requested_at) }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div v-if="detail?.withdrawals.length" class="admin-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr><th>Сумма</th><th>Метод</th><th>Реквизиты</th><th>Статус</th><th>Запрошена</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="w in detail.withdrawals.slice(0, TABLE_LIMIT)" :key="w.withdrawal_id">
+              <td>{{ fmtMoney(w.amount_minor, w.currency_scale, w.currency) }}</td>
+              <td>{{ w.method_id }}</td>
+              <td>{{ w.masked_requisites }}</td>
+              <td>
+                <AdminBadge :tone="withdrawalTones[w.status] || 'default'">
+                  {{ withdrawalLabels[w.status] || w.status }}
+                </AdminBadge>
+              </td>
+              <td>{{ fmtDate(w.requested_at) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       <p v-else class="admin-note">Выплат пока нет</p>
     </div>
 
     <div class="admin-card-lite">
       <h3>Журнал баланса</h3>
-      <table v-if="detail?.ledger.length" class="admin-table">
-        <thead>
-          <tr><th>Дата</th><th>Тип</th><th>Сумма</th><th>Остаток</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="e in detail.ledger.slice(0, TABLE_LIMIT)" :key="e.ledger_entry_id">
-            <td>{{ fmtDate(e.created_at) }}</td>
-            <td>{{ ledgerKindLabels[e.kind] || e.kind }}<template v-if="e.state !== 'posted'"> ({{ e.state }})</template></td>
-            <td>{{ fmtMoney(e.amount_minor, e.currency_scale, e.currency) }}</td>
-            <td>{{ fmtMoney(e.balance_after_minor, e.currency_scale, e.currency) }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div v-if="detail?.ledger.length" class="admin-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr><th>Дата</th><th>Тип</th><th>Сумма</th><th>Остаток</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="e in detail.ledger.slice(0, TABLE_LIMIT)" :key="e.ledger_entry_id">
+              <td>{{ fmtDate(e.created_at) }}</td>
+              <td>{{ ledgerKindLabels[e.kind] || e.kind }}<template v-if="e.state !== 'posted'"> ({{ e.state }})</template></td>
+              <td>{{ fmtMoney(e.amount_minor, e.currency_scale, e.currency) }}</td>
+              <td>{{ fmtMoney(e.balance_after_minor, e.currency_scale, e.currency) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       <p v-else class="admin-note">Записей нет</p>
     </div>
 
     <div class="admin-card-lite">
       <h3>Аудит</h3>
-      <table v-if="detail?.audit.length" class="admin-table">
-        <thead>
-          <tr><th>Дата</th><th>Событие</th><th>Актор</th><th>Причина</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="a in detail.audit.slice(0, TABLE_LIMIT)" :key="a.audit_event_id">
-            <td>{{ fmtDate(a.created_at) }}</td>
-            <td>{{ auditLabels[a.event_type] || a.event_type }}</td>
-            <td>{{ a.actor_type }}{{ a.actor_user_id ? ` #${a.actor_user_id}` : '' }}</td>
-            <td>{{ a.reason || '—' }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div v-if="detail?.audit.length" class="admin-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr><th>Дата</th><th>Событие</th><th>Актор</th><th>Причина</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="a in detail.audit.slice(0, TABLE_LIMIT)" :key="a.audit_event_id">
+              <td>{{ fmtDate(a.created_at) }}</td>
+              <td>{{ auditLabels[a.event_type] || a.event_type }}</td>
+              <td>{{ a.actor_type }}{{ a.actor_user_id ? ` #${a.actor_user_id}` : '' }}</td>
+              <td>{{ a.reason || '—' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
       <p v-else class="admin-note">Событий нет</p>
     </div>
   </section>

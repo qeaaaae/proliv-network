@@ -88,7 +88,7 @@ export async function setSessionFromShopToken(
 
   setSession(event, {
     id: Number(res.telegram_id ?? me?.user?.telegram_id ?? res.user_id ?? 0),
-    name: me?.user?.first_name || fallbackName,
+    name: me?.user?.first_name || me?.user?.username || me?.user?.email?.split('@')[0] || fallbackName,
     username: me?.user?.username ?? undefined,
     photoUrl: me?.user?.telegram_photo_url || undefined,
     apiToken: res.token,

@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
@@ -299,7 +299,7 @@ class SubscriptionLifecycleNotificationService:
                 notification_key=stage.key,
                 message_text=message_text,
                 end_date_text=end_date_text,
-                dashboard_url=self._renewal_dashboard_url(recipient, sub),
+                dashboard_url=self._renewal_dashboard_url(),
                 mirrored_from_telegram=telegram_sent,
                 days_left=stage.days_left,
                 hours_before=stage.hours_before,
@@ -403,38 +403,14 @@ class SubscriptionLifecycleNotificationService:
             return hd.quote(fallback)
         return cls._user_display_name(user, fallback=fallback)
 
-    def _renewal_dashboard_url(self, recipient_email: str, sub: Subscription) -> str | None:
+    def _renewal_dashboard_url(self) -> str | None:
         base_url = (self.settings.SUBSCRIPTION_MINI_APP_URL or "").strip()
         if not base_url:
             return None
         parsed = urlsplit(base_url)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             return None
-
-        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-        query.update(
-            {
-                "login": "email_code",
-                "login_email": recipient_email,
-                "after_login": "renew",
-                "renew": "1",
-            }
-        )
-        tariff_key = self._renewal_tariff_key(sub)
-        if tariff_key:
-            query["renew_tariff"] = tariff_key
-        else:
-            query.pop("renew_tariff", None)
-
-        return urlunsplit(
-            (
-                parsed.scheme,
-                parsed.netloc,
-                parsed.path or "/",
-                urlencode(query),
-                parsed.fragment,
-            )
-        )
+        return urlunsplit((parsed.scheme, parsed.netloc, "/purchases", "", ""))
 
     @staticmethod
     def _renewal_tariff_key(sub: Subscription) -> str:
