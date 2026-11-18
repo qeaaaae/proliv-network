@@ -14,6 +14,7 @@ from bot.services.partner_checkout_balance import (
     PartnerCheckoutBalanceAllocation,
     PartnerCheckoutBalanceService,
 )
+from bot.services.partner_common import PartnerError
 from bot.services.partner_program_worker import PartnerProgramWorker
 from bot.services.user_balance_service import UserBalanceService
 from config.settings import Settings
@@ -38,6 +39,11 @@ class PartnerCheckoutBalanceQuoteTests(IsolatedAsyncioTestCase):
             patch(
                 "bot.services.partner_checkout_balance.partner_dal.get_profile_by_user_id",
                 AsyncMock(return_value=SimpleNamespace(partner_id=7, status="active")),
+            ),
+            patch(
+                "bot.services.partner_checkout_balance.referral_payment_dal."
+                "has_monthly_subscription_purchase",
+                AsyncMock(return_value=True),
             ),
             patch(
                 "bot.services.partner_checkout_balance.partner_dal.balance_minor",
@@ -76,6 +82,11 @@ class PartnerCheckoutBalanceQuoteTests(IsolatedAsyncioTestCase):
                 AsyncMock(return_value=SimpleNamespace(partner_id=7, status="active")),
             ),
             patch(
+                "bot.services.partner_checkout_balance.referral_payment_dal."
+                "has_monthly_subscription_purchase",
+                AsyncMock(return_value=True),
+            ),
+            patch(
                 "bot.services.partner_checkout_balance.partner_dal.balance_minor",
                 AsyncMock(return_value=20000),
             ),
@@ -90,6 +101,41 @@ class PartnerCheckoutBalanceQuoteTests(IsolatedAsyncioTestCase):
 
         self.assertEqual(allocation.applied_minor, 19000)
         self.assertEqual(allocation.external_minor, 0)
+
+    async def test_quote_is_blocked_until_first_monthly_purchase(self) -> None:
+        service = PartnerCheckoutBalanceService(
+            cast(
+                Settings,
+                SimpleNamespace(
+                    partner_settings=SimpleNamespace(
+                        enabled=True,
+                        balance_payment_enabled=True,
+                    )
+                ),
+            )
+        )
+        with (
+            patch(
+                "bot.services.partner_checkout_balance.partner_dal.get_profile_by_user_id",
+                AsyncMock(return_value=SimpleNamespace(partner_id=7, status="active")),
+            ),
+            patch(
+                "bot.services.partner_checkout_balance.referral_payment_dal."
+                "has_monthly_subscription_purchase",
+                AsyncMock(return_value=False),
+            ),
+            patch(
+                "bot.services.partner_checkout_balance.partner_dal.balance_minor",
+                AsyncMock(return_value=20000),
+            ),
+            self.assertRaisesRegex(PartnerError, "balance_spend_requires_purchase"),
+        ):
+            await service.quote(
+                cast(AsyncSession, object()),
+                user_id=42,
+                currency="RUB",
+                checkout_total=190,
+            )
 
 
 class PartnerCheckoutBalanceLifecycleTests(IsolatedAsyncioTestCase):

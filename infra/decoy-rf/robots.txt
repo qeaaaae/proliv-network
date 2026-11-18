@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+Disallow: /media/
+Sitemap: http://48.102.213.215/sitemap.xml

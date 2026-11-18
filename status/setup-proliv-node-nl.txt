@@ -1,0 +1,39 @@
+﻿--- rsyslog logrotate ---
+3:	rotate 7
+9:	postrotate
+10:		/usr/lib/rsyslog/rsyslog-rotate
+27:	rotate 2
+28:	maxsize 300M
+35:	postrotate
+--- nginx logrotate ---
+4:	rotate 5
+10:	prerotate
+11:		if [ -d /etc/logrotate.d/httpd-prerotate ]; then \
+12:			run-parts /etc/logrotate.d/httpd-prerotate; \
+--- cron ---
+# ProlivVPN weekly cleanup - Sundays 04:30 local time.
+# Logs to /var/log/proliv-cleanup.log.
+30 4 * * 0 root /usr/local/sbin/proliv-cleanup.sh
+/dev/vda2       9.8G  4.4G  4.9G  48% /
+Vacuuming done, freed 0B of archived journals from /var/log/journal.
+Deleted archived journal /var/log/journal/b27a569800ebf40ac17fc656ed469eb8/system@c340f20fa3014a059a1d1198b875d698-000000000002db4d-00065fe7da31f27b.journal (56.0M).
+Deleted archived journal /var/log/journal/b27a569800ebf40ac17fc656ed469eb8/system@c340f20fa3014a059a1d1198b875d698-000000000003a7bd-0006600020301f53.journal (24.0M).
+Deleted archived journal /var/log/journal/b27a569800ebf40ac17fc656ed469eb8/system@c340f20fa3014a059a1d1198b875d698-000000000003e9ce-0006600d4ba90af0.journal (24.0M).
+Vacuuming done, freed 104.0M of archived journals from /var/log/journal/b27a569800ebf40ac17fc656ed469eb8.
+Vacuuming done, freed 0B of archived journals from /run/log/journal.
+Reading package lists...
+Building dependency tree...
+Reading state information...
+0 upgraded, 0 newly installed, 0 to remove and 8 not upgraded.
+Total reclaimed space: 0B
+Total reclaimed space: 0B
+Total reclaimed space: 0B
+Total reclaimed space: 0B
+Flag --keep-storage has been deprecated, keep-storage flag has been changed to max-storage
+Total:	0B
+----- df after cleanup -----
+/dev/vda2       9.8G  4.3G  5.0G  47% /
+===== 2026-11-15T15:36:45+00:00 cleanup done =====
+--- purging rotated logs >30M ---
+/dev/vda2       9.8G  4.3G  5.0G  47% /
+SETUP-DONE vm233204.hosted-by.qwins.co

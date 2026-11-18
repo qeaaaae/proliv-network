@@ -153,7 +153,6 @@ async function activateTrial() {
 <template>
   <div>
     <div class="page-head">
-      <div class="page-kicker">Личный кабинет</div>
       <h1>Добро пожаловать{{ user?.name ? `, ${user.name}` : '' }}</h1>
     </div>
 
@@ -235,17 +234,17 @@ async function activateTrial() {
             </div>
           </div>
 
-          <div style="display: flex; gap: 8px; flex-wrap: wrap">
-            <NuxtLink to="/install" class="btn btn--primary">
+          <div style="display: flex; gap: 8px">
+            <NuxtLink to="/install" class="btn btn--primary" style="flex: 2">
               <Plug :size="16" />
               Подключиться
             </NuxtLink>
-            <button class="btn btn--ghost" @click="showQr">
+            <button class="btn btn--ghost" style="flex: 1" @click="showQr">
               <QrCode :size="16" />
               QR
             </button>
-            <NuxtLink to="/purchases" class="btn btn--ghost">Продлить</NuxtLink>
           </div>
+          <NuxtLink to="/purchases" class="btn btn--ghost btn--block">Продлить</NuxtLink>
         </div>
 
         <!-- Устройства -->

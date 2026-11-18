@@ -14,6 +14,7 @@ interface TicketListItem {
 
 const { data: tickets, status, refresh } = useFetch<TicketListItem[]>('/api/tickets', {
   lazy: true,
+  getCachedData: () => undefined,
 })
 
 const formOpen = ref(false)
@@ -44,7 +45,6 @@ async function createTicket() {
   <div>
     <div class="page-head" style="display: flex; align-items: flex-end; justify-content: space-between; gap: 12px">
       <div>
-        <div class="page-kicker">Помощь</div>
         <h1>Поддержка</h1>
       </div>
       <button v-if="tickets?.length" class="btn btn--ghost btn--sm" @click="formOpen = !formOpen">

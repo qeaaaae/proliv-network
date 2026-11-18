@@ -72,3 +72,36 @@ async def count_user_succeeded_payments(
         stmt = payment_count
     result = await session.execute(stmt)
     return result.scalar() or 0
+
+
+# Vendored: трата бонусного и партнёрского баланса разблокируется первой
+# покупкой подписки от месяца. Баланс при этом копится, просто не тратится.
+BALANCE_SPEND_MIN_PERIOD_DAYS = 28
+
+
+async def has_monthly_subscription_purchase(
+    session: AsyncSession,
+    user_id: int,
+) -> bool:
+    """True once the user has paid for a subscription of a month or longer."""
+    stmt = (
+        select(func.count(Payment.payment_id))
+        .where(
+            Payment.user_id == user_id,
+            Payment.status == "succeeded",
+            Payment.amount > 0,
+            or_(
+                Payment.sale_mode == "subscription",
+                Payment.sale_mode.like("subscription@%"),
+                Payment.sale_mode.like("subscription|%"),
+            ),
+            ~Payment.sale_mode.like("%|gift"),
+            ~Payment.sale_mode.like("%|gift|%"),
+            or_(
+                Payment.subscription_duration_months >= 1,
+                Payment.subscription_duration_days >= BALANCE_SPEND_MIN_PERIOD_DAYS,
+            ),
+        )
+        .limit(1)
+    )
+    return bool((await session.scalar(stmt)) or 0)

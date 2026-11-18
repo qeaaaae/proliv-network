@@ -308,7 +308,7 @@ class NotificationSupportMixin(NotificationUserContextMixin):
                         "support_user_card_button",
                         "User card",
                     ),
-                    callback_data=f"admin_user_card_from_list:{user.user_id}:0",
+                    callback_data=f"admin_user_card_from_list:{user.user_id}:0:{ticket.ticket_id}",
                 )
             )
             rows.append(profile_row)

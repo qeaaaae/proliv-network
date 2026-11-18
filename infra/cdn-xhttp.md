@@ -25,8 +25,21 @@
 - Харденинг РФ по эталону нод: ufw (443 + 80 + 22 limit + 40 сканер-банов),
   sshd key-only, ping off, bbr/fq/tfo. Backup-ключ панели добавлен
   (nodecheck).
-- **Декой на РФ (2026-11-10):** сайт-маскировка ООО «СтанкоПрецизион»
-  (ЧПУ-станки, 4 страницы, `/var/www/site`, сиды `infra/decoy-rf/`).
+- **Декой на РФ (2026-11-10, расширен 2026-11-12):** сайт-маскировка ООО
+  «СтанкоПрецизион» (ЧПУ-станки, `/var/www/site`, сиды `infra/decoy-rf/`).
+  8 страниц: главная/оборудование/услуги/о-компании/доставка-оплата/новости/
+  контакты/политика-ПДн (обязательна по 152-ФЗ) + robots.txt + sitemap.xml +
+  inline-SVG favicon. Реквизиты ВАЛИДНЫ по контрольным суммам (ИНН
+  7726491182, ОГРН 1117746845314, КПП 772601001, ОКПО, р/с+к/с+БИК ПСБ) -
+  в прошлой версии ИНН/ОГРН не проходили проверку чек-цифрой. Бэкап старой
+  версии в git (c7b5c8eb) и `/var/www/site.bak-visual-20261112`.
+  Визуал (2026-11-12): все ассеты самописные SVG в `img/` (hero-цех,
+  st-400/fv-850/ee-45/kim - станки и КИМ, demo/sklad/pogruzka - сцены,
+  map - схема проезда Варшавское ш. 26) + `logo-icon.svg` (шестерня с
+  прицелом) в шапке всех страниц; фото не используем - сток палится
+  reverse-image-search. Мобильный адаптив: nav в горизонтальный скролл,
+  мелкие шрифты таблиц, `img{max-width:100%}`, media <640px на всех
+  страницах.
   `:80` default_server отдаёт сайт по любому имени/IP; SNI
   `rf-src.proliv-network.xyz` в stream-мапе -> `127.0.0.1:8443`
   (LE-серт webroot'ом через `:80`, certbot.timer на авто-renew).
@@ -46,11 +59,12 @@
   С 2026-11-10 edge ходит через РФ-релей (см. выше), сама схема на ноде не менялась.
 - DE: `de.` -> Yandex CDN (yccdn), edge -> `de-src:443` -> xray REALITY self-steal ->
   nginx `:8443` -> xray xhttp `:9445` (контейнер `remnanode-lte`, нода `DE-Node-LTE`, cm=1.7).
-- LTE-трафик учитывается отдельно от обычного: у LTE-нод `consumptionMultiplier=1.7`
-  (CDN-трафик платный), у базовых = 1.0. В remark - множитель без привязки к
-  стране: с 2026-11-10 хосты называются `🇪🇺 x2 LTE доступ №1` (ee) и
-  `🇪🇺 x2 LTE доступ №2` (de); ранее были `🇪🇪 2x LTE Эстония` /
-  `🇩🇪 2x LTE Германия`.
+- LTE-трафик учитывается отдельно от обычного: у LTE-нод `consumptionMultiplier=1`
+  (с 2026-11-12, ранее 1.7), у базовых = 0/1. С 2026-11-12 хосты называются
+  `🇪🇺 LTE доступ №1` (fi) / `№2` (ee) / `№3` (de) - приписка `x2` убрана
+  (множитель 1) и номера переприсвоены; в подписке LTE-хосты идут последними
+  (viewPosition 7-9, после стран, №1 первым внутри блока). Ранее: `🇪🇺 x2 LTE доступ №N` (№1=ee, №2=de,
+  №3=fi), ещё раньше `🇪🇪 2x LTE Эстония` / `🇩🇪 2x LTE Германия`.
 - В подписке хосты выглядят как `VLESS·XHTTP·TLS·JSON` (Happ).
 
 ## LTE-ноды (вторая нода на том же VPS, 2026-11-08)
@@ -78,7 +92,7 @@ docker run -d --name remnanode-lte --restart always \
 
 | сущность | DE | EE |
 |----------|----|----|
-| LTE-нода | `DE-Node-LTE` `d2e7022b-e64c-4f07-a6e8-f3539ce63065` (de-src:2223, cm 1.7) | `EE-Node-LTE` `9ff3cb93-49ef-4529-a2b7-1309f5f3f880` (ee-src:2223, cm 1.7) |
+| LTE-нода | `DE-Node-LTE` `d2e7022b-e64c-4f07-a6e8-f3539ce63065` (de-src:2223, cm 1) | `EE-Node-LTE` `9ff3cb93-49ef-4529-a2b7-1309f5f3f880` (ee-src:2223, cm 1) |
 | профиль | `DE-LTE-Profile` `11a59109-ce23-46b1-ae7a-bbcbcb2b6b14` | `EE-LTE-Profile` `9381c9d1-5c85-4671-8f2f-f0ce7ab6c3ba` |
 | xhttp inbound | `7cae8e70-e774-45cc-b244-945faeb990d7` `VLESS-XHTTP-CDN-DE-LTE` :9445 | `f0e3e463-577b-4b1d-a026-fb7aaeaadccb` `VLESS-XHTTP-CDN-EE-LTE` :9445 |
 
@@ -88,6 +102,36 @@ docker run -d --name remnanode-lte --restart always \
 nginx на обеих нодах: `proxy_pass` `/media/feed/preview` и `/api/xhttp`
 переключены `127.0.0.1:9444` -> `127.0.0.1:9445` (бэкапы `*.bak-9445` в
 `/etc/nginx/sites-enabled/`).
+
+## LTE доступ №3: FI + VK Cloud CDN (2026-11-11)
+
+Третий LTE-хост — Финляндия через **VK Cloud CDN** (пилот миграции с Yandex,
+0.66 ₽/ГБ). Чейн идентичен: `клиент -> VK edge -> rf-src:443 (ssl_preread по
+SNI fi.) -> FI:443 REALITY -> nginx 127.0.0.1:8443 -> xhttp :9445`.
+
+- Панель: `FI-LTE-Profile` `268460a0-7d23-4d70-8785-95aadcf20530`, inbound
+  `f35340f4-7716-4210-b8b0-a61c3732b2f3` `VLESS-XHTTP-CDN-FI-LTE` :9445,
+  нода `FI-Node-LTE` `4d681342-14d7-4f4b-b239-bede6d84adf2` (fi-src:2223,
+  cm 1.7/2), хост `🇪🇺 x2 LTE доступ №3` `52805dbb` (с 2026-11-12 -
+  `🇪🇺 LTE доступ №1`, cm=1), inbound в Default-Squad.
+- `remnanode-lte` на FI: bridge, `-p 2223:2223 -p 127.0.0.1:9445:9445`,
+  SECRET_KEY = свежий бандл из `GET /api/keygen` (сохранён в
+  `/root/.remnanode-lte-key`). UFW: `2223/tcp` только с `144.31.240.216`.
+- RF relay: в map добавлено `fi.proliv-network.xyz fi_lte;` +
+  `upstream fi_lte { server 179.253.82.201:443; }` (бэкап `.bak-filte`).
+- DNS: `fi-src.proliv-network.xyz` A -> `179.253.82.201` (источник LE-серта
+  и address LTE-ноды); `fi.proliv-network.xyz` CNAME ->
+  `cl-541e19d9.service.cdn.msk.vkcs.cloud` (VK edge).
+- VK ресурс: origin group = только `rf-src.proliv-network.xyz` (CDN Финку
+  не знает), HTTPS к источнику, Host=Пересылать (эдж шлёт SNI fi. ->
+  RF мапа), LE-серт на `fi.` выпускает VK (ждать ~10-15 мин после CNAME).
+  Кэширование на CDN выключено.
+- Обычный FI-хост `🇫🇮 Финляндия`: `address=fi-src` (паттерн EE/DE) —
+  CNAME `fi.` на CDN его не ломает; у юзеров со старой подпиской (addr fi.)
+  обновить подписку.
+- Серты на FI: `fi.` и `fi-src` оба LE webroot `/var/www/acme`.
+- Проверка чейна: `curl https://fi./` -> 200 (decoy),
+  `/media/feed/preview/?sess_id=t` -> 400 (доходит до xray).
 
 ## Топология
 
@@ -212,7 +256,7 @@ Yandex CDN-ресурс `ee.proliv-network.xyz`: источник `ee-src.proliv
 | remark | address:port | sni | host | inbound | nodes |
 |--------|--------------|-----|------|---------|-------|
 | `🇪🇪 Эстония` (вкл) | `ee-src.proliv-network.xyz:10443` | `ee.proliv-network.xyz` | — | Reality-EE (EE-Profile) | — |
-| `🇪🇺 x2 LTE доступ №1` | `ee.proliv-network.xyz:443` | `ee.proliv-network.xyz` | `ee.proliv-network.xyz` | XHTTP-CDN-EE-LTE `f0e3e463` (EE-LTE-Profile) | EE-Node-LTE |
+| `🇪🇺 LTE доступ №2` | `ee.proliv-network.xyz:443` | `ee.proliv-network.xyz` | `ee.proliv-network.xyz` | XHTTP-CDN-EE-LTE `f0e3e463` (EE-LTE-Profile) | EE-Node-LTE |
 
 У CDN-хоста: `mode: packet-up`, `path: /media/feed/preview/`, ALPN `h2,http/1.1`,
 fp `chrome`, `nodes: [EE-Node]`.
@@ -265,7 +309,7 @@ fp `chrome`, `nodes: [EE-Node]`.
 `/api/config-profiles`: `response.configProfiles`, GET `/api/hosts`: `response.hosts`.
 
 **EE переведена на этот набор 2026-11-05** при миграции CDNvideo -> yccdn:
-инбаунд `VLESS-XHTTP-CDN-EE` (EE-Profile) + хост `🇪🇺 x2 LTE доступ №1`
+инбаунд `VLESS-XHTTP-CDN-EE` (EE-Profile) + хост `🇪🇺 LTE доступ №2`
 (`499f8118-d8a0-49f2-becf-9627c0069fb8`). Бэкапы на proliv-main:
 `/root/ee-yccdn-profile-backup.json`, `/root/ee-yccdn-host-backup.json`.
 Клиенты подтягивают новый extra при обновлении подписки (Happ рефрешит сам).
@@ -377,7 +421,7 @@ DNS: `de` CNAME -> `*.topology.gslb.yccdn.ru`; `de-src` A -> `13.143.192.49`.
 | remark | address:port | sni | host | inbound | nodes |
 |--------|--------------|-----|------|---------|-------|
 | `🇩🇪 Германия` | `de-src.proliv-network.xyz:443` | `de.proliv-network.xyz` | — | Reality (Default-Profile) | — |
-| `🇪🇺 x2 LTE доступ №2` | `de.proliv-network.xyz:443` | `de.proliv-network.xyz` | `de.proliv-network.xyz` | XHTTP-CDN-DE-LTE `7cae8e70` (DE-LTE-Profile) | DE-Node-LTE |
+| `🇪🇺 LTE доступ №3` | `de.proliv-network.xyz:443` | `de.proliv-network.xyz` | `de.proliv-network.xyz` | XHTTP-CDN-DE-LTE `7cae8e70` (DE-LTE-Profile) | DE-Node-LTE |
 
 Проверка орджина до переключения CDN:
 `curl -o /dev/null -w '%{http_code}' https://de-src.proliv-network.xyz/media/feed/preview/?sess_id=t`
@@ -462,3 +506,92 @@ AS13238-основной (`storage.yandexcloud.net` = 213.180.x открывае
 `/root/ee-profile-backup.json` на proliv-main. Ядро: `tcp_fastopen=1` был везде;
 на UK-Node-01 и FI-Node-01 добавлены `bbr`+`fq` персистентно —
 `/etc/sysctl.d/99-proliv-net.conf` (было cubic/fq_codel).
+
+## VK Cloud CDN + LTE №3 на FI (2026-11-11)
+
+LTE доступ №3 поднят по чейну `клиент → VK CDN edge (fi.proliv-network.xyz) →
+rf-src (РФ-релей, nginx stream ssl_preread :443) → FI-нода :443 REALITY
+(self-steal → nginx 127.0.0.1:8443 ssl http2 → xray :9445 remnanode-lte)`.
+CDN видит только rf-src — про Финляндию он не знает.
+
+**Объекты:** профиль `FI-LTE-Profile` (uuid 268460a0…, routing как у остальных LTE:
+YouTube/Google → NL-socks, AI/Reddit → WARP), нода `FI-Node-LTE`, хост
+`🇪🇺 LTE доступ №1` (uuid 52805dbb…), инбаунд `VLESS-XHTTP-CDN-FI-LTE`,
+путь `/media/feed/preview`. Контейнер `remnanode-lte` на FI — аналог EE/DE-LTE.
+Обычный FI-доступ переведён на `address=fi-src.proliv-network.xyz` (A→IP ноды),
+т.к. `fi.` теперь CNAME на VK edge — как у ee./de.
+
+### Грабли VK/MegaFon edge (диагностировано tcpdump на :9445)
+
+1. **Edge вырезает media-имена заголовков**: `X-Playback-Token-N` (chunked
+   uplink data) и `X-Media-Token` (padding header) — не доезжают до origin.
+   Остальные кастомные X-* проходят (проверено X-Asset-Token-0, X-Session-Data-0,
+   X-Test-Hdr-123, X-Playback-Info-0). Симптом: все запросы 400, клиент висит в
+   «connecting»; xray-лог `splithttp: invalid padding () length:0` пачками.
+2. **POST недоступен** в настройках ресурса (только GET/HEAD/OPTIONS) —
+   поэтому только GET-uplink схема, данные в chunked-заголовках.
+3. Отключить: кэширование всё OFF (в т.ч. «Игнорировать Set-Cookie» — сессия
+   живёт в cookie!), «Игнорировать параметры запроса» OFF, оптимизация
+   контента/сжатие OFF, вся безопасность OFF. Host header = «Пересылать».
+
+### Рабочий extra (inbound xhttpSettings.extra и host xhttpExtraParams — одинаково)
+
+```json
+{
+  "path": "/",
+  "seqKey": "offset", "sessionKey": "media_sid", "sessionIDKey": "media_sid",
+  "seqPlacement": "query", "sessionPlacement": "cookie", "sessionIDPlacement": "cookie",
+  "uplinkDataKey": "X-Asset-Token", "uplinkDataPlacement": "header", "uplinkHTTPMethod": "GET",
+  "xPaddingKey": "_t", "xPaddingPlacement": "query", "xPaddingBytes": "100-1000",
+  "xPaddingMethod": "tokenish", "xPaddingObfsMode": false,
+  "noSSEHeader": true,
+  "hKeepAlivePeriod": 30, "hMaxRequestTimes": "600-900", "hMaxReusableSecs": 1800,
+  "scMaxBufferedPosts": 12, "scMaxEachPostBytes": "131072-262144",
+  "scMaxConcurrentPosts": 1, "scMinPostsIntervalMs": "5-10", "scStreamUpServerSecs": "1-2"
+}
+```
+
+Отличия от guide.md и от ee/de: `uplinkDataKey` переименован в `X-Asset-Token`
+(edge режет `X-Playback-Token-*`), паддинг вынесен в query `?_t=` (obfs-заголовки
+непредсказуемо режутся). `xmux: {maxConcurrency: "12-24"}` — sibling extra в
+xhttpSettings инбаунда. В инбаунде path БЕЗ trailing slash, в хосте С trailing.
+
+### Диагностика (что реально помогло)
+
+- `tcpdump -i lo -A -s0 'tcp port 9445'` на ноде — видны все заголовки как их
+  видит xray (edge-добавки: X-CDN-*, X-Forwarded-*, X-Real-IP, CDN-Loop).
+- Карта «какие заголовки режет edge»: curl через `https://fi./…` с -H, греп дампа.
+- `docker exec remnanode-lte grep -v 'invalid padding' /var/log/xray/current` —
+  реальная причина отказов. `invalid padding ()` = паддинга нет в запросе.
+- nginx :8443 listener на ноде должен быть `ssl http2` (edge держит h2 к origin).
+- После PATCH extra в панели обязателен refresh подписки на клиенте — иначе
+  клиент шлёт параметры старой схемы.
+
+### Инцидент 2026-11-12: медиа не грузятся на FI (431)
+
+Симптом: туннель «подключён», сессии/poll идут, но загрузка медиа виснет.
+В `xhttp_hdr.log` — пачки `st=431` на запросах реальных клиентов.
+
+Две независимые дыры на FI (нода поднималась позже EE/DE, харденинг не доехал):
+
+1. **В `nginx.conf` не было `large_client_header_buffers 8 64k` +
+   `client_header_buffer_size 64k`** (дефолт 4×8k → аплинк-заголовки
+   `X-Asset-Token-*` >8КБ умирали 431 на nginx). Добавлено, бэкап
+   `/root/nginx_bak_20261112-hdr`. НО: порог при этом оказался ~16КБ, а не 64КБ —
+   см. п.2.
+2. **В `xhttpSettings.extra` инбаунда не было `serverMaxHeaderBytes`** — у EE/DE
+   оно продублировано и в `extra`, и на верхнем уровне; xray читает ТОЛЬКО
+   `extra`, верхний уровень игнорит. Без ключа действует дефолт ~16КБ и именно
+   xray (не nginx) отдаёт `431 text/plain` (не путать с nginx-431 — у Go-ответа
+   plain body, у nginx HTML). Добавлено `serverMaxHeaderBytes: 262144` в
+   `extra` профиля и в `xhttpExtraParams` хоста (как у EE/DE). Бэкапы:
+   `/root/fi-lte-profile-backup.json`, `/root/fi-lte-host-backup.json` на main.
+
+Проверка: `curl -H "X-Asset-Token-0: <20к>"` на `:8443` — раньше 431, теперь
+400 (дошло до xray). Факт: edge→origin сейчас говорит HTTP/1.1 (h2 на listen
+включён про запас — на 1.24 `http2_max_*`-директивы obsolete, лимит едёт из
+`large_client_header_buffers`).
+
+Формат `xhttp_hdr.log` на FI подправлен под реальную схему: `tok0/tok1` =
+`X-Asset-Token-0/1`, `pad` = `arg _t` (до этого логировались EE/DE-имена
+`X-Playback-Token-*`/`X-Media-Token` — всегда пустые).

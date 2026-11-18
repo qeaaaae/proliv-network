@@ -1,0 +1,62 @@
+﻿###HOST gho33tprogaming2.serv.host 2026-11-15T15:16:26+00:00
+--- df -h ---
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/vda2        25G  5.0G   19G  22% /
+--- docker system df ---
+TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
+Images          1         1         499.9MB   0B (0%)
+Containers      1         1         13.5MB    0B (0%)
+Local Volumes   0         0         0B        0B
+Build Cache     0         0         0B        0B
+--- docker images ---
+remnawave/node:3.4.3  500MB  3 weeks ago
+--- dangling images count ---
+0
+--- stopped containers ---
+--- builder cache (last lines) ---
+ID        RECLAIMABLE   SIZE      LAST ACCESSED
+Reclaimable:	0B
+Total:		0B
+--- journal disk usage ---
+Archived and active journals take up 257.2M in the file system.
+--- journald limits ---
+SystemMaxUse=250M
+--- /var/log size ---
+397M	/var/log
+--- big files in /var/log ---
+76982735 /var/log/syslog.1
+--- apt cache ---
+113M	/var/cache/apt
+--- tmp dirs ---
+140K	/tmp
+52K	/var/tmp
+--- top dirs /var ---
+1.3G	/var
+748M	/var/lib
+397M	/var/log
+150M	/var/cache
+2.0M	/var/backups
+1.1M	/var/www
+52K	/var/tmp
+16K	/var/spool
+--- top dirs /opt ---
+88K	/opt
+68K	/opt/ipregion
+12K	/opt/containerd
+4.0K	/opt/remnanode
+--- top dirs /root ---
+96K	/root
+20K	/root/.docker
+8.0K	/root/.ssh
+4.0K	/root/.cache
+--- docker volumes ---
+
+--- installed kernels ---
+3
+--- apt autoremove candidates ---
+0
+--- crash dumps ---
+total 0
+--- rotated/compressed logs count ---
+18
+###END

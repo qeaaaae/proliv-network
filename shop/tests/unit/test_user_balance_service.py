@@ -43,6 +43,11 @@ class UserBalanceQuoteTests(IsolatedAsyncioTestCase):
                 AsyncMock(return_value=SimpleNamespace(is_banned=False)),
             ),
             patch(
+                "bot.services.user_balance_service.referral_payment_dal."
+                "has_monthly_subscription_purchase",
+                AsyncMock(return_value=True),
+            ),
+            patch(
                 "bot.services.user_balance_service.user_balance_dal.balance_minor",
                 AsyncMock(return_value=18_000),
             ),
@@ -58,6 +63,31 @@ class UserBalanceQuoteTests(IsolatedAsyncioTestCase):
         self.assertEqual(allocation.applied_minor, 14_000)
         self.assertEqual(allocation.external_minor, 5_000)
 
+    async def test_quote_is_blocked_until_first_monthly_purchase(self) -> None:
+        service = UserBalanceService(_settings())
+        with (
+            patch(
+                "bot.services.user_balance_service.user_dal.lock_user_by_id",
+                AsyncMock(return_value=SimpleNamespace(is_banned=False)),
+            ),
+            patch(
+                "bot.services.user_balance_service.referral_payment_dal."
+                "has_monthly_subscription_purchase",
+                AsyncMock(return_value=False),
+            ),
+            patch(
+                "bot.services.user_balance_service.user_balance_dal.balance_minor",
+                AsyncMock(return_value=18_000),
+            ),
+            self.assertRaisesRegex(UserBalanceError, "balance_spend_requires_purchase"),
+        ):
+            await service.quote(
+                cast(AsyncSession, object()),
+                user_id=42,
+                currency="RUB",
+                checkout_total=190,
+            )
+
     async def test_quote_allows_spending_existing_balance_when_disabled(self) -> None:
         service = UserBalanceService(_settings(enabled=False))
         session = cast(AsyncSession, object())
@@ -65,6 +95,11 @@ class UserBalanceQuoteTests(IsolatedAsyncioTestCase):
             patch(
                 "bot.services.user_balance_service.user_dal.lock_user_by_id",
                 AsyncMock(return_value=SimpleNamespace(is_banned=False)),
+            ),
+            patch(
+                "bot.services.user_balance_service.referral_payment_dal."
+                "has_monthly_subscription_purchase",
+                AsyncMock(return_value=True),
             ),
             patch(
                 "bot.services.user_balance_service.user_balance_dal.balance_minor",

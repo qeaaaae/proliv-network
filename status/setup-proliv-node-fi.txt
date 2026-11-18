@@ -1,0 +1,42 @@
+﻿--- rsyslog logrotate ---
+8:	rotate 2
+9:	maxsize 300M
+16:	postrotate
+17:		/usr/lib/rsyslog/rsyslog-rotate
+--- nginx logrotate ---
+4:	rotate 5
+10:	prerotate
+11:		if [ -d /etc/logrotate.d/httpd-prerotate ]; then \
+12:			run-parts /etc/logrotate.d/httpd-prerotate; \
+--- cron ---
+# ProlivVPN weekly cleanup - Sundays 04:30 local time.
+# Logs to /var/log/proliv-cleanup.log.
+30 4 * * 0 root /usr/local/sbin/proliv-cleanup.sh
+Deleted archived journal /var/log/journal/07397259682957651610466200eebdfe/system@e5abc393df0a46b2a77b52a5a59396fb-00000000006f8134-0006604dbf083772.journal (29.1M).
+Deleted archived journal /var/log/journal/07397259682957651610466200eebdfe/system@e5abc393df0a46b2a77b52a5a59396fb-0000000000701f57-0006604ec474ceb2.journal (28.8M).
+Vacuuming done, freed 175.2M of archived journals from /var/log/journal/07397259682957651610466200eebdfe.
+Reading package lists...
+Building dependency tree...
+Reading state information...
+0 upgraded, 0 newly installed, 0 to remove and 67 not upgraded.
+Total reclaimed space: 0B
+Total reclaimed space: 0B
+Total reclaimed space: 0B
+Deleted Volumes:
+194b2206c3f5dcf5621d8adedc35b2c9e3a09a536f1ab5569e83d09d39a65705
+77d64464940e53589f2ac27beeaf46861c8f9be691c29b4725c096bdc712383c
+
+Total reclaimed space: 311B
+Flag --keep-storage has been deprecated, keep-storage flag has been changed to reserved-space
+Total:	0B
+----- df after cleanup -----
+/dev/vda2        25G  9.1G   15G  39% /
+===== 2026-11-15T15:36:35+00:00 cleanup done =====
+--- purging rotated logs >30M ---
+/var/log/nginx/xhttp_hdr.log.2.gz
+/var/log/nginx/xhttp_hdr.log.3.gz
+/var/log/nginx/xhttp_hdr.log.1
+/var/log/syslog.1
+/var/log/syslog.2.gz
+/dev/vda2        25G  6.0G   18G  26% /
+SETUP-DONE gho33tprogaming4.serv.host

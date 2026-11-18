@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 360">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#eef1f4"/><stop offset="1" stop-color="#dde3e9"/></linearGradient>
+</defs>
+<rect width="600" height="360" fill="url(#bg)"/>
+<g stroke="#cdd5dc" stroke-width="1">
+<path d="M0 60 H600 M0 120 H600 M0 180 H600 M0 240 H600 M0 300 H600"/>
+<path d="M75 0 V360 M150 0 V360 M225 0 V360 M300 0 V360 M375 0 V360 M450 0 V360 M525 0 V360"/>
+</g>
+<rect x="0" y="300" width="600" height="60" fill="#c6cfd7"/>
+<ellipse cx="300" cy="312" rx="230" ry="14" fill="#94a3b0" opacity=".45"/>
+<!-- CMM: granite table -->
+<rect x="120" y="200" width="340" height="34" rx="6" fill="#5c6e80"/>
+<rect x="120" y="200" width="340" height="10" rx="5" fill="#7c8fa3"/>
+<rect x="140" y="234" width="18" height="62" rx="3" fill="#46525e"/>
+<rect x="422" y="234" width="18" height="62" rx="3" fill="#46525e"/>
+<rect x="140" y="288" width="300" height="8" rx="4" fill="#46525e"/>
+<!-- gantry bridge -->
+<rect x="170" y="96" width="20" height="108" rx="4" fill="#aeb9c3"/>
+<rect x="390" y="96" width="20" height="108" rx="4" fill="#aeb9c3"/>
+<rect x="160" y="84" width="260" height="26" rx="6" fill="#dfe6ec"/>
+<rect x="160" y="84" width="260" height="8" rx="4" fill="#3a4550"/>
+<!-- carriage + probe -->
+<rect x="272" y="96" width="36" height="44" rx="4" fill="#46586b"/>
+<rect x="284" y="140" width="12" height="34" fill="#2c3a49"/>
+<rect x="287" y="174" width="6" height="22" fill="#d97b29"/>
+<circle cx="290" cy="200" r="5" fill="#c0392b"/>
+<!-- workpiece on table -->
+<rect x="240" y="176" width="100" height="24" rx="4" fill="#9fb0be"/>
+<rect x="252" y="168" width="36" height="8" rx="3" fill="#8a9bab"/>
+<!-- scale ruler on table edge -->
+<g stroke="#2c3a49" stroke-width="1.6">
+<line x1="140" y1="206" x2="140" y2="212"/><line x1="165" y1="206" x2="165" y2="212"/>
+<line x1="190" y1="206" x2="190" y2="212"/><line x1="215" y1="206" x2="215" y2="212"/>
+<line x1="365" y1="206" x2="365" y2="212"/><line x1="390" y1="206" x2="390" y2="212"/>
+<line x1="415" y1="206" x2="415" y2="212"/><line x1="440" y1="206" x2="440" y2="212"/>
+</g>
+<!-- monitor stand -->
+<rect x="478" y="160" width="10" height="90" rx="4" fill="#46525e"/>
+<rect x="446" y="116" width="74" height="52" rx="5" fill="#46525e"/>
+<rect x="452" y="122" width="62" height="40" rx="3" fill="#d97b29"/>
+<rect x="456" y="128" width="54" height="5" rx="2" fill="#f0b27a"/>
+<rect x="456" y="138" width="38" height="4" rx="2" fill="#fdf1e3"/>
+<rect x="456" y="147" width="46" height="4" rx="2" fill="#fdf1e3"/>
+<rect x="440" y="250" width="86" height="8" rx="4" fill="#46525e"/>
+<!-- joystick box -->
+<rect x="470" y="264" width="46" height="30" rx="5" fill="#46525e"/>
+<circle cx="485" cy="279" r="6" fill="#e8edf2"/>
+<circle cx="502" cy="279" r="6" fill="#f0b27a"/>
+</svg>

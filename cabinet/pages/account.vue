@@ -296,7 +296,6 @@ async function confirmPassword() {
 <template>
   <div>
     <div class="page-head">
-      <div class="page-kicker">Аккаунт</div>
       <h1>Настройки входа</h1>
     </div>
 

@@ -184,7 +184,6 @@ async function bonus(action: string, amount: number | null, method?: string) {
 <template>
   <div>
     <div class="page-head">
-      <div class="page-kicker">Бонусы</div>
       <h1>Реферальная система</h1>
     </div>
 

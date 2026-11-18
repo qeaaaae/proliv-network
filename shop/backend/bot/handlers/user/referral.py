@@ -26,7 +26,7 @@ from bot.utils.custom_emoji import custom_emoji_unicode_html
 from bot.utils.subscription_periods import format_duration_days
 from config.settings import Settings
 from config.subscription_periods import legacy_months_to_days
-from db.dal import partner_dal, user_balance_dal, user_dal
+from db.dal import partner_dal, referral_payment_dal, user_balance_dal, user_dal
 
 from .menu_card import render_card, send_card
 
@@ -248,6 +248,7 @@ async def _render_exchange_screen(
         return
     currency, scale, price_minor, balance_minor = context
     days = balance_minor // price_minor
+    spend_unlocked = await referral_payment_dal.has_monthly_subscription_purchase(session, user_id)
 
     text = gettext(
         "referral_exchange_screen",
@@ -258,9 +259,11 @@ async def _render_exchange_screen(
     )
     if days < 1:
         text = f"{text}\n\n{gettext('referral_exchange_insufficient')}"
+    elif not spend_unlocked:
+        text = f"{text}\n\n{gettext('balance_spend_requires_purchase')}"
 
     builder = InlineKeyboardBuilder()
-    if days >= 1:
+    if days >= 1 and spend_unlocked:
         builder.row(
             InlineKeyboardButton(
                 text=gettext("referral_exchange_do_button"),
@@ -294,6 +297,9 @@ async def _handle_exchange_confirm(
     days = int(balance_minor // price_minor)
     if days <= 0:
         await callback.answer(gettext("referral_exchange_insufficient"), show_alert=True)
+        return
+    if not await referral_payment_dal.has_monthly_subscription_purchase(session, user_id):
+        await callback.answer(gettext("balance_spend_requires_purchase"), show_alert=True)
         return
 
     spend_minor = days * price_minor

@@ -22,12 +22,10 @@ interface Overview {
 const route = useRoute()
 const { data, status, refresh } = useFetch<Overview>('/api/overview', { lazy: true })
 const subscriptionUrl = computed(() => data.value?.subscription?.subscriptionUrl ?? '')
-const happDeepLink = computed(
-  () => `happ://add/${encodeURIComponent(subscriptionUrl.value)}`,
-)
-const incyDeepLink = computed(
-  () => `incy://add/${encodeURIComponent(subscriptionUrl.value)}`,
-)
+// happ://add/ и incy://add/ принимают адрес подписки КАК ЕСТЬ, без
+// percent-encoding - с encodeURIComponent Happ отвечает "URL not valid".
+const happDeepLink = computed(() => `happ://add/${subscriptionUrl.value}`)
+const incyDeepLink = computed(() => `incy://add/${subscriptionUrl.value}`)
 
 type PlatformId = 'ios' | 'android' | 'windows' | 'macos'
 
@@ -166,7 +164,6 @@ watch(
 <template>
   <div>
     <div class="page-head">
-      <div class="page-kicker">Инструкция</div>
       <h1>Как подключить Proliv Network</h1>
       <p>Три шага - займёт пару минут. Выберите своё устройство:</p>
     </div>

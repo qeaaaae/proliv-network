@@ -50,6 +50,9 @@ export function billingErrorMessage(
 ): string {
   const failure = error && typeof error === "object" ? (error as WebappRecord) : {};
   if (failure.error === "tariff_switch_required") return t("wa_tariff_switch_required");
+  if (failure.error === "balance_spend_requires_purchase") {
+    return t("wa_balance_spend_requires_purchase");
+  }
   if (
     ["balance_insufficient", "insufficient_user_balance", "insufficient_partner_balance"].includes(
       String(failure.error || "")

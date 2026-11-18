@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -95,6 +95,32 @@ async def due_giveaways(session: AsyncSession, now: datetime) -> list[Giveaway]:
             )
         ).scalars()
     )
+
+
+async def giveaways_pending_reminder(
+    session: AsyncSession, now: datetime, window: timedelta
+) -> list[Giveaway]:
+    """Active giveaways whose scheduled draw is within `window` and not yet reminded."""
+    return list(
+        (
+            await session.execute(
+                select(Giveaway)
+                .where(
+                    Giveaway.status == GIVEAWAY_STATUS_ACTIVE,
+                    Giveaway.scheduled_draw_at.isnot(None),
+                    Giveaway.scheduled_draw_at > now,
+                    Giveaway.scheduled_draw_at <= now + window,
+                    Giveaway.reminder_sent_at.is_(None),
+                )
+                .order_by(Giveaway.scheduled_draw_at.asc())
+            )
+        ).scalars()
+    )
+
+
+async def mark_reminder_sent(session: AsyncSession, giveaway: Giveaway) -> None:
+    giveaway.reminder_sent_at = datetime.now(UTC)
+    await session.flush()
 
 
 async def set_display_count(session: AsyncSession, giveaway: Giveaway, value: int | None) -> None:

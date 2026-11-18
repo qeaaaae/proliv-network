@@ -1,6 +1,7 @@
 import contextlib
 import logging
 from datetime import datetime
+from typing import Any
 
 from aiogram import F, Router, types
 from aiogram.fsm.context import FSMContext
@@ -10,7 +11,6 @@ from bot.keyboards.inline.user_keyboards import (
     get_connect_and_main_keyboard,
     get_main_menu_inline_keyboard,
 )
-from bot.keyboards.inline.user_keyboards_menus import get_trial_confirmation_keyboard
 from bot.middlewares.i18n import JsonI18n
 from bot.services.panel_api_service import PanelApiService
 from bot.services.subscription_service_impl.core import SubscriptionService
@@ -24,7 +24,7 @@ from config.settings import Settings
 
 from .menu_card import render_card
 from .start import send_main_menu
-from .trial_captcha_handler import ensure_bot_trial_captcha
+from .trial_captcha_handler import ensure_bot_trial_captcha, ensure_bot_trial_captcha_message
 from .trial_captcha_handler import router as captcha_router
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ router = Router(name="user_trial_router")
 router.include_router(captcha_router)
 
 
-async def request_trial_confirmation_handler(
+async def request_trial_activation_handler(
     callback: types.CallbackQuery,
     settings: Settings,
     i18n_data: dict,
@@ -52,45 +52,38 @@ async def request_trial_confirmation_handler(
             await callback.answer(_("error_occurred_try_again"), show_alert=True)
         return
 
+    # Тап по кнопке меню - такой же явный опт-ин, как диплинк ?start=trial:
+    # активируем сразу, без экрана подтверждения и без мини-аппа.
+    activation_result: dict[str, Any] | None
     if not settings.TRIAL_ENABLED:
-        await render_card(
-            callback,
-            _("trial_feature_disabled"),
-            get_main_menu_inline_keyboard(current_lang, i18n, settings, False),
-        )
-        with contextlib.suppress(Exception):
-            await callback.answer()
-        return
+        activation_result = {"activated": False, "message_key": "trial_feature_disabled"}
+    elif settings.TRIAL_PAYMENT_ENABLED:
+        activation_result = {"activated": False, "message_key": "trial_payment_required"}
+    elif await subscription_service.has_trial_blocking_subscription(session, user_id):
+        activation_result = {
+            "activated": False,
+            "message_key": "trial_already_had_subscription_or_trial",
+        }
+    else:
+        if not await ensure_bot_trial_captcha(
+            callback, settings, user_id, i18n, current_lang, state, auto_activate=True
+        ):
+            return
+        activation_result = await subscription_service.activate_trial_subscription(session, user_id)
 
-    if settings.TRIAL_PAYMENT_ENABLED:
-        await render_card(
-            callback,
-            _("trial_payment_required"),
-            get_main_menu_inline_keyboard(current_lang, i18n, settings, True),
-        )
-        with contextlib.suppress(Exception):
-            await callback.answer()
-        return
-
-    if await subscription_service.has_trial_blocking_subscription(session, user_id):
-        await render_card(
-            callback,
-            _("trial_already_had_subscription_or_trial"),
-            get_main_menu_inline_keyboard(current_lang, i18n, settings, False),
-        )
-        with contextlib.suppress(Exception):
-            await callback.answer()
-        return
-
-    # Экран подтверждения: триал разовый - не сжигаем его случайным тапом.
-    # Активацию и капчу выполняет confirm_activate_trial_handler.
-    await render_card(
-        callback,
-        _("trial_confirm_message", days=settings.TRIAL_DURATION_DAYS),
-        get_trial_confirmation_keyboard(current_lang, i18n),
-    )
     with contextlib.suppress(Exception):
         await callback.answer()
+
+    await _render_trial_activation_result(
+        callback,
+        activation_result,
+        settings=settings,
+        i18n=i18n,
+        current_lang=current_lang,
+        user_id=user_id,
+        subscription_service=subscription_service,
+        session=session,
+    )
 
 
 @router.callback_query(F.data == "trial_action:confirm_activate")
@@ -142,18 +135,50 @@ async def confirm_activate_trial_handler(
         return
     activation_result = await subscription_service.activate_trial_subscription(session, user_id)
 
+    with contextlib.suppress(Exception):
+        if activation_result and activation_result.get("activated"):
+            await callback.answer(_("trial_activated_alert"), show_alert=True)
+        else:
+            message_key = (
+                activation_result.get("message_key", "trial_activation_failed")
+                if activation_result
+                else "trial_activation_failed"
+            )
+            await callback.answer(_(message_key), show_alert=True)
+
+    await _render_trial_activation_result(
+        callback,
+        activation_result,
+        settings=settings,
+        i18n=i18n,
+        current_lang=current_lang,
+        user_id=user_id,
+        subscription_service=subscription_service,
+        session=session,
+    )
+
+
+async def _render_trial_activation_result(
+    target: types.Message | types.CallbackQuery,
+    activation_result: dict[str, Any] | None,
+    *,
+    settings: Settings,
+    i18n: JsonI18n,
+    current_lang: str,
+    user_id: int,
+    subscription_service: SubscriptionService,
+    session: AsyncSession,
+) -> None:
+    _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs)
+
     final_message_text_in_chat = ""
     show_trial_button_after_action = False
     config_link_display_for_trial = None
-    config_link_for_trial = None
     connect_button_url_for_trial = None
     install_share_url = None
+    end_date_obj = activation_result.get("end_date") if activation_result else None
 
     if activation_result and activation_result.get("activated"):
-        with contextlib.suppress(Exception):
-            await callback.answer(_("trial_activated_alert"), show_alert=True)
-
-        end_date_obj = activation_result.get("end_date")
         install_links = await ensure_user_install_guide_links(session, settings, user_id)
         install_share_url = install_links.public_share_url
         config_link_display_for_trial, connect_button_url_for_trial = await prepare_config_links(
@@ -191,8 +216,6 @@ async def confirm_activate_trial_handler(
             else "trial_activation_failed"
         )
         final_message_text_in_chat = _(message_key_from_service)
-        with contextlib.suppress(Exception):
-            await callback.answer(final_message_text_in_chat, show_alert=True)
         if (
             settings.TRIAL_ENABLED
             and not await subscription_service.has_trial_blocking_subscription(session, user_id)
@@ -215,7 +238,7 @@ async def confirm_activate_trial_handler(
     )
 
     await render_card(
-        callback,
+        target,
         final_message_text_in_chat,
         reply_markup,
         parse_mode="HTML",
@@ -231,6 +254,58 @@ async def confirm_activate_trial_handler(
         except Exception as e_mark:
             await session.rollback()
             logger.error("Failed to mark trial for ad attribution for user %s: %s", user_id, e_mark)
+
+
+async def try_activate_trial_from_start(
+    message: types.Message,
+    *,
+    settings: Settings,
+    i18n_data: dict,
+    subscription_service: SubscriptionService,
+    session: AsyncSession,
+    state: FSMContext | None,
+    user_id: int,
+) -> bool:
+    """Handle the ``/start trial`` deep link: activate the trial right away.
+
+    Mirrors the trial button semantics without the extra confirmation screen -
+    the link itself is the user's explicit opt-in. Returns True when a
+    trial-flow response was produced (result card or captcha challenge), False
+    to continue the regular start flow.
+    """
+    i18n: JsonI18n | None = i18n_data.get("i18n_instance")
+    if not i18n:
+        return False
+    current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
+
+    activation_result: dict[str, Any] | None
+    if not settings.TRIAL_ENABLED:
+        activation_result = {"activated": False, "message_key": "trial_feature_disabled"}
+    elif settings.TRIAL_PAYMENT_ENABLED:
+        activation_result = {"activated": False, "message_key": "trial_payment_required"}
+    elif await subscription_service.has_trial_blocking_subscription(session, user_id):
+        activation_result = {
+            "activated": False,
+            "message_key": "trial_already_had_subscription_or_trial",
+        }
+    else:
+        if not await ensure_bot_trial_captcha_message(
+            message, settings, user_id, i18n, current_lang, state
+        ):
+            return True
+        activation_result = await subscription_service.activate_trial_subscription(session, user_id)
+
+    await _render_trial_activation_result(
+        message,
+        activation_result,
+        settings=settings,
+        i18n=i18n,
+        current_lang=current_lang,
+        user_id=user_id,
+        subscription_service=subscription_service,
+        session=session,
+    )
+    return True
 
 
 @router.callback_query(F.data == "main_action:cancel_trial")

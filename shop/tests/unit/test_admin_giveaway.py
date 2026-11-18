@@ -70,7 +70,7 @@ class GiveawayTextStepTest(unittest.IsolatedAsyncioTestCase):
     async def test_schedule_step_creates_draft_and_confirms(self):
         state = _state({"giveaway_html": "hi"})
         message = SimpleNamespace(
-            text="08.11.2026 20:00", answer=AsyncMock(), chat=SimpleNamespace(id=42)
+            text="08.11.2027 20:00", answer=AsyncMock(), chat=SimpleNamespace(id=42)
         )
         draft = SimpleNamespace(giveaway_id=7)
         with patch.object(

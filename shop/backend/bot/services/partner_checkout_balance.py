@@ -17,7 +17,7 @@ from bot.services.partner_common import (
     minor_to_decimal_string,
 )
 from config.settings import Settings
-from db.dal import partner_dal
+from db.dal import partner_dal, referral_payment_dal
 from db.partner_models import PartnerLedgerEntry
 
 TERMINAL_CHECKOUT_STATUSES = frozenset(
@@ -108,6 +108,8 @@ class PartnerCheckoutBalanceService:
             raise PartnerError("partner_not_found", 404)
         if str(profile.status) != "active":
             raise PartnerError("partner_not_active", 403)
+        if not await referral_payment_dal.has_monthly_subscription_purchase(session, user_id):
+            raise PartnerError("balance_spend_requires_purchase", 409)
 
         available_minor = max(
             0,

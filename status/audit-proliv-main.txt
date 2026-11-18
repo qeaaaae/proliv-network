@@ -1,0 +1,109 @@
+﻿###HOST gho33tprogaming.serv.host 2026-11-15T15:16:06+00:00
+--- df -h ---
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/vda2        45G   12G   31G  29% /
+--- docker system df ---
+TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
+Images          17        14        3.534GB   117.6MB (3%)
+Containers      16        15        1.454MB   4.096kB (0%)
+Local Volumes   25        9         145.5MB   2.488kB (0%)
+Build Cache     65        0         1.66GB    1.66GB
+--- docker images ---
+3252a8/remnawave-minishop-backend:latest  569MB  5 hours ago
+3252a8/remnawave-minishop-worker:latest  542MB  5 hours ago
+proliv-cabinet:latest  249MB  2 days ago
+3252a8/remnawave-minishop-frontend:latest  138MB  2 days ago
+proliv-landing:latest  76.4MB  3 days ago
+valkey/valkey:9-alpine  66MB  2 weeks ago
+redis:7-alpine  57.8MB  2 weeks ago
+teddysun/xray:latest  100MB  3 weeks ago
+remnawave/backend:3  818MB  3 weeks ago
+remnawave/subscription-page:latest  418MB  3 weeks ago
+nginx:alpine  94.5MB  3 weeks ago
+alpine:latest  13MB  3 weeks ago
+caddy:2  93.1MB  3 weeks ago
+caddy:2-alpine  93.1MB  3 weeks ago
+postgres:17.11  646MB  3 weeks ago
+curlimages/curl:latest  35.9MB  3 weeks ago
+postgres:18.4  650MB  3 months ago
+--- dangling images count ---
+0
+--- stopped containers ---
+remnawave-minishop-migrate  Exited (0) 5 hours ago
+--- builder cache (last lines) ---
+l03mjrkamy47ymf06g49ldsyn    true          345.5MB   5 hours ago
+Reclaimable:	1.66GB
+Total:		1.66GB
+--- journal disk usage ---
+Archived and active journals take up 136.9M in the file system.
+--- journald limits ---
+SystemMaxUse=250M
+--- /var/log size ---
+226M	/var/log
+--- big files in /var/log ---
+58720256 /var/log/journal/07397259682957651610466200eebdfe/system@5ad50e79ca88423cacafa398eb57974c-000000000004629c-00065f9376207229.journal
+33554432 /var/log/journal/07397259682957651610466200eebdfe/system@5ad50e79ca88423cacafa398eb57974c-00000000000602da-00065fd7159d8643.journal
+27168527 /var/log/syslog.1
+21278764 /var/log/kern.log.1
+--- apt cache ---
+113M	/var/cache/apt
+--- tmp dirs ---
+64M	/tmp
+44K	/var/tmp
+--- top dirs /var ---
+6.0G	/var
+5.7G	/var/lib
+226M	/var/log
+146M	/var/cache
+2.0M	/var/backups
+44K	/var/tmp
+28K	/var/crash
+20K	/var/spool
+--- top dirs /opt ---
+298M	/opt/proliv
+298M	/opt
+12K	/opt/containerd
+--- top dirs /root ---
+3.3M	/root
+2.5M	/root/.docker
+436K	/root/backups
+28K	/root/.ssh
+12K	/root/.local
+4.0K	/root/.cache
+--- docker volumes ---
+0b666ee1119d819a814d577f1ef394e4a67bc755d2b4fa300892866b0dfa14e2   0         0B
+remnawave-minishop-shop-data                                       4         3.342MB
+caddy-ssl-data                                                     1         43.25kB
+20e9ed4a698340b9857b3b231d68aeb2558dac9df31206d0cd9de7a28d452704   0         0B
+b0a58baeb67b86098219bdc6c15fd8434f4b46dde7709fb7fb87078ba70c0e7f   0         0B
+f2de7a933a47b99500fbf08f7e23dd563abff3d006438a31a7205aa262fcf745   0         311B
+valkey-socket                                                      2         0B
+303919e2d3cd4a7b372872ad92dad49425e8f51811333c67914521fe2d032fdc   0         311B
+6edf0037543a141e07f0ae5cbb216518c451410edc393632520c006b5974be41   0         311B
+remnawave-minishop-db-data                                         1         76.7MB
+fd543a5591d3deccb318f7be9f03a9a7851229e087b4213b01af2e3d76574301   0         0B
+4238fd3490f8305e3e3be653a72fc452e73073378911343b0d13def33ecc0418   0         311B
+3b907fdb225c55ec5b0ef7857bcc0cb7deafa8ad04daafcffcd112799e598009   0         0B
+57eba478d87054cb8cd490c38b263952c12539a810c049d84c2d330c32059e46   0         0B
+58ca1b147f955e66b044d4f339e3af86de2f8fb12d5d9369e4e70fcb7f9646d7   0         311B
+80cdc66f67d0cc15dfc325f5de8ae876e7789610baef74bf320b3e68a9b8e92f   1         311B
+5efead9719a7f1801536165f9ad668fa7a8721fdd4d08fbb650b7edcc42955bb   0         311B
+3e6d576ee559c3048c54d629cb0300aae018c8b0875758828fd26543c529f44e   0         0B
+remnawave-db-data                                                  1         62.9MB
+caddy-config-data                                                  1         4.243kB
+abed0a778c8134608a6a0abb9d6a49b05e46be7967d8ece402899220cec618de   0         311B
+2654244139ba7ab553681f4dac067507fa38789ef4a01392000c04583ca754bf   0         311B
+remnawave-minishop-redis-data                                      1         2.541MB
+6fc1442dc6c91452bf31915d5abf4f3b840dbf0d0e15527b4c3f441f8c7c2bc3   0         0B
+29786f01c95b004482d660d84d67a9a745816c20c8cd75834d7ad21d0735ed60   1         0B
+
+--- installed kernels ---
+3
+--- apt autoremove candidates ---
+0
+--- crash dumps ---
+total 24K
+-rw-r----- 1 root root 21K Nov  6 16:59 _opt_proliv_rotate-hosts.py.0.crash
+--- rotated/compressed logs count ---
+18
+###END

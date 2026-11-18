@@ -1,0 +1,72 @@
+﻿###HOST proliv-node-kz 2026-11-15T20:16:53+05:00
+--- df -h ---
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/vda2        15G  4.9G  9.1G  35% /
+--- docker system df ---
+TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
+Images          1         1         499.9MB   0B (0%)
+Containers      1         1         22.61MB   0B (0%)
+Local Volumes   0         0         0B        0B
+Build Cache     0         0         0B        0B
+--- docker images ---
+remnawave/node:3.4.3  500MB  3 weeks ago
+--- dangling images count ---
+0
+--- stopped containers ---
+--- builder cache (last lines) ---
+ID        RECLAIMABLE   SIZE      LAST ACCESSED
+Reclaimable:	0B
+Total:		0B
+--- journal disk usage ---
+Archived and active journals take up 234.7M in the file system.
+--- journald limits ---
+SystemMaxUse=250M
+--- /var/log size ---
+320M	/var/log
+--- big files in /var/log ---
+41188898 /var/log/syslog.1
+32768000 /var/log/journal/9d66a6e2e908d8d91ef02e3e82b20e75/system@e3e37e36577b4f42ab61f345dfa7e724-0000000000079541-00066049836ab6ca.journal
+32768000 /var/log/journal/9d66a6e2e908d8d91ef02e3e82b20e75/system@e3e37e36577b4f42ab61f345dfa7e724-0000000000073b86-00066043e64aef4b.journal
+32768000 /var/log/journal/9d66a6e2e908d8d91ef02e3e82b20e75/system@e3e37e36577b4f42ab61f345dfa7e724-000000000006e1a5-0006603e446e47ce.journal
+32768000 /var/log/journal/9d66a6e2e908d8d91ef02e3e82b20e75/system@e3e37e36577b4f42ab61f345dfa7e724-0000000000068802-00066038ba301225.journal
+32768000 /var/log/journal/9d66a6e2e908d8d91ef02e3e82b20e75/system@e3e37e36577b4f42ab61f345dfa7e724-0000000000062e24-0006603318aa927d.journal
+32768000 /var/log/journal/9d66a6e2e908d8d91ef02e3e82b20e75/system@e3e37e36577b4f42ab61f345dfa7e724-000000000005d466-0006602d80a6da49.journal
+32768000 /var/log/journal/9d66a6e2e908d8d91ef02e3e82b20e75/system@e3e37e36577b4f42ab61f345dfa7e724-0000000000057a96-00066027dc4f2e96.journal
+--- apt cache ---
+137M	/var/cache/apt
+--- tmp dirs ---
+4.8M	/tmp
+28K	/var/tmp
+--- top dirs /var ---
+1.3G	/var
+848M	/var/lib
+320M	/var/log
+142M	/var/cache
+1.2M	/var/backups
+88K	/var/crash
+40K	/var/www
+28K	/var/tmp
+--- top dirs /opt ---
+96K	/opt
+68K	/opt/ipregion
+12K	/opt/remnanode
+12K	/opt/containerd
+--- top dirs /root ---
+212K	/root
+100K	/root/nginx_bak_upg_1794253007
+20K	/root/.docker
+16K	/root/.cache
+12K	/root/.ssh
+--- docker volumes ---
+
+--- installed kernels ---
+5
+--- apt autoremove candidates ---
+12
+--- crash dumps ---
+total 84K
+-rw------- 1 root root 38K May  6  2026 linux-firmware.0.crash
+-rw------- 1 root root 42K May  6  2026 linux-image-5.15.0-177-generic.0.crash
+--- rotated/compressed logs count ---
+5
+###END

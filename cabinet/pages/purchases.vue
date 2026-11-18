@@ -191,7 +191,6 @@ const ORDER_STATUS: Record<Order['status'], string> = {
 <template>
   <div>
     <div class="page-head">
-      <div class="page-kicker">Подписка</div>
       <h1>Покупки</h1>
     </div>
 

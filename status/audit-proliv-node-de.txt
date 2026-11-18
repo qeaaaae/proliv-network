@@ -1,0 +1,75 @@
+﻿###HOST gho33tprogaming1.serv.host 2026-11-15T15:16:20+00:00
+--- df -h ---
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/vda2        25G  6.0G   18G  26% /
+--- docker system df ---
+TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
+Images          1         1         499.9MB   0B (0%)
+Containers      2         2         34.48MB   0B (0%)
+Local Volumes   0         0         0B        0B
+Build Cache     0         0         0B        0B
+--- docker images ---
+remnawave/node:3.4.3  500MB  3 weeks ago
+--- dangling images count ---
+0
+--- stopped containers ---
+--- builder cache (last lines) ---
+ID        RECLAIMABLE   SIZE      LAST ACCESSED
+Reclaimable:	0B
+Total:		0B
+--- journal disk usage ---
+Archived and active journals take up 245.1M in the file system.
+--- journald limits ---
+SystemMaxUse=250M
+--- /var/log size ---
+651M	/var/log
+--- big files in /var/log ---
+269509083 /var/log/syslog.1
+39177583 /var/log/syslog
+25165824 /var/log/journal/07397259682957651610466200eebdfe/system@d1a52dd9f45f4d45be99771a84aa110a-0000000000209a7d-0006604df98e52ed.journal
+25165824 /var/log/journal/07397259682957651610466200eebdfe/system@d1a52dd9f45f4d45be99771a84aa110a-000000000020251b-0006604a3df5220d.journal
+25165824 /var/log/journal/07397259682957651610466200eebdfe/system@d1a52dd9f45f4d45be99771a84aa110a-00000000001fafd0-0006604689bbf519.journal
+25165824 /var/log/journal/07397259682957651610466200eebdfe/system@d1a52dd9f45f4d45be99771a84aa110a-00000000001f3ae0-00066042e070b508.journal
+25165824 /var/log/journal/07397259682957651610466200eebdfe/system@d1a52dd9f45f4d45be99771a84aa110a-00000000001ec56a-0006603f2ef42759.journal
+25165824 /var/log/journal/07397259682957651610466200eebdfe/system@d1a52dd9f45f4d45be99771a84aa110a-00000000001e5021-0006603bac0e5b8a.journal
+25165824 /var/log/journal/07397259682957651610466200eebdfe/system@d1a52dd9f45f4d45be99771a84aa110a-00000000001ddb7d-00066038025aa3b2.journal
+25165824 /var/log/journal/07397259682957651610466200eebdfe/system@d1a52dd9f45f4d45be99771a84aa110a-00000000001d65f0-000660344e7ec3c4.journal
+--- apt cache ---
+113M	/var/cache/apt
+--- tmp dirs ---
+1.4M	/tmp
+52K	/var/tmp
+--- top dirs /var ---
+1.6G	/var
+779M	/var/lib
+651M	/var/log
+151M	/var/cache
+2.3M	/var/backups
+1.1M	/var/www
+52K	/var/tmp
+16K	/var/spool
+--- top dirs /opt ---
+100K	/opt
+68K	/opt/ipregion
+12K	/opt/remnanode
+12K	/opt/containerd
+--- top dirs /root ---
+25M	/root
+24M	/root/proliv-backups
+104K	/root/nginx_bak_1793624740
+104K	/root/nginx_bak_1793624720
+20K	/root/.docker
+8.0K	/root/.ssh
+8.0K	/root/.config
+4.0K	/root/.cache
+--- docker volumes ---
+
+--- installed kernels ---
+3
+--- apt autoremove candidates ---
+0
+--- crash dumps ---
+total 0
+--- rotated/compressed logs count ---
+18
+###END

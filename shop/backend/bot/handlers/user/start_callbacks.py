@@ -350,7 +350,7 @@ async def main_action_callback_handler(
             back_callback="main_action:bot_interface",
         )
     elif action == "request_trial":
-        await user_trial_handlers.request_trial_confirmation_handler(
+        await user_trial_handlers.request_trial_activation_handler(
             callback, settings, i18n_data, subscription_service, session, state
         )
     elif action == "language":

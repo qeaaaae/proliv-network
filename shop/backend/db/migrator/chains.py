@@ -42,6 +42,7 @@ from .chain_0110_giveaway_scheduled_draw import CHAIN_0110_GIVEAWAY_SCHEDULED_DR
 from .chain_0111_giveaway_display_count import CHAIN_0111_GIVEAWAY_DISPLAY_COUNT
 from .chain_0112_admin_purchases import CHAIN_0112_ADMIN_PURCHASES
 from .chain_0113_admin_purchase_price import CHAIN_0113_ADMIN_PURCHASE_PRICE
+from .chain_0114_giveaway_reminder import CHAIN_0114_GIVEAWAY_REMINDER
 from .engine import Migration
 
 MIGRATIONS: list[Migration] = [
@@ -85,4 +86,5 @@ MIGRATIONS: list[Migration] = [
     *CHAIN_0111_GIVEAWAY_DISPLAY_COUNT,
     *CHAIN_0112_ADMIN_PURCHASES,
     *CHAIN_0113_ADMIN_PURCHASE_PRICE,
+    *CHAIN_0114_GIVEAWAY_REMINDER,
 ]

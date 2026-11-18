@@ -15,7 +15,7 @@ from bot.services.partner_common import (
 )
 from config.settings import Settings
 from db.balance_models import UserBalanceLedgerEntry
-from db.dal import partner_dal, user_balance_dal, user_dal
+from db.dal import partner_dal, referral_payment_dal, user_balance_dal, user_dal
 from db.partner_models import PartnerLedgerEntry
 
 TERMINAL_CHECKOUT_STATUSES = frozenset(
@@ -208,6 +208,8 @@ class UserBalanceService:
         user = await user_dal.lock_user_by_id(session, user_id)
         if user is None or bool(user.is_banned):
             raise UserBalanceError("access_denied", 403)
+        if not await referral_payment_dal.has_monthly_subscription_purchase(session, user_id):
+            raise UserBalanceError("balance_spend_requires_purchase", 409)
         available_minor = max(
             0,
             await user_balance_dal.balance_minor(session, user_id, normalized_currency),

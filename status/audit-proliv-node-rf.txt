@@ -1,0 +1,49 @@
+﻿###HOST gho33tprogaming5.serv.host 2026-11-15T18:17:34+03:00
+--- df -h ---
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/vda2        20G  3.9G   15G  21% /
+--- docker system df ---
+--- docker images ---
+--- dangling images count ---
+0
+--- stopped containers ---
+--- builder cache (last lines) ---
+--- journal disk usage ---
+Archived and active journals take up 69.5M in the file system.
+--- journald limits ---
+--- /var/log size ---
+116M	/var/log
+--- big files in /var/log ---
+58720256 /var/log/journal/9ee98ff0c804774760af2f516374b28b/system@7d270f8b95664568a40fb3d9c325def4-0000000000000a03-00065fec64ad9af5.journal
+--- apt cache ---
+115M	/var/cache/apt
+--- tmp dirs ---
+132K	/tmp
+60K	/var/tmp
+--- top dirs /var ---
+526M	/var
+257M	/var/lib
+151M	/var/cache
+116M	/var/log
+1.4M	/var/backups
+296K	/var/www
+60K	/var/tmp
+16K	/var/spool
+--- top dirs /opt ---
+4.0K	/opt
+--- top dirs /root ---
+244K	/root
+108K	/root/site-backup-pre-rich-20261112
+48K	/root/site-backup-pre-rich-
+8.0K	/root/.ssh
+4.0K	/root/.cache
+--- docker volumes ---
+--- installed kernels ---
+3
+--- apt autoremove candidates ---
+0
+--- crash dumps ---
+total 0
+--- rotated/compressed logs count ---
+5
+###END

@@ -6,6 +6,7 @@ from . import (
     notrial,
     promo_user,
     referral,
+    stale_connection,
     start,
     trial_handler,
     winback,
@@ -15,6 +16,7 @@ from .subscription import router as subscription_router
 user_router_aggregate = Router(name="user_router_aggregate")
 
 user_router_aggregate.include_router(advertiser.router)
+user_router_aggregate.include_router(stale_connection.router)
 user_router_aggregate.include_router(winback.router)
 user_router_aggregate.include_router(notrial.router)
 user_router_aggregate.include_router(promo_user.router)

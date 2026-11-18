@@ -755,18 +755,7 @@ async def giveaway_draw_handler(
             result_text, reply_markup=back_markup, parse_mode="HTML"
         )
 
-    # Announce the results in the group as a reply to the giveaway post.
-    if giveaway.chat_id:
-        try:
-            await bot.send_message(
-                chat_id=int(giveaway.chat_id),
-                text=_("admin_giveaway_group_results", winners=winners_block),
-                parse_mode="HTML",
-                reply_to_message_id=(int(giveaway.message_id) if giveaway.message_id else None),
-                allow_sending_without_reply=True,
-            )
-        except Exception as e:
-            logger.warning("Giveaway %s group announce failed: %s", giveaway.giveaway_id, e)
+    # Results stay private: the admin announces them manually.
 
 
 @router.callback_query(F.data.regexp(r"^admin_giveaway:cancel_gw:\d+$"))

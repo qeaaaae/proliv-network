@@ -14,9 +14,10 @@ from bot.app.web.context import (
 )
 from bot.services.partner_common import amount_to_minor, currency_scale
 from bot.services.user_balance_service import UserBalanceService
-from db.dal import partner_dal, user_balance_dal, user_dal
+from db.dal import partner_dal, referral_payment_dal, user_balance_dal, user_dal
 
 from .assets import _enforce_webapp_rate_limit
+from .billing_common import _localized_webapp_message
 from .billing_payments import _create_subscription_payment
 from .common import (
     _invalidate_webapp_user_caches,
@@ -129,6 +130,17 @@ async def referral_exchange_route(request: web.Request) -> web.Response:
             await session.rollback()
             return _json_error(403, "access_denied", "Access denied")
         await user_dal.lock_user_by_id(session, user_id)
+        if not await referral_payment_dal.has_monthly_subscription_purchase(session, user_id):
+            await session.rollback()
+            return _json_error(
+                403,
+                "balance_spend_requires_purchase",
+                _localized_webapp_message(
+                    request,
+                    _normalize_language(user.language_code or settings.DEFAULT_LANGUAGE),
+                    "balance_spend_requires_purchase",
+                ),
+            )
 
         spend_minor = days * price_minor
         exchange_id = uuid4().hex
@@ -139,22 +151,16 @@ async def referral_exchange_route(request: web.Request) -> web.Response:
                 return _json_error(
                     400, "bonus_exchange_unavailable", "Bonus exchange is not available"
                 )
-            profile = await partner_dal.get_profile_by_user_id(
-                session, user_id, for_update=True
-            )
+            profile = await partner_dal.get_profile_by_user_id(session, user_id, for_update=True)
             if profile is None or str(profile.status) != "active":
                 await session.rollback()
-                return _json_error(
-                    400, "bonus_exchange_insufficient", "Not enough bonus balance"
-                )
+                return _json_error(400, "bonus_exchange_insufficient", "Not enough bonus balance")
             partner_minor = await partner_dal.balance_minor(
                 session, int(profile.partner_id), currency
             )
             if days > int(partner_minor // price_minor):
                 await session.rollback()
-                return _json_error(
-                    400, "bonus_exchange_insufficient", "Not enough bonus balance"
-                )
+                return _json_error(400, "bonus_exchange_insufficient", "Not enough bonus balance")
             await partner_dal.create_ledger_entry(
                 session,
                 partner_id=int(profile.partner_id),
@@ -173,9 +179,7 @@ async def referral_exchange_route(request: web.Request) -> web.Response:
             balance_minor = await user_balance_dal.balance_minor(session, user_id, currency)
             if days > int(balance_minor // price_minor):
                 await session.rollback()
-                return _json_error(
-                    400, "bonus_exchange_insufficient", "Not enough bonus balance"
-                )
+                return _json_error(400, "bonus_exchange_insufficient", "Not enough bonus balance")
             await user_balance_dal.create_ledger_entry(
                 session,
                 user_id=user_id,

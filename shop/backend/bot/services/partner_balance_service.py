@@ -30,7 +30,13 @@ from bot.services.partner_commission_service import PartnerCommissionService
 from bot.services.partner_common import PartnerError, amount_to_minor, currency_scale
 from config.settings import Settings
 from config.subscription_periods import days_to_legacy_months, resolve_period_days
-from db.dal import partner_dal, payment_dal, subscription_dal, user_dal
+from db.dal import (
+    partner_dal,
+    payment_dal,
+    referral_payment_dal,
+    subscription_dal,
+    user_dal,
+)
 
 
 class PartnerBalanceService:
@@ -179,6 +185,10 @@ class PartnerBalanceService:
                             raise PartnerError("partner_not_found", 404)
                         if profile.status != "active":
                             raise PartnerError("partner_not_active", 403)
+                        if not await referral_payment_dal.has_monthly_subscription_purchase(
+                            session, user_id
+                        ):
+                            raise PartnerError("balance_spend_requires_purchase", 409)
                         subscription = (
                             await subscription_dal.get_active_subscription_by_user_id_for_update(
                                 session,

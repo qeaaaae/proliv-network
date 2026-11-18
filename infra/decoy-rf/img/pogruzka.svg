@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 360">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#eef1f4"/><stop offset="1" stop-color="#dde3e9"/></linearGradient>
+</defs>
+<rect width="600" height="360" fill="url(#bg)"/>
+<g stroke="#cdd5dc" stroke-width="1">
+<path d="M0 60 H600 M0 120 H600 M0 180 H600 M0 240 H600 M0 300 H600"/>
+<path d="M75 0 V360 M150 0 V360 M225 0 V360 M300 0 V360 M375 0 V360 M450 0 V360 M525 0 V360"/>
+</g>
+<rect x="0" y="292" width="600" height="68" fill="#c6cfd7"/>
+<line x1="0" y1="292" x2="600" y2="292" stroke="#94a3b0" stroke-width="2"/>
+<!-- truck -->
+<g>
+<!-- cargo bed -->
+<rect x="70" y="216" width="270" height="16" rx="4" fill="#46525e"/>
+<!-- crate on bed -->
+<rect x="130" y="130" width="150" height="86" fill="#b98a5a"/>
+<path d="M130 130 l150 86 M280 130 l-150 86" stroke="#8a6136" stroke-width="4"/>
+<rect x="130" y="130" width="150" height="86" fill="none" stroke="#8a6136" stroke-width="5"/>
+<rect x="197" y="130" width="16" height="86" fill="#8a6136"/>
+<!-- "this side up" marks -->
+<path d="M150 200 v-16 M146 188 l4 -8 4 8" stroke="#f4f5f6" stroke-width="3" fill="none"/>
+<path d="M166 200 v-16 M162 188 l4 -8 4 8" stroke="#f4f5f6" stroke-width="3" fill="none"/>
+<!-- cab -->
+<path d="M340 236 v-90 c0-8 6-14 14-14 h44 c10 0 18 5 24 14 l22 34 c4 6 6 12 6 18 v38 z" fill="#46586b"/>
+<path d="M358 146 h36 c7 0 13 4 17 10 l18 28 c2 4 1 8 -3 8 h-68 z" fill="#7c97b1"/>
+<rect x="340" y="236" width="120" height="10" rx="4" fill="#2c3a49"/>
+<rect x="444" y="196" width="18" height="26" rx="4" fill="#2c3a49"/>
+<!-- bumper + light -->
+<rect x="448" y="222" width="18" height="14" rx="4" fill="#d97b29"/>
+<!-- wheels -->
+<circle cx="130" cy="272" r="24" fill="#2c3a49"/><circle cx="130" cy="272" r="10" fill="#5c6e80"/>
+<circle cx="196" cy="272" r="24" fill="#2c3a49"/><circle cx="196" cy="272" r="10" fill="#5c6e80"/>
+<circle cx="390" cy="272" r="24" fill="#2c3a49"/><circle cx="390" cy="272" r="10" fill="#5c6e80"/>
+</g>
+<!-- strap over crate -->
+<path d="M205 130 C205 176 205 200 205 232" stroke="#d97b29" stroke-width="6" opacity=".85"/>
+<!-- worker silhouette -->
+<g fill="#5c6e80">
+<circle cx="512" cy="190" r="14"/>
+<path d="M492 292 v-58 c0-24 10-36 20-36 s20 12 20 36 v58 z"/>
+</g>
+<path d="M504 234 L478 218" stroke="#5c6e80" stroke-width="10" stroke-linecap="round"/>
+</svg>

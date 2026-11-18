@@ -1,0 +1,5 @@
+{
+  "log": {"loglevel": "warning"},
+  "routing": {"rules": [{"type": "field", "domain": ["geosite:category-ai-chat"], "outboundTag": "test"}]},
+  "outbounds": [{"tag": "test", "protocol": "freedom"}]
+}

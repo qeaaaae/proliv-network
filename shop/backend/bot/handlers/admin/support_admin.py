@@ -118,7 +118,7 @@ def _ticket_keyboard(
         [
             types.InlineKeyboardButton(
                 text=_("support_user_card_button"),
-                callback_data=f"admin_user_card_from_list:{user_id}:0",
+                callback_data=f"admin_user_card_from_list:{user_id}:0:{ticket_id}",
             ),
             types.InlineKeyboardButton(
                 text=_("admin_ticket_refresh_button"),

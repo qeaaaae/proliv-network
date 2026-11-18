@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 360">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#eef1f4"/><stop offset="1" stop-color="#dde3e9"/></linearGradient>
+<linearGradient id="cab" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#dfe6ec"/><stop offset="1" stop-color="#aeb9c3"/></linearGradient>
+</defs>
+<rect width="600" height="360" fill="url(#bg)"/>
+<g stroke="#cdd5dc" stroke-width="1">
+<path d="M0 60 H600 M0 120 H600 M0 180 H600 M0 240 H600 M0 300 H600"/>
+<path d="M75 0 V360 M150 0 V360 M225 0 V360 M300 0 V360 M375 0 V360 M450 0 V360 M525 0 V360"/>
+</g>
+<rect x="0" y="300" width="600" height="60" fill="#c6cfd7"/>
+<ellipse cx="290" cy="312" rx="220" ry="14" fill="#94a3b0" opacity=".45"/>
+<!-- EDM die-sinking: base tank -->
+<rect x="90" y="180" width="230" height="116" rx="8" fill="url(#cab)"/>
+<rect x="104" y="192" width="202" height="72" rx="5" fill="#31404f"/>
+<!-- dielectric fluid -->
+<rect x="104" y="212" width="202" height="52" rx="5" fill="#476b8a"/>
+<rect x="104" y="212" width="202" height="10" fill="#5d84a6"/>
+<!-- workpiece + electrode head -->
+<rect x="180" y="228" width="60" height="24" rx="3" fill="#9fb0be"/>
+<rect x="196" y="200" width="28" height="30" rx="3" fill="#46586b"/>
+<rect x="206" y="196" width="8" height="34" fill="#d97b29"/>
+<g stroke="#f0b27a" stroke-width="2" stroke-linecap="round">
+<path d="M210 226 l-9 10"/><path d="M210 226 l3 12"/><path d="M210 226 l12 7"/>
+</g>
+<!-- column + ram -->
+<rect x="300" y="80" width="60" height="216" rx="8" fill="url(#cab)"/>
+<rect x="300" y="80" width="60" height="14" rx="7" fill="#3a4550"/>
+<rect x="262" y="120" width="44" height="80" rx="6" fill="#46586b"/>
+<rect x="272" y="196" width="24" height="12" rx="3" fill="#2c3a49"/>
+<rect x="278" y="208" width="12" height="20" fill="#d97b29"/>
+<path d="M284 228 V200" stroke="#2c3a49" stroke-width="4"/>
+<!-- servos scale marks -->
+<g stroke="#8fa0b0" stroke-width="2">
+<line x1="310" y1="106" x2="322" y2="106"/><line x1="310" y1="126" x2="322" y2="126"/>
+<line x1="310" y1="146" x2="322" y2="146"/><line x1="310" y1="166" x2="322" y2="166"/>
+</g>
+<!-- control cabinet -->
+<rect x="392" y="110" width="130" height="186" rx="8" fill="#46525e"/>
+<rect x="404" y="124" width="106" height="66" rx="4" fill="#d97b29"/>
+<rect x="410" y="132" width="94" height="8" rx="2" fill="#f0b27a"/>
+<rect x="410" y="146" width="64" height="6" rx="2" fill="#fdf1e3"/>
+<rect x="410" y="158" width="80" height="6" rx="2" fill="#fdf1e3"/>
+<rect x="410" y="170" width="52" height="6" rx="2" fill="#fdf1e3"/>
+<circle cx="420" cy="212" r="7" fill="#f0b27a"/>
+<circle cx="442" cy="212" r="7" fill="#e8edf2"/>
+<circle cx="464" cy="212" r="7" fill="#e8edf2"/>
+<circle cx="486" cy="212" r="7" fill="#93a3b3"/>
+<rect x="404" y="234" width="106" height="10" rx="5" fill="#2c3a49"/>
+<rect x="404" y="252" width="106" height="10" rx="5" fill="#2c3a49"/>
+<rect x="404" y="270" width="106" height="10" rx="5" fill="#2c3a49"/>
+<!-- cable -->
+<path d="M392 170 C370 160 362 150 360 138" stroke="#5c6e80" stroke-width="7" fill="none" stroke-linecap="round"/>
+<!-- feet -->
+<rect x="112" y="296" width="34" height="18" rx="3" fill="#3a4550"/>
+<rect x="262" y="296" width="34" height="18" rx="3" fill="#3a4550"/>
+<rect x="404" y="296" width="34" height="18" rx="3" fill="#3a4550"/>
+<rect x="478" y="296" width="34" height="18" rx="3" fill="#3a4550"/>
+</svg>

@@ -1,0 +1,1 @@
+{"uuid":"58c03fa0-3724-47ea-a045-47cf139b7f80","config":{"inbounds":[{"uuid":"bc71c285-1b3b-4490-a1bb-1b9c8cf3e67a","tag":"VLESS-TCP-Reality-NL-v2"},{"uuid":"71c670ea-ec73-4a11-a414-8a6e09784dea","tag":"VLESS-WS-CDN-NL-v2"},{"uuid":"f4062454-d2af-498c-84f5-19dc1d8cfd18","tag":"VLESS-XHTTP-CDN-NL-v2"}]}}

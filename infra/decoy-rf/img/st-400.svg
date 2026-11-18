@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 360">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#eef1f4"/><stop offset="1" stop-color="#dde3e9"/></linearGradient>
+<linearGradient id="cab" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#dfe6ec"/><stop offset="1" stop-color="#aeb9c3"/></linearGradient>
+</defs>
+<rect width="600" height="360" fill="url(#bg)"/>
+<g stroke="#cdd5dc" stroke-width="1">
+<path d="M0 60 H600 M0 120 H600 M0 180 H600 M0 240 H600 M0 300 H600"/>
+<path d="M75 0 V360 M150 0 V360 M225 0 V360 M300 0 V360 M375 0 V360 M450 0 V360 M525 0 V360"/>
+</g>
+<rect x="0" y="300" width="600" height="60" fill="#c6cfd7"/>
+<ellipse cx="290" cy="312" rx="230" ry="14" fill="#94a3b0" opacity=".45"/>
+<!-- lathe body -->
+<rect x="90" y="118" width="340" height="178" rx="10" fill="url(#cab)"/>
+<rect x="90" y="118" width="340" height="16" rx="8" fill="#3a4550"/>
+<!-- sloped cover -->
+<polygon points="112,138 300,138 336,172 112,172" fill="#4a5663"/>
+<!-- door window -->
+<rect x="112" y="180" width="168" height="84" rx="5" fill="#2f3d4c"/>
+<rect x="120" y="188" width="152" height="68" rx="3" fill="#7c97b1"/>
+<rect x="120" y="188" width="152" height="68" rx="3" fill="#ffffff" opacity=".12"/>
+<!-- chuck + part -->
+<circle cx="168" cy="222" r="26" fill="#2c3a49"/>
+<circle cx="168" cy="222" r="15" fill="#46586b"/>
+<g stroke="#2c3a49" stroke-width="5" stroke-linecap="round">
+<line x1="168" y1="207" x2="168" y2="197"/><line x1="168" y1="237" x2="168" y2="247"/>
+<line x1="153" y1="222" x2="143" y2="222"/><line x1="183" y1="222" x2="193" y2="222"/>
+</g>
+<rect x="168" y="218" width="88" height="9" rx="4.5" fill="#9fb0be"/>
+<rect x="238" y="206" width="26" height="32" rx="4" fill="#46586b"/>
+<!-- tailstock -->
+<rect x="248" y="228" width="20" height="20" rx="3" fill="#2c3a49"/>
+<!-- control pendant -->
+<rect x="296" y="180" width="104" height="84" rx="5" fill="#46525e"/>
+<rect x="304" y="188" width="88" height="44" rx="3" fill="#d97b29"/>
+<rect x="308" y="192" width="80" height="6" rx="2" fill="#f0b27a"/>
+<rect x="308" y="202" width="54" height="5" rx="2" fill="#fdf1e3"/>
+<rect x="308" y="211" width="66" height="5" rx="2" fill="#fdf1e3"/>
+<rect x="308" y="220" width="40" height="5" rx="2" fill="#fdf1e3"/>
+<circle cx="316" cy="248" r="7" fill="#f0b27a"/>
+<circle cx="336" cy="248" r="7" fill="#e8edf2"/>
+<circle cx="356" cy="248" r="7" fill="#e8edf2"/>
+<circle cx="376" cy="248" r="7" fill="#93a3b3"/>
+<!-- base details -->
+<rect x="112" y="272" width="288" height="10" rx="5" fill="#3a4550"/>
+<rect x="118" y="296" width="34" height="18" rx="3" fill="#3a4550"/>
+<rect x="380" y="296" width="34" height="18" rx="3" fill="#3a4550"/>
+<!-- coolant unit -->
+<rect x="452" y="196" width="66" height="100" rx="7" fill="#46525e"/>
+<rect x="460" y="206" width="50" height="34" rx="4" fill="#d97b29"/>
+<circle cx="485" cy="266" r="11" fill="#e8edf2"/>
+<path d="M485 259 v14 M478 266 h14" stroke="#d97b29" stroke-width="3" stroke-linecap="round"/>
+<path d="M452 226 C440 226 434 220 430 212" stroke="#5c6e80" stroke-width="6" fill="none" stroke-linecap="round"/>
+</svg>

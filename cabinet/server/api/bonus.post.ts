@@ -12,6 +12,8 @@ const exchangeErrors: Record<string, string> = {
   bonus_exchange_unavailable: 'Обмен бонусов сейчас недоступен',
   bonus_exchange_insufficient: 'Недостаточно бонусов для обмена',
   bonus_exchange_failed: 'Обмен не удался, попробуйте позже',
+  balance_spend_requires_purchase:
+    'Списание баланса станет доступно после первой покупки подписки от месяца',
 }
 
 function exchangeFail(e: unknown): never {
@@ -144,6 +146,15 @@ export default defineEventHandler(async (event) => {
           network: (body?.network || '').trim().toLowerCase() || undefined,
           idempotency_key: randomUUID(),
         },
+      }).catch((e: unknown) => {
+        const code = (e as { data?: { error?: string } })?.data?.error
+        if (code === 'balance_spend_requires_purchase') {
+          throw createError({
+            statusCode: 403,
+            statusMessage: exchangeErrors.balance_spend_requires_purchase,
+          })
+        }
+        throw e
       })
       const me = await shopFetch<ShopMe>(event, '/api/me')
       return { ok: Boolean(res.ok ?? true), balance: Number(me.balance?.amount ?? 0) }

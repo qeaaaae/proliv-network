@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 360">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#eef1f4"/><stop offset="1" stop-color="#dde3e9"/></linearGradient>
+<linearGradient id="cab" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e6ebef"/><stop offset="1" stop-color="#b9c3cc"/></linearGradient>
+</defs>
+<rect width="600" height="360" fill="url(#bg)"/>
+<g stroke="#cdd5dc" stroke-width="1">
+<path d="M0 60 H600 M0 120 H600 M0 180 H600 M0 240 H600 M0 300 H600"/>
+<path d="M75 0 V360 M150 0 V360 M225 0 V360 M300 0 V360 M375 0 V360 M450 0 V360 M525 0 V360"/>
+</g>
+<rect x="0" y="300" width="600" height="60" fill="#c6cfd7"/>
+<ellipse cx="300" cy="312" rx="210" ry="14" fill="#94a3b0" opacity=".45"/>
+<!-- machining center cabinet -->
+<rect x="140" y="60" width="300" height="236" rx="10" fill="url(#cab)"/>
+<rect x="140" y="60" width="300" height="16" rx="8" fill="#3a4550"/>
+<!-- two sliding doors with windows -->
+<rect x="162" y="92" width="128" height="168" rx="5" fill="#31404f"/>
+<rect x="310" y="92" width="108" height="168" rx="5" fill="#31404f"/>
+<rect x="172" y="102" width="108" height="104" rx="3" fill="#7c97b1"/>
+<rect x="320" y="102" width="88" height="104" rx="3" fill="#7c97b1"/>
+<rect x="172" y="102" width="108" height="104" rx="3" fill="#ffffff" opacity=".1"/>
+<rect x="320" y="102" width="88" height="104" rx="3" fill="#ffffff" opacity=".1"/>
+<!-- interior: table + spindle -->
+<rect x="212" y="168" width="110" height="12" rx="4" fill="#46586b"/>
+<rect x="252" y="128" width="20" height="42" rx="3" fill="#2c3a49"/>
+<rect x="258" y="166" width="8" height="14" fill="#d97b29"/>
+<g stroke="#f0b27a" stroke-width="2" stroke-linecap="round">
+<path d="M262 182 l-8 9"/><path d="M262 182 l3 11"/><path d="M262 182 l11 6"/>
+</g>
+<rect x="172" y="218" width="108" height="9" rx="3" fill="#5c6e80"/>
+<rect x="320" y="218" width="88" height="9" rx="3" fill="#5c6e80"/>
+<rect x="172" y="234" width="108" height="9" rx="3" fill="#5c6e80"/>
+<rect x="320" y="234" width="88" height="9" rx="3" fill="#5c6e80"/>
+<!-- door seam -->
+<rect x="288" y="92" width="12" height="168" fill="#2c3a49" opacity=".55"/>
+<!-- pendant arm + panel -->
+<rect x="452" y="98" width="12" height="56" rx="6" fill="#46525e"/>
+<rect x="444" y="148" width="62" height="88" rx="6" fill="#46525e"/>
+<rect x="452" y="158" width="46" height="34" rx="3" fill="#d97b29"/>
+<rect x="456" y="162" width="38" height="5" rx="2" fill="#f0b27a"/>
+<rect x="456" y="171" width="28" height="4" rx="2" fill="#fdf1e3"/>
+<rect x="456" y="179" width="34" height="4" rx="2" fill="#fdf1e3"/>
+<circle cx="464" cy="208" r="6" fill="#f0b27a"/>
+<circle cx="480" cy="208" r="6" fill="#e8edf2"/>
+<circle cx="496" cy="208" r="6" fill="#93a3b3"/>
+<rect x="452" y="222" width="46" height="8" rx="4" fill="#2c3a49"/>
+<!-- base -->
+<rect x="162" y="280" width="256" height="10" rx="5" fill="#3a4550"/>
+<rect x="170" y="296" width="34" height="18" rx="3" fill="#3a4550"/>
+<rect x="384" y="296" width="34" height="18" rx="3" fill="#3a4550"/>
+<!-- chip conveyor -->
+<rect x="88" y="238" width="44" height="58" rx="5" fill="#46525e"/>
+<polygon points="96,238 128,238 160,190 128,190" fill="#5c6e80"/>
+<rect x="96" y="248" width="28" height="38" rx="3" fill="#31404f"/>
+</svg>

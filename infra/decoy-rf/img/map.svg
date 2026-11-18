@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420">
+<rect width="800" height="420" fill="#e9edf1"/>
+<!-- blocks -->
+<g fill="#dde3e8">
+<rect x="30" y="30" width="150" height="90" rx="6"/>
+<rect x="30" y="140" width="150" height="120" rx="6"/>
+<rect x="210" y="30" width="110" height="70" rx="6"/>
+<rect x="560" y="40" width="200" height="100" rx="6"/>
+<rect x="600" y="170" width="160" height="110" rx="6"/>
+<rect x="30" y="290" width="180" height="100" rx="6"/>
+</g>
+<!-- green area -->
+<rect x="560" y="300" width="210" height="90" rx="8" fill="#cfe0d4"/>
+<circle cx="600" cy="330" r="14" fill="#a9c4b2"/><circle cx="645" cy="345" r="10" fill="#a9c4b2"/><circle cx="680" cy="320" r="12" fill="#a9c4b2"/>
+<text x="665" y="380" font-family="Arial" font-size="12" fill="#7a9186">сад «Нагатинский»</text>
+<!-- Varshavskoe shosse diagonal -->
+<path d="M240 -10 L470 430" stroke="#ffffff" stroke-width="34" stroke-linecap="round"/>
+<path d="M240 -10 L470 430" stroke="#c9d2da" stroke-width="30" stroke-linecap="round"/>
+<path d="M240 -10 L470 430" stroke="#ffffff" stroke-width="3" stroke-dasharray="16 14"/>
+<!-- Kolomenskoe / Andropova cross street -->
+<path d="M180 260 L780 200" stroke="#c9d2da" stroke-width="18" stroke-linecap="round"/>
+<path d="M180 260 L780 200" stroke="#ffffff" stroke-width="2.5" stroke-dasharray="14 12"/>
+<!-- small streets -->
+<path d="M380 150 L620 340" stroke="#d4dbe2" stroke-width="12" stroke-linecap="round"/>
+<path d="M240 330 L520 300" stroke="#d4dbe2" stroke-width="12" stroke-linecap="round"/>
+<!-- street labels -->
+<text x="300" y="120" font-family="Arial" font-size="13" fill="#5a6672" transform="rotate(57 300 120)">Варшавское шоссе</text>
+<text x="470" y="215" font-family="Arial" font-size="12" fill="#5a6672" transform="rotate(-7 470 215)">пр-т Андропова</text>
+<text x="480" y="310" font-family="Arial" font-size="11" fill="#7a858e" transform="rotate(37 480 310)">ул. Нагатинская</text>
+<!-- metro Nagatinskaya -->
+<circle cx="352" cy="196" r="15" fill="#c0392b"/>
+<text x="352" y="201" font-family="Arial" font-size="15" font-weight="bold" fill="#ffffff" text-anchor="middle">М</text>
+<text x="378" y="192" font-family="Arial" font-size="12.5" fill="#454f58">м. «Нагатинская»</text>
+<path d="M368 200 L405 218" stroke="#7a858e" stroke-width="1.4" stroke-dasharray="4 3"/>
+<!-- plant territory -->
+<rect x="420" y="238" width="150" height="120" rx="8" fill="#ccd7df" stroke="#94a3b0" stroke-width="1.6" stroke-dasharray="6 4"/>
+<rect x="442" y="262" width="52" height="34" fill="#aeb9c3"/>
+<rect x="504" y="266" width="46" height="28" fill="#aeb9c3"/>
+<rect x="442" y="310" width="66" height="34" fill="#aeb9c3"/>
+<text x="435" y="236" font-family="Arial" font-size="11.5" fill="#6b7a89">территория завода «Калибр»</text>
+<!-- our building + pin -->
+<circle cx="528" cy="326" r="26" fill="#d97b29" opacity=".18"/>
+<g transform="translate(528 300)">
+<path d="M0 -14 C-11 -14 -18 -7 -18 2 C-18 13 -6 20 0 28 C6 20 18 13 18 2 C18 -7 11 -14 0 -14 Z" fill="#d97b29"/>
+<circle cx="0" cy="0" r="7" fill="#fdf1e3"/>
+</g>
+<text x="556" y="330" font-family="Arial" font-size="13" font-weight="bold" fill="#1c2733">стр. 8, СтанкоПрецизион</text>
+<!-- east gate -->
+<rect x="566" y="252" width="14" height="14" rx="3" fill="#1c2733"/>
+<text x="588" y="263" font-family="Arial" font-size="11" fill="#454f58">въезд «Восточный»</text>
+<!-- compass -->
+<g transform="translate(740 56)">
+<circle r="20" fill="#ffffff" stroke="#94a3b0" stroke-width="1.4"/>
+<path d="M0 -12 L5 6 L0 2 L-5 6 Z" fill="#c0392b"/>
+<text x="0" y="-26" font-family="Arial" font-size="12" font-weight="bold" fill="#5a6672" text-anchor="middle">С</text>
+</g>
+<!-- walking route metro->plant -->
+<path d="M368 205 C390 220 420 236 455 252 C480 264 505 285 520 296" stroke="#b35d14" stroke-width="3" stroke-dasharray="1 8" stroke-linecap="round" fill="none"/>
+<text x="430" y="180" font-family="Arial" font-size="11.5" fill="#b35d14">7 мин пешком</text>
+</svg>

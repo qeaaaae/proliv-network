@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.services.partner_common import amount_to_minor, currency_scale
-from db.dal import user_balance_dal, user_dal
+from db.dal import referral_payment_dal, user_balance_dal, user_dal
 from db.extension_models import ExtensionOperation, ExtensionOrder
 from db.models import Payment
 
@@ -152,6 +152,10 @@ async def ledger_change(
         ):
             raise ExtensionError("extension_ledger_conflict")
         return
+    if amount_minor < 0 and not await referral_payment_dal.has_monthly_subscription_purchase(
+        session, user_id
+    ):
+        raise ExtensionError("balance_spend_requires_purchase")
     balance = await user_balance_dal.balance_minor(session, user_id, currency)
     if balance + amount_minor < 0:
         raise ExtensionError("insufficient_user_balance")

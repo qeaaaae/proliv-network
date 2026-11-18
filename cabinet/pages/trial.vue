@@ -91,7 +91,6 @@ async function payTrial() {
   <div>
     <div class="page-head">
       <div>
-        <div class="page-kicker">Proliv Network</div>
         <h1>Пробный период</h1>
       </div>
     </div>

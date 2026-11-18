@@ -1,0 +1,33 @@
+﻿--- rsyslog logrotate ---
+8:	rotate 2
+9:	maxsize 300M
+16:	postrotate
+17:		/usr/lib/rsyslog/rsyslog-rotate
+--- nginx logrotate ---
+--- cron ---
+# ProlivVPN weekly cleanup - Sundays 04:30 local time.
+# Logs to /var/log/proliv-cleanup.log.
+30 4 * * 0 root /usr/local/sbin/proliv-cleanup.sh
+u0n61yfxpavop54idfvsxwgpt               	true 	33.37kB   	5 hours ago
+e6x1yn16hweo7llkoud89zpzy               	true 	29.27kB   	5 hours ago
+l26dpdt5fxuaax824e2ckwbk4*              	true 	56.28MB   	5 hours ago
+voec14cs0uue3n5s9zsn72hlo*              	true 	136.7MB   	5 hours ago
+034c0phtv1huc8digoyvgpqqn*              	true 	28.67kB   	5 hours ago
+o278lj6jjzl6j3bdww1jn1oi8               	true 	8.192kB   	5 hours ago
+lnrwya99kzw3xh0igwx23mbmf               	true 	13.18MB   	5 hours ago
+ogzagwjq2ebgzi3hq53l1sx7j               	true 	12.29kB   	5 hours ago
+mo1tbln9j9swl4gjb9qnl6zfr               	true 	12.93MB   	5 hours ago
+jctcf8ia91kwv03zobb2p7s8x*              	true 	16.53MB   	5 hours ago
+15s043whsbn3cqr0uowppmn5r               	true 	53.25kB   	5 hours ago
+bi97ko9c7glin926oo7vjhmrj               	true 	23.64MB   	5 hours ago
+rx5alc6890qyr07q8kvnu0isl               	true 	36.86kB   	5 hours ago
+unb62jehyjm4roj961crbmpy2               	true 	28.67kB   	5 hours ago
+nis7cfive3rdlkgl6s6j8bhve               	true 	15.95MB   	5 hours ago
+l03mjrkamy47ymf06g49ldsyn               	true 	345.5MB   	5 hours ago
+Total:	713.2MB
+----- df after cleanup -----
+/dev/vda2        45G   12G   31G  27% /
+===== 2026-11-15T15:35:40+00:00 cleanup done =====
+--- purging rotated logs >30M ---
+/dev/vda2        45G   12G   31G  27% /
+SETUP-DONE gho33tprogaming.serv.host

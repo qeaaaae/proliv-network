@@ -29,6 +29,9 @@ from .payment_reporting_dal import (
     get_user_total_paid as get_user_total_paid,
 )
 from .referral_payment_dal import count_user_succeeded_payments as count_user_succeeded_payments
+from .referral_payment_dal import (
+    has_monthly_subscription_purchase as has_monthly_subscription_purchase,
+)
 from .yookassa_reconciliation_dal import (
     PAYMENT_STATUS_PENDING_REVIEW as PAYMENT_STATUS_PENDING_REVIEW,
 )

@@ -1,0 +1,29 @@
+﻿--- rsyslog logrotate ---
+8:	rotate 2
+9:	maxsize 300M
+16:	postrotate
+17:		/usr/lib/rsyslog/rsyslog-rotate
+--- nginx logrotate ---
+4:	rotate 5
+10:	prerotate
+11:		if [ -d /etc/logrotate.d/httpd-prerotate ]; then \
+12:			run-parts /etc/logrotate.d/httpd-prerotate; \
+--- cron ---
+# ProlivVPN weekly cleanup - Sundays 04:30 local time.
+# Logs to /var/log/proliv-cleanup.log.
+30 4 * * 0 root /usr/local/sbin/proliv-cleanup.sh
+===== 2026-11-15T18:37:32+03:00 cleanup start (gho33tprogaming5.serv.host) =====
+/dev/vda2        20G  3.9G   15G  21% /
+Vacuuming done, freed 0B of archived journals from /var/log/journal/9ee98ff0c804774760af2f516374b28b.
+Vacuuming done, freed 0B of archived journals from /var/log/journal.
+Vacuuming done, freed 0B of archived journals from /run/log/journal.
+Reading package lists...
+Building dependency tree...
+Reading state information...
+0 upgraded, 0 newly installed, 0 to remove and 61 not upgraded.
+----- df after cleanup -----
+/dev/vda2        20G  3.8G   15G  21% /
+===== 2026-11-15T18:37:34+03:00 cleanup done =====
+--- purging rotated logs >30M ---
+/dev/vda2        20G  3.8G   15G  21% /
+SETUP-DONE gho33tprogaming5.serv.host

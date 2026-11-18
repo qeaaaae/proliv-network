@@ -14,4 +14,5 @@ const config = useRuntimeConfig()
     <slot />
   </main>
   <BottomNav />
+  <PwaInstallBanner />
 </template>

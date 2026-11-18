@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 360">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#eef1f4"/><stop offset="1" stop-color="#dde3e9"/></linearGradient>
+<linearGradient id="cab" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e6ebef"/><stop offset="1" stop-color="#b9c3cc"/></linearGradient>
+</defs>
+<rect width="600" height="360" fill="url(#bg)"/>
+<g stroke="#cdd5dc" stroke-width="1">
+<path d="M0 60 H600 M0 120 H600 M0 180 H600 M0 240 H600 M0 300 H600"/>
+<path d="M75 0 V360 M150 0 V360 M225 0 V360 M300 0 V360 M375 0 V360 M450 0 V360 M525 0 V360"/>
+</g>
+<rect x="0" y="290" width="600" height="70" fill="#c6cfd7"/>
+<!-- machine (machining center, smaller) -->
+<rect x="340" y="90" width="190" height="160" rx="9" fill="url(#cab)"/>
+<rect x="340" y="90" width="190" height="13" rx="7" fill="#3a4550"/>
+<rect x="356" y="112" width="72" height="104" rx="4" fill="#31404f"/>
+<rect x="440" y="112" width="72" height="104" rx="4" fill="#31404f"/>
+<rect x="364" y="120" width="56" height="62" rx="3" fill="#7c97b1"/>
+<rect x="448" y="120" width="56" height="62" rx="3" fill="#7c97b1"/>
+<rect x="396" y="150" width="60" height="9" rx="4" fill="#46586b"/>
+<rect x="418" y="132" width="14" height="26" rx="2" fill="#2c3a49"/>
+<rect x="422" y="156" width="6" height="10" fill="#d97b29"/>
+<rect x="356" y="232" width="156" height="9" rx="4" fill="#3a4550"/>
+<!-- pendant -->
+<rect x="536" y="112" width="8" height="38" rx="4" fill="#46525e"/>
+<rect x="528" y="146" width="42" height="58" rx="5" fill="#46525e"/>
+<rect x="534" y="152" width="30" height="22" rx="3" fill="#d97b29"/>
+<circle cx="549" cy="186" r="5" fill="#f0b27a"/>
+<!-- people silhouettes watching -->
+<g fill="#46586b">
+<circle cx="90" cy="158" r="16"/>
+<path d="M66 292 v-72 c0-26 12-40 24-40 s24 14 24 40 v72 z"/>
+<circle cx="160" cy="146" r="17"/>
+<path d="M134 292 v-80 c0-28 13-43 26-43 s26 15 26 43 v80 z"/>
+<circle cx="232" cy="160" r="15"/>
+<path d="M209 292 v-70 c0-25 11-38 23-38 s23 13 23 38 v70 z"/>
+<circle cx="296" cy="150" r="15"/>
+<path d="M274 292 v-74 c0-26 11-39 22-39 s22 13 22 39 v74 z"/>
+</g>
+<!-- presenter pointing at machine -->
+<g fill="#5c6e80">
+<circle cx="310" cy="150" r="15"/>
+<path d="M288 292 v-74 c0-26 11-39 22-39 s22 13 22 39 v74 z"/>
+</g>
+<path d="M322 196 L352 170" stroke="#5c6e80" stroke-width="12" stroke-linecap="round"/>
+<circle cx="354" cy="168" r="7" fill="#5c6e80"/>
+<!-- orange accents: badges -->
+<rect x="150" y="176" width="20" height="12" rx="3" fill="#d97b29"/>
+<rect x="288" y="178" width="18" height="11" rx="3" fill="#d97b29"/>
+</svg>

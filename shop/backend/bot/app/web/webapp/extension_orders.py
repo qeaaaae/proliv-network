@@ -23,7 +23,7 @@ from bot.plugins.extensions.commerce import (
 )
 from bot.plugins.extensions.jobs import JSON_OBJECT, utc
 from bot.services.partner_common import currency_scale, minor_to_decimal_string
-from db.dal import payment_dal, user_dal
+from db.dal import payment_dal, referral_payment_dal, user_dal
 from db.extension_models import ExtensionOrder
 
 from .assets import _enforce_webapp_rate_limit
@@ -145,7 +145,11 @@ async def extension_payment_methods_route(request: web.Request) -> web.Response:
                         order_id=str(order.id),
                     )
                 ]
-                if balance_available(request, quote):
+                if balance_available(request, quote) and (
+                    await referral_payment_dal.has_monthly_subscription_purchase(
+                        context.session, context.user_id
+                    )
+                ):
                     methods.insert(
                         0,
                         ExtensionPaymentMethodOut(

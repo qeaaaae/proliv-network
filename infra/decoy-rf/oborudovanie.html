@@ -13,6 +13,7 @@
 <meta property="og:locale" content="ru_RU">
 <meta property="og:title" content="Оборудование - каталог станков с ЧПУ">
 <meta property="og:site_name" content="ООО СтанкоПрецизион">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231c2733'/%3E%3Cpath d='M8 22 22 8l2 2-14 14z' fill='%23d97b29'/%3E%3Ccircle cx='16' cy='16' r='3.2' fill='%23e8edf2'/%3E%3C/svg%3E">
 <style>
 *{box-sizing:border-box;margin:0;font-family:Arial,'Segoe UI',sans-serif}
 body{background:#f4f5f6;color:#23282d;min-height:100vh}
@@ -43,12 +44,28 @@ h2{font-size:20px;border-bottom:2px solid #d97b29;padding-bottom:7px;margin:34px
 .foot a{color:#c8d4df;text-decoration:none}
 .foot a:hover{color:#fff}
 .copy{border-top:1px solid #2c3a49;margin-top:22px;padding-top:14px;font-size:12px;color:#6b7a89}
+.copy a{color:#8fa0b0;text-decoration:none}
+.copy a:hover{color:#fff}
+img{max-width:100%}
+.logo{display:flex;align-items:center;gap:10px}
+.logo img{height:30px;width:auto;display:block}
+.picgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px;margin:4px 0 16px}
+.picgrid figure{margin:0;background:#fff;border:1px solid #dde2e6;border-radius:8px;overflow:hidden}
+.picgrid img{width:100%;display:block}
+.picgrid figcaption{padding:9px 13px;font-size:12.5px;color:#8a939c}
+@media(max-width:640px){
+nav{display:flex;overflow-x:auto;width:100%;margin-top:10px;padding-bottom:3px}
+nav a{margin:0 16px 0 0;white-space:nowrap;font-size:13.5px}
+h1{font-size:23px}
+.tt{font-size:12.5px}
+.tt td,.tt th{padding:7px 9px}
+}
 </style>
 </head>
 <body>
 <header class="top"><div class="wrap">
-<div class="logo">Станко<span>Прецизион</span></div>
-<nav><a href="index.html">Главная</a><a href="oborudovanie.html" class="on">Оборудование</a><a href="uslugi.html">Услуги</a><a href="kontakty.html">Контакты</a></nav>
+<div class="logo"><img src="logo-icon.svg" alt="СтанкоПрецизион">Станко<span>Прецизион</span></div>
+<nav><a href="index.html">Главная</a><a href="oborudovanie.html" class="on">Оборудование</a><a href="uslugi.html">Услуги</a><a href="o-kompanii.html">О компании</a><a href="kontakty.html">Контакты</a></nav>
 </div></header>
 
 <div class="wrap">
@@ -56,6 +73,9 @@ h2{font-size:20px;border-bottom:2px solid #d97b29;padding-bottom:7px;margin:34px
 <p class="lead">Базовые комплектации - со стойками Fanuc 0i, Siemens Sinumerik 828D или GSK 980. Опции: гидропатрон, револьверная голова с приводным инструментом, барфидер, система сбора стружки, РТК-загрузка.</p>
 
 <h2>Токарные станки с ЧПУ</h2>
+<div class="picgrid">
+<figure><img src="img/st-400.svg" alt="Токарный станок с ЧПУ СТ-400М"><figcaption>СТ-400М - усиленная станина, патрон 315 мм, гидропатрон и барфидер в опциях</figcaption></figure>
+</div>
 <table class="tt">
 <tr><th>Модель</th><th>Обработка</th><th>Патрон</th><th>Мощность</th><th class="num">Цена с НДС</th><th>Наличие</th></tr>
 <tr><td>СТ-250<br><small>компактный, направляющие качения</small></td><td>Ø 250 × 500 мм</td><td>200 мм</td><td>7,5 кВт</td><td class="num">2 390 000 ₽</td><td><span class="stock s1">склад МСК</span></td></tr>
@@ -65,6 +85,9 @@ h2{font-size:20px;border-bottom:2px solid #d97b29;padding-bottom:7px;margin:34px
 </table>
 
 <h2>Фрезерные обрабатывающие центры</h2>
+<div class="picgrid">
+<figure><img src="img/fv-850.svg" alt="Вертикальный обрабатывающий центр ФВ-850"><figcaption>ФВ-850 - 3 оси, стойка Fanuc 0i или Siemens 828D, магазин на 24 инструмента</figcaption></figure>
+</div>
 <table class="tt">
 <tr><th>Модель</th><th>Стол / ходы X·Y·Z</th><th>Шпиндель</th><th>Магазин</th><th class="num">Цена с НДС</th><th>Наличие</th></tr>
 <tr><td>ФВ-650<br><small>3 оси, BT40</small></td><td>650 × 450 × 450 мм</td><td>10 000 об/мин, 7,5 кВт</td><td>24 инстр.</td><td class="num">3 090 000 ₽</td><td><span class="stock s1">склад МСК</span></td></tr>
@@ -74,6 +97,9 @@ h2{font-size:20px;border-bottom:2px solid #d97b29;padding-bottom:7px;margin:34px
 </table>
 
 <h2>Электроэрозионные и вспомогательные</h2>
+<div class="picgrid">
+<figure><img src="img/ee-45.svg" alt="Прошивной электроэрозионный станок ЭЭ-45"><figcaption>ЭЭ-45 - копировально-прошивной станок для пресс-форм и штампов до 400×300 мм</figcaption></figure>
+</div>
 <table class="tt">
 <tr><th>Модель</th><th>Назначение</th><th class="num">Цена с НДС</th><th>Наличие</th></tr>
 <tr><td>ЭЭ-45</td><td>Прошивной эрозионный, копировальный, до 400×300 мм</td><td class="num">2 680 000 ₽</td><td><span class="stock s2">45 дн.</span></td></tr>
@@ -101,10 +127,13 @@ h2{font-size:20px;border-bottom:2px solid #d97b29;padding-bottom:7px;margin:34px
 <h4>Разделы</h4>
 <a href="oborudovanie.html">Оборудование</a><br>
 <a href="uslugi.html">Услуги</a><br>
+<a href="o-kompanii.html">О компании</a><br>
+<a href="dostavka-oplata.html">Доставка и оплата</a><br>
+<a href="novosti.html">Новости</a><br>
 <a href="kontakty.html">Контакты</a>
 </div>
 </div><div class="wrap"><div class="copy">
-© 2011-2026 ООО «СтанкоПрецизион» · ИНН 7726491180 · ОГРН 1117746845312 · Все права защищены
+© 2011-2026 ООО «СтанкоПрецизион» · ИНН 7726491182 · ОГРН 1117746845314 · <a href="privacy.html">Политика конфиденциальности</a>
 </div></div></footer>
 </body>
 </html>

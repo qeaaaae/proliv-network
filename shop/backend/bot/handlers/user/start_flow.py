@@ -71,10 +71,11 @@ def _bot_started_source(
     ticket_match: re.Match | None,
     notifications_match: re.Match | None,
     giveaway_match: re.Match | None = None,
+    trial_match: re.Match | None = None,
 ) -> BotStartedSource:
     if ref_match or partner_match or page_ref_match:
         return "referral"
-    if promo_match or giveaway_match:
+    if promo_match or giveaway_match or trial_match:
         return "promo"
     if ad_param_match:
         return "ad"
@@ -104,10 +105,11 @@ def _bot_started_source(
 @router.message(CommandStart(magic=F.args.regexp(r"^notifications$").as_("notifications_match")))
 @router.message(CommandStart(magic=F.args.regexp(r"^page_ref$").as_("page_ref_match")))
 @router.message(CommandStart(magic=F.args.regexp(r"^buy$").as_("buy_match")))
+@router.message(CommandStart(magic=F.args.regexp(r"^trial$").as_("trial_match")))
 @router.message(
     CommandStart(
         magic=F.args.regexp(
-            r"^(?!ref_|p_|promo_|admin_user_|admin_ticket_|ticket_|giveaway_|notifications$|page_ref$|buy$|webapp_auth_)([A-Za-z0-9_\-]{2,64})$"
+            r"^(?!ref_|p_|promo_|admin_user_|admin_ticket_|ticket_|giveaway_|notifications$|page_ref$|buy$|trial$|webapp_auth_)([A-Za-z0-9_\-]{2,64})$"
         ).as_("ad_param_match")
     )
 )
@@ -131,6 +133,7 @@ async def start_command_handler(
     notifications_match: re.Match | None = None,
     giveaway_match: re.Match | None = None,
     buy_match: re.Match | None = None,
+    trial_match: re.Match | None = None,
 ) -> None:
     await state.clear()
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
@@ -150,6 +153,7 @@ async def start_command_handler(
         ticket_match=ticket_match,
         notifications_match=notifications_match,
         giveaway_match=giveaway_match,
+        trial_match=trial_match,
     )
 
     from bot.services.account_roles import bootstrap_configured_owner, is_admin
@@ -590,6 +594,20 @@ async def start_command_handler(
         return
 
     open_referral_page_for_existing_user = should_open_referral_from_start and is_existing_user
+
+    if trial_match and user_id is not None:
+        from .trial_handler import try_activate_trial_from_start
+
+        if await try_activate_trial_from_start(
+            message,
+            settings=settings,
+            i18n_data=i18n_data,
+            subscription_service=subscription_service,
+            session=session,
+            state=state,
+            user_id=user_id,
+        ):
+            return
 
     # Send welcome message if not disabled. With the photo-card UI enabled the
     # main menu itself is the persistent card, so a separate banner would only

@@ -37,6 +37,7 @@ async def user_card_from_list_handler(
         parts = callback_data(callback).split(":")
         user_id = int(parts[1])
         page = int(parts[2])
+        ticket_id = int(parts[3]) if len(parts) > 3 else None
     except (IndexError, ValueError):
         await callback.answer("Invalid user data", show_alert=True)
         return
@@ -58,9 +59,15 @@ async def user_card_from_list_handler(
     keyboard = get_user_card_keyboard(
         user_id, i18n, current_lang, user.referred_by_id, telegram_id=user.telegram_id
     )
-    keyboard.button(
-        text=_("admin_user_back_to_list_button"), callback_data=f"admin_action:users_list:{page}"
-    )
+    if ticket_id is not None:
+        keyboard.button(
+            text=_("admin_ticket_back_button"), callback_data=f"admin_ticket:{ticket_id}"
+        )
+    else:
+        keyboard.button(
+            text=_("admin_user_back_to_list_button"),
+            callback_data=f"admin_action:users_list:{page}",
+        )
     quick_links_width = 2 if user.referred_by_id else 1
     keyboard.adjust(2, 2, 2, 1, 2, quick_links_width, 1, 2, 1)
 

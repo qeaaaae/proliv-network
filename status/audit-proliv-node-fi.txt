@@ -1,0 +1,76 @@
+﻿###HOST gho33tprogaming4.serv.host 2026-11-15T15:16:39+00:00
+--- df -h ---
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/vda2        25G  9.3G   15G  40% /
+--- docker system df ---
+TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
+Images          2         1         600.5MB   100.6MB (16%)
+Containers      2         2         42.39MB   0B (0%)
+Local Volumes   2         0         311B      311B (100%)
+Build Cache     0         0         0B        0B
+--- docker images ---
+teddysun/xray:latest  101MB  4 days ago
+remnawave/node:3.4.3  500MB  3 weeks ago
+--- dangling images count ---
+0
+--- stopped containers ---
+--- builder cache (last lines) ---
+ID        RECLAIMABLE   SIZE      LAST ACCESSED
+Reclaimable:	0B
+Total:		0B
+--- journal disk usage ---
+Archived and active journals take up 249.1M in the file system.
+--- journald limits ---
+SystemMaxUse=250M
+--- /var/log size ---
+3.8G	/var/log
+--- big files in /var/log ---
+2465290497 /var/log/syslog.1
+517827025 /var/log/nginx/xhttp_hdr.log.1
+276973461 /var/log/nginx/xhttp_hdr.log.2.gz
+240930374 /var/log/syslog
+63951566 /var/log/nginx/xhttp_hdr.log.3.gz
+34740360 /var/log/syslog.2.gz
+32768000 /var/log/journal/07397259682957651610466200eebdfe/system@e5abc393df0a46b2a77b52a5a59396fb-00000000007156f9-00066050caaf84e5.journal
+32768000 /var/log/journal/07397259682957651610466200eebdfe/system@e5abc393df0a46b2a77b52a5a59396fb-000000000070bbb6-0006604fbdeb9905.journal
+32768000 /var/log/journal/07397259682957651610466200eebdfe/system@e5abc393df0a46b2a77b52a5a59396fb-0000000000701f57-0006604ec474ceb2.journal
+32768000 /var/log/journal/07397259682957651610466200eebdfe/system@e5abc393df0a46b2a77b52a5a59396fb-00000000006f8134-0006604dbf083772.journal
+--- apt cache ---
+113M	/var/cache/apt
+--- tmp dirs ---
+11M	/tmp
+52K	/var/tmp
+--- top dirs /var ---
+4.8G	/var
+3.8G	/var/log
+883M	/var/lib
+150M	/var/cache
+2.3M	/var/backups
+1.1M	/var/www
+52K	/var/tmp
+16K	/var/spool
+--- top dirs /opt ---
+364K	/opt
+264K	/opt/telemt
+68K	/opt/ipregion
+12K	/opt/remnanode
+12K	/opt/containerd
+--- top dirs /root ---
+256K	/root
+112K	/root/nginx_bak_20261112-hdr
+20K	/root/.docker
+8.0K	/root/.ssh
+4.0K	/root/.cache
+--- docker volumes ---
+194b2206c3f5dcf5621d8adedc35b2c9e3a09a536f1ab5569e83d09d39a65705   0         311B
+77d64464940e53589f2ac27beeaf46861c8f9be691c29b4725c096bdc712383c   0         0B
+
+--- installed kernels ---
+3
+--- apt autoremove candidates ---
+0
+--- crash dumps ---
+total 0
+--- rotated/compressed logs count ---
+16
+###END

@@ -37,6 +37,8 @@ class Giveaway(Base):
     scheduled_draw_at = Column(DateTime(timezone=True), nullable=True, index=True)
     # Shown on the participate button instead of the real count when set.
     display_participants = Column(Integer, nullable=True)
+    # Set when the admin got the "time to draw" reminder (~1h before schedule).
+    reminder_sent_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     published_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)

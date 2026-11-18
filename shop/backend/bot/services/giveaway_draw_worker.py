@@ -1,28 +1,27 @@
-"""Worker loop that draws scheduled giveaways when their time comes.
+"""Worker loop that reminds the admin before a scheduled giveaway draw.
 
-An active giveaway with ``scheduled_draw_at`` in the past is drawn exactly
-like the manual admin draw: winners are picked with fresh condition checks,
-the giveaway is finished, results are announced in the group as a reply to
-the post, and the composing admin gets the winner list in PM.
+One hour before ``scheduled_draw_at`` the composing admin gets a private
+reminder. The draw itself is always manual - the admin picks winners via
+the admin card and announces the results himself; nothing is posted to
+the group automatically.
 """
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 
 from aiogram import Bot
 from sqlalchemy.orm import sessionmaker
 
 from bot.middlewares.i18n import JsonI18n
-from bot.services.giveaway_service import draw_giveaway_winners, participant_label
-from bot.services.subscription_service_impl.core import SubscriptionService
 from config.settings import Settings
 from db.dal import giveaway_dal
-from db.giveaway_models import GIVEAWAY_STATUS_ACTIVE
 
 logger = logging.getLogger(__name__)
 
 GIVEAWAY_DRAW_WORKER_INTERVAL_SECONDS = 30.0
+GIVEAWAY_REMINDER_WINDOW = timedelta(hours=1)
+_MSK = timezone(timedelta(hours=3))
 
 
 class GiveawayDrawWorker:
@@ -30,13 +29,11 @@ class GiveawayDrawWorker:
         self,
         settings: Settings,
         session_factory: sessionmaker,
-        subscription_service: SubscriptionService,
         i18n: JsonI18n,
         bot: Bot | None,
     ) -> None:
         self.settings = settings
         self.session_factory = session_factory
-        self.subscription_service = subscription_service
         self.i18n = i18n
         self.bot = bot
 
@@ -51,59 +48,40 @@ class GiveawayDrawWorker:
             await asyncio.sleep(GIVEAWAY_DRAW_WORKER_INTERVAL_SECONDS)
 
     async def _tick(self) -> None:
+        now = datetime.now(UTC)
         async with self.session_factory() as session:
-            due = await giveaway_dal.due_giveaways(session, datetime.now(UTC))
-        for giveaway in due:
+            pending = await giveaway_dal.giveaways_pending_reminder(
+                session, now, GIVEAWAY_REMINDER_WINDOW
+            )
+            reminders = [
+                (
+                    int(g.giveaway_id),
+                    int(g.created_by_telegram_id) if g.created_by_telegram_id else None,
+                    g.scheduled_draw_at,
+                )
+                for g in pending
+            ]
+            for giveaway in pending:
+                await giveaway_dal.mark_reminder_sent(session, giveaway)
+            await session.commit()
+        for giveaway_id, admin_id, when in reminders:
             try:
-                await self._draw_one(int(giveaway.giveaway_id))
+                await self._send_reminder(giveaway_id, admin_id, when)
             except Exception:
-                logger.exception("Scheduled draw for giveaway %s failed", giveaway.giveaway_id)
+                logger.exception("Giveaway %s reminder failed", giveaway_id)
 
-    async def _draw_one(self, giveaway_id: int) -> None:
+    async def _send_reminder(self, giveaway_id: int, admin_id: int | None, when) -> None:
+        if self.bot is None or not admin_id:
+            return
         lang = self.settings.DEFAULT_LANGUAGE
         _ = lambda key, **kwargs: self.i18n.gettext(lang, key, **kwargs)
-
-        async with self.session_factory() as session:
-            giveaway = await giveaway_dal.get_giveaway(session, giveaway_id)
-            if giveaway is None or giveaway.status != GIVEAWAY_STATUS_ACTIVE:
-                return
-            winners = await draw_giveaway_winners(session, giveaway)
-            await giveaway_dal.finish_giveaway(session, giveaway)
-            await session.commit()
-
-        winners_lines = [
-            _("admin_giveaway_winner_row", place=place, user=participant_label(user))
-            for place, user in winners
-        ]
-        winners_block = (
-            "\n".join(winners_lines) if winners_lines else _("admin_giveaway_no_winners")
+        when_msk = when.astimezone(_MSK).strftime("%d.%m.%Y %H:%M") if when else ""
+        await self.bot.send_message(
+            chat_id=admin_id,
+            text=_(
+                "admin_giveaway_reminder_text",
+                giveaway_id=giveaway_id,
+                when=when_msk,
+            ),
+            parse_mode="HTML",
         )
-
-        if self.bot is None:
-            return
-
-        if giveaway.chat_id:
-            try:
-                await self.bot.send_message(
-                    chat_id=int(giveaway.chat_id),
-                    text=_("admin_giveaway_group_results", winners=winners_block),
-                    parse_mode="HTML",
-                    reply_to_message_id=(int(giveaway.message_id) if giveaway.message_id else None),
-                    allow_sending_without_reply=True,
-                )
-            except Exception as e:
-                logger.warning("Scheduled giveaway %s group announce failed: %s", giveaway_id, e)
-
-        if giveaway.created_by_telegram_id:
-            try:
-                await self.bot.send_message(
-                    chat_id=int(giveaway.created_by_telegram_id),
-                    text=_(
-                        "admin_giveaway_results_text",
-                        giveaway_id=giveaway_id,
-                        winners=winners_block,
-                    ),
-                    parse_mode="HTML",
-                )
-            except Exception as e:
-                logger.warning("Scheduled giveaway %s admin notify failed: %s", giveaway_id, e)

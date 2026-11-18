@@ -23,7 +23,7 @@ from bot.infra.event_payloads import (
 from bot.services.partner_common import PartnerError, as_utc, compact_json
 from config.settings import Settings
 from config.settings_models import PartnerWithdrawalMethod
-from db.dal import partner_dal
+from db.dal import partner_dal, referral_payment_dal
 from db.partner_models import PartnerWithdrawal
 
 _CARD_DIGITS = re.compile(r"^\d{12,19}$")
@@ -258,6 +258,8 @@ class PartnerWithdrawalService:
             raise PartnerError("partner_not_found", 404)
         if profile.status != "active":
             raise PartnerError("partner_not_active", 403)
+        if not await referral_payment_dal.has_monthly_subscription_purchase(session, user_id):
+            raise PartnerError("balance_spend_requires_purchase", 409)
         latest = await partner_dal.latest_withdrawal_for_partner(
             session,
             int(profile.partner_id),

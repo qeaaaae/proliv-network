@@ -539,7 +539,6 @@ async def _giveaway_draw_task(ctx: PluginContext) -> None:
     await GiveawayDrawWorker(
         settings=ctx.settings,
         session_factory=ctx.require_session_factory(),
-        subscription_service=ctx.require_subscription_service(),
         i18n=ctx.require_i18n(),
         bot=ctx.bot,
     ).run()
@@ -571,6 +570,17 @@ async def _notrial_survey_task(ctx: PluginContext) -> None:
     from bot.services.notrial_survey_worker import NotrialSurveyWorker
 
     await NotrialSurveyWorker(
+        settings=ctx.settings,
+        session_factory=ctx.require_session_factory(),
+        i18n=ctx.require_i18n(),
+        bot=ctx.bot,
+    ).run()
+
+
+async def _stale_connection_nudge_task(ctx: PluginContext) -> None:
+    from bot.services.stale_connection_nudge_worker import StaleConnectionNudgeWorker
+
+    await StaleConnectionNudgeWorker(
         settings=ctx.settings,
         session_factory=ctx.require_session_factory(),
         i18n=ctx.require_i18n(),
@@ -643,6 +653,7 @@ def _core_worker_tasks() -> list[WorkerTaskSpec]:
         WorkerTaskSpec(name="PurchaseReminderWorker", factory=_purchase_reminder_task),
         WorkerTaskSpec(name="WinbackSurveyWorker", factory=_winback_survey_task),
         WorkerTaskSpec(name="NotrialSurveyWorker", factory=_notrial_survey_task),
+        WorkerTaskSpec(name="StaleConnectionNudgeWorker", factory=_stale_connection_nudge_task),
         WorkerTaskSpec(name="AdminBroadcastWorker", factory=_admin_broadcast_task),
         WorkerTaskSpec(name="BackupWorker", factory=_backup_worker_task),
         WorkerTaskSpec(name="PanelSyncLoop", factory=_panel_sync_loop),

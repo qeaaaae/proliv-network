@@ -1,0 +1,57 @@
+﻿--- rsyslog logrotate ---
+15:	rotate 2
+16:	maxsize 300M
+23:	postrotate
+24:		/usr/lib/rsyslog/rsyslog-rotate
+--- nginx logrotate ---
+4:        rotate 52
+10:        postrotate
+--- cron ---
+# ProlivVPN weekly cleanup - Sundays 04:30 local time.
+# Logs to /var/log/proliv-cleanup.log.
+30 4 * * 0 root /usr/local/sbin/proliv-cleanup.sh
+Removing libdeflate0:amd64 (1.10-2) ...
+Removing libjbig0:amd64 (2.1-3.1ubuntu0.22.04.1) ...
+Removing libjpeg8:amd64 (8c-2ubuntu10) ...
+Removing libjpeg-turbo8:amd64 (2.1.2-0ubuntu1) ...
+Removing libwebp7:amd64 (1.2.2-2ubuntu0.22.04.2) ...
+Removing libxpm4:amd64 (1:3.5.12-1ubuntu0.22.04.4) ...
+Removing libxslt1.1:amd64 (1.1.34-4ubuntu0.22.04.5) ...
+Processing triggers for libc-bin (2.35-0ubuntu3.18) ...
+(Reading database ... 
+(Reading database ... 5%
+(Reading database ... 10%
+(Reading database ... 15%
+(Reading database ... 20%
+(Reading database ... 25%
+(Reading database ... 30%
+(Reading database ... 35%
+(Reading database ... 40%
+(Reading database ... 45%
+(Reading database ... 50%
+(Reading database ... 55%
+(Reading database ... 60%
+(Reading database ... 65%
+(Reading database ... 70%
+(Reading database ... 75%
+(Reading database ... 80%
+(Reading database ... 85%
+(Reading database ... 90%
+(Reading database ... 95%
+(Reading database ... 100%
+(Reading database ... 103450 files and directories currently installed.)
+Purging configuration files for fontconfig-config (2.13.1-4.2ubuntu5) ...
+Purging configuration files for fonts-dejavu-core (2.37-2build1) ...
+Total reclaimed space: 0B
+Total reclaimed space: 0B
+Total reclaimed space: 0B
+Total reclaimed space: 0B
+Flag --keep-storage has been deprecated, keep-storage flag has been changed to reserved-space
+Total:	0B
+----- df after cleanup -----
+/dev/vda2        15G  4.8G  9.3G  34% /
+===== 2026-11-15T20:37:22+05:00 cleanup done =====
+--- purging rotated logs >30M ---
+/var/log/syslog.1
+/dev/vda2        15G  4.7G  9.3G  34% /
+SETUP-DONE proliv-node-kz

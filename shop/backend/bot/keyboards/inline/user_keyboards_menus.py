@@ -3,7 +3,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.middlewares.i18n import JsonI18n, locale_language_options
 from bot.services.legal_document_links import legal_document_links
-from bot.utils.mini_app_url import subscription_mini_app_path_url, subscription_mini_app_trial_url
+from bot.utils.mini_app_url import subscription_mini_app_path_url
 from config.menu_buttons import configured_menu_buttons, telegram_menu_button_text
 from config.settings import Settings
 from config.support_links import normalize_support_link
@@ -12,15 +12,8 @@ from .menu_appearance import MenuButton, MenuKeyboardBuilder, menu_button
 from .user_keyboards_context import telegram_bot_menu_enabled_for_user
 
 
-def _trial_activation_button(lang: str, i18n_instance: JsonI18n, settings: Settings) -> MenuButton:
+def _trial_activation_button(lang: str, i18n_instance: JsonI18n) -> MenuButton:
     _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
-    if settings.SUBSCRIPTION_MINI_APP_URL:
-        trial_url = subscription_mini_app_trial_url(settings) or settings.SUBSCRIPTION_MINI_APP_URL
-        return menu_button(
-            "trial",
-            text=_(key="menu_activate_trial_button"),
-            web_app=WebAppInfo(url=trial_url),
-        )
     return menu_button(
         "trial",
         text=_(key="menu_activate_trial_button"),
@@ -43,7 +36,7 @@ def get_main_menu_inline_keyboard(
     support_link = normalize_support_link(settings.support_settings.link)
 
     if show_trial_button and settings.TRIAL_ENABLED:
-        builder.row(_trial_activation_button(lang, i18n_instance, settings))
+        builder.row(_trial_activation_button(lang, i18n_instance))
 
     if settings.SUBSCRIPTION_MINI_APP_URL:
         builder.row(
@@ -134,7 +127,7 @@ def get_bot_interface_inline_keyboard(
     support_link = normalize_support_link(settings.support_settings.link)
 
     if show_trial_button and settings.TRIAL_ENABLED:
-        builder.row(_trial_activation_button(lang, i18n_instance, settings))
+        builder.row(_trial_activation_button(lang, i18n_instance))
 
     if settings.SUBSCRIPTION_MINI_APP_URL:
         builder.row(
