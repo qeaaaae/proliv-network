@@ -34,8 +34,16 @@ logger = logging.getLogger(__name__)
 
 router = Router(name="admin_post_router")
 
-# Telegram photo-caption limit; the HTML copy (tags included) must fit it.
-POST_TEXT_LIMIT = 1024
+# Telegram limits: a plain message holds 4096 visible chars; a photo caption
+# only 1024. Longer text with a photo goes out as photo + separate message.
+POST_TEXT_LIMIT = 4096
+POST_CAPTION_LIMIT = 1024
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def post_visible_length(html: str) -> int:
+    """Rendered-text length: HTML/tg-emoji tags don't count for Telegram."""
+    return len(_HTML_TAG_RE.sub("", html))
 POST_BUTTON_LABEL_LIMIT = 64
 
 _URL_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
@@ -102,6 +110,15 @@ async def _deliver_post(
         markup = types.InlineKeyboardMarkup(
             inline_keyboard=[[types.InlineKeyboardButton(text=str(label), url=str(url))]]
         )
+    if file_id and post_html and post_visible_length(post_html) > POST_CAPTION_LIMIT:
+        await bot.send_photo(chat_id=target_chat_id, photo=str(file_id))
+        await bot.send_message(
+            chat_id=target_chat_id,
+            text=post_html,
+            parse_mode="HTML",
+            reply_markup=markup,
+        )
+        return
     content = MessageContent(
         content_type="photo" if file_id else "text",
         file_id=file_id,
@@ -173,7 +190,7 @@ async def process_post_text_handler(
     if not post_html:
         await message.answer(_("admin_post_error_no_text"))
         return
-    if len(post_html) > POST_TEXT_LIMIT:
+    if post_visible_length(post_html) > POST_TEXT_LIMIT:
         await message.answer(
             _("admin_post_text_too_long", max_length=POST_TEXT_LIMIT),
             reply_markup=get_post_step_keyboard(_, skip_callback=None),

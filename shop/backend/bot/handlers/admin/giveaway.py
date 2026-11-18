@@ -33,7 +33,6 @@ from bot.keyboards.inline.admin_keyboards import (
 )
 from bot.middlewares.i18n import JsonI18n
 from bot.services.giveaway_service import (
-    draw_giveaway_winners,
     participant_label,
     refresh_participate_button,
 )
@@ -50,8 +49,16 @@ logger = logging.getLogger(__name__)
 
 router = Router(name="admin_giveaway_router")
 
-# Telegram photo-caption limit; the HTML copy (tags included) must fit it.
-GIVEAWAY_TEXT_LIMIT = 1024
+# Telegram limits: a plain message holds 4096 visible chars; a photo caption
+# only 1024. Longer text with a photo goes out as photo + separate message.
+GIVEAWAY_TEXT_LIMIT = 4096
+GIVEAWAY_CAPTION_LIMIT = 1024
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def giveaway_visible_length(html: str) -> int:
+    """Rendered-text length: HTML/tg-emoji tags don't count for Telegram."""
+    return len(_HTML_TAG_RE.sub("", html))
 GIVEAWAY_PARTICIPANTS_PAGE_SIZE = 15
 GIVEAWAY_START_PARAM_PREFIX = "giveaway_"
 # Admin enters the draw time in Moscow time (fixed UTC+3, no DST in Russia).
@@ -300,7 +307,7 @@ async def process_giveaway_text_handler(
     if not giveaway_html:
         await message.answer(_("admin_giveaway_error_no_text"))
         return
-    if len(giveaway_html) > GIVEAWAY_TEXT_LIMIT:
+    if giveaway_visible_length(giveaway_html) > GIVEAWAY_TEXT_LIMIT:
         await message.answer(
             _("admin_giveaway_text_too_long", max_length=GIVEAWAY_TEXT_LIMIT),
             reply_markup=get_giveaway_step_keyboard(_, skip_callback=None),
@@ -408,6 +415,17 @@ async def _deliver_giveaway(
     if participate_url:
         markup = get_giveaway_participate_keyboard(participate_url, button_label)
     if file_id:
+        if (
+            giveaway_html
+            and giveaway_visible_length(giveaway_html) > GIVEAWAY_CAPTION_LIMIT
+        ):
+            await bot.send_photo(chat_id=target_chat_id, photo=str(file_id))
+            return await bot.send_message(
+                chat_id=target_chat_id,
+                text=giveaway_html,
+                parse_mode="HTML",
+                reply_markup=markup,
+            )
         return await bot.send_photo(
             chat_id=target_chat_id,
             photo=str(file_id),
@@ -722,7 +740,6 @@ async def giveaway_draw_handler(
         return
 
     await callback.answer()
-    winners = await draw_giveaway_winners(session, giveaway)
     await giveaway_dal.finish_giveaway(session, giveaway)
     try:
         await session.commit()
@@ -735,15 +752,9 @@ async def giveaway_draw_handler(
         )
         return
 
-    winners_lines = [
-        _("admin_giveaway_winner_row", place=place, user=_participant_label(user))
-        for place, user in winners
-    ]
-    winners_block = "\n".join(winners_lines) if winners_lines else _("admin_giveaway_no_winners")
     result_text = _(
-        "admin_giveaway_results_text",
+        "admin_giveaway_finished_text",
         giveaway_id=int(giveaway.giveaway_id),
-        winners=winners_block,
     )
     back_markup = get_back_to_admin_panel_keyboard(lang, i18n)
     try:
@@ -755,7 +766,7 @@ async def giveaway_draw_handler(
             result_text, reply_markup=back_markup, parse_mode="HTML"
         )
 
-    # Results stay private: the admin announces them manually.
+    # Closing a giveaway never announces anything: it just moves to history.
 
 
 @router.callback_query(F.data.regexp(r"^admin_giveaway:cancel_gw:\d+$"))

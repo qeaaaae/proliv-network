@@ -1,0 +1,125 @@
+# ============================================================================
+# ProlivVPN - Caddyfile (ШАБЛОН)
+#
+#  и  подставляет envsubst в infra/deploy-vps.sh.
+# Отрендеренный файл лежит в /opt/proliv/Caddyfile и монтируется в контейнер
+# caddy (infra/caddy.compose.yml). Не редактируй отрендеренный файл -
+# правь этот шаблон и перезапускай deploy-vps.sh.
+#
+# Сервисные имена резолвятся через сеть remnawave-network (см. docker-compose.yml).
+# ============================================================================
+
+{
+	# Email для аккаунта ACME (Let's Encrypt)
+	email 
+}
+
+# --- Лендинг - корневой домен ----------------------------------------------
+, www. {
+	encode
+	reverse_proxy proliv-landing:80
+}
+
+# --- Личный кабинет / Mini App - app. --------------------------------
+app. {
+	encode
+	# Публичные install-гайды и share-ссылки подписки (/s/<token>) отдаёт minishop
+	# на :8081 - кабинет (Nuxt) этих путей не имеет. Его SPA тянет свои бандлы,
+	# темы и публичный гайд-API с того же origin, поэтому whitelist повторяет
+	# набор статических путей из блока admin.. Для VPN-клиентов /s/<token>
+	# отдаёт саму подписку (SUBSCRIPTION_GATEWAY) - прокси обязан быть полным.
+	# Также на minishop: /open-app (кнопки "открыть в приложении" на стр. подписки),
+	# /unsubscribe + /api/notification-preferences/* (отписка из email),
+	# /docs/* + /legal/* + /api/pages/* + /api/documents* (легал-доки и инфо-страницы,
+	# на которые ссылается бот), /api/theme-effects* (темы SPA).
+	# Пути кабинета (/support, /trial, /install и т.п.) сюда НЕ добавлять.
+	@minishop path /s/* /api/subscription-guides/public/* /api/bootstrap /api/i18n /api/documents* /api/pages/* /api/theme-effects* /api/notification-preferences/* /open-app /unsubscribe /docs/* /legal/* /subscription_webapp* /webapp-* /provider-logos/* /fonts/* /favicon.ico /apple-touch-icon* /icon-* /robots.txt
+	handle @minishop {
+		reverse_proxy remnawave-minishop-backend:8081 {
+			header_up X-Forwarded-Proto https
+		}
+	}
+	reverse_proxy proliv-cabinet:80
+}
+
+# --- Админка Mini App - admin. --------------------------------------
+# Веб-приложение (SPA + /api + /admin/*) отдаёт сам minishop-backend на :8081.
+# Админская работа идёт внутри Telegram Mini App, поэтому из браузера открыты
+# только то, что реально нужно WebView: админские страницы, API и статика.
+# Всё остальное (юзерские страницы, webauth/oauth-флоу, health) - 404.
+# Веб-админка = Nuxt-кабинет (страница /admin): вход - тот же Telegram-логин,
+# что в ЛК; admin-роль проверяет minishop на каждом запросе к /api/admin/*.
+admin. {
+	encode
+	reverse_proxy proliv-cabinet:80
+}
+
+# --- Remnawave panel - panel. --------------------------------------
+panel. {
+	encode
+	reverse_proxy remnawave:3000 {
+		header_up X-Forwarded-Proto https
+	}
+}
+
+# --- Subscription page - sub. ---------------------------------------
+# URL подписки дёргают и браузеры, и VPN-клиенты. Браузеру (UA содержит
+# Mozilla) отдаём свою статичную страницу /srv/subpage/index.html с диплинками
+# и QR; клиентам проксируем remnawave-subscription-page - там живая подписка.
+sub. {
+	encode
+	# Голый корень - на лендинг (subpage без uuid всё равно падает)
+	@root path /
+	redir @root https:// 302
+	@browser header User-Agent *Mozilla*
+	handle @browser {
+		root * /srv/subpage
+		rewrite * /index.html
+		file_server
+	}
+	reverse_proxy remnawave-subscription-page:3010 {
+		header_up X-Forwarded-Proto https
+	}
+}
+
+# --- Webhooks - api.: /tg/webhook -> bot, /webhook/* -> backend -----
+api. {
+	encode
+	@tg path /tg/webhook*
+	handle @tg {
+		reverse_proxy remnawave-minishop-bot:8080
+	}
+	@wh path /webhook/*
+	handle @wh {
+		reverse_proxy remnawave-minishop-backend:8080
+	}
+	handle {
+		respond 404
+	}
+}
+
+# --- Всё остальное на 443 - тихий 204 (как в офиц. рецепте docs.rw) -----------
+:443 {
+	tls internal
+	respond 204
+}
+
+# ============================================================================
+# БУДУЩИЕ СЕРВИСЫ - раскомментировать по мере готовности (см. SPEC.md)
+# ============================================================================
+
+# --- TG web-proxy - wp. (SPEC.md п.3.9, отдельный сервис/контейнер) --
+#
+# wp. {
+# 	encode
+# 	reverse_proxy tg-proxy:8080
+# }
+
+# --- CDN-ориджины нод - cdn-ee. / cdn-uk. -------------------
+# Обычно живут на VPS нод, а не здесь. Если нода на этом же VPS - раскомментируй
+# и поправь upstream (нода слушает host-сеть, upstream = 127.0.0.1:<port>):
+#
+# cdn-ee. {
+# 	encode
+# 	reverse_proxy 127.0.0.1:PORT
+# }
