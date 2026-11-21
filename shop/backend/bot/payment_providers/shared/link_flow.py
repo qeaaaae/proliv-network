@@ -25,6 +25,7 @@ from aiogram import types
 from aiohttp import web
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from bot.services.promo_pending_supersede import supersede_pending_promo_payments
 from bot.services.subscription_order_terms import freeze_subscription_terms
 from bot.services.telegram_account import resolve_telegram_account_id
 from config.settings import Settings
@@ -493,6 +494,16 @@ async def run_webapp_payment[ServiceT: LinkFlowService](
             await ctx.session.rollback()
             logger.exception(
                 "%s: failed to retire superseded hosted checkouts after payment %s.",
+                descriptor.display_name,
+                payment_snapshot.payment_id,
+            )
+    if getattr(payment_snapshot, "promo_code_id", None) is not None:
+        try:
+            await supersede_pending_promo_payments(ctx.session, payment_snapshot)
+        except Exception:
+            await ctx.session.rollback()
+            logger.exception(
+                "%s: failed to retire superseded promo checkouts after payment %s.",
                 descriptor.display_name,
                 payment_snapshot.payment_id,
             )

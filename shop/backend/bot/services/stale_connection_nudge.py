@@ -112,8 +112,9 @@ def nudge_markup(
         builder.row(*first_row)
     builder.row(
         types.InlineKeyboardButton(
-            text=_("stale_connection_close_button"),
+            text=_("wa_close"),
             callback_data=CLOSE_CALLBACK,
+            icon_custom_emoji_id="5778527486270770928",
         )
     )
     return builder

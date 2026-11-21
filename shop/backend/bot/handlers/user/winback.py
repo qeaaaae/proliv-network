@@ -299,8 +299,13 @@ async def winback_time_handler(
         return
     await state.update_data(winback_time=time_of_day)
     builder = InlineKeyboardBuilder()
-    builder.button(text=_("winback_note_skip"), callback_data="winback:note_skip")
-    builder.adjust(1)
+    builder.row(
+        types.InlineKeyboardButton(
+            text=_("wa_close"),
+            callback_data="winback:note_skip",
+            icon_custom_emoji_id="6028482475385164542",
+        )
+    )
     await _edit_prompt(callback, _("winback_unstable_ask_note"), builder.as_markup())
     await state.set_state(WinbackSurveyStates.waiting_for_unstable_note)
     await safe_answer_callback(callback)
@@ -393,6 +398,15 @@ async def winback_note_skip_handler(
         i18n_data=i18n_data,
         session=session,
     )
+    message = callback_message_or_none(callback)
+    if message is not None:
+        try:
+            await message.delete()
+        except Exception:
+            logger.debug(
+                "Failed to delete winback survey message %s",
+                getattr(message, "message_id", None),
+            )
 
 
 @router.message(WinbackSurveyStates.waiting_for_unstable_note, F.text)

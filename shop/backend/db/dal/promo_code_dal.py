@@ -837,6 +837,7 @@ async def count_pending_payments_with_promo(
     promo_code_id: int,
     *,
     exclude_payment_id: int | None = None,
+    exclude_user_id: int | None = None,
 ) -> int:
     """Count unpaid invoices that currently reserve a limited promo slot."""
     status = func.lower(Payment.status)
@@ -849,5 +850,7 @@ async def count_pending_payments_with_promo(
     ]
     if exclude_payment_id is not None:
         conditions.append(Payment.payment_id != exclude_payment_id)
+    if exclude_user_id is not None:
+        conditions.append(Payment.user_id != exclude_user_id)
     result = await session.execute(select(func.count(Payment.payment_id)).where(and_(*conditions)))
     return int(result.scalar_one() or 0)

@@ -104,6 +104,20 @@ async def _reason_detail(reason: str, i18n: JsonI18n | None, lang: str) -> str:
     return str(i18n.gettext(lang, label_key))
 
 
+@router.callback_query(F.data == "notrial:close")
+async def notrial_close_handler(callback: types.CallbackQuery) -> None:
+    message = callback_message_or_none(callback)
+    if message is not None:
+        try:
+            await message.delete()
+        except Exception:
+            logger.debug(
+                "Failed to delete no-trial survey message %s",
+                getattr(message, "message_id", None),
+            )
+    await safe_answer_callback(callback)
+
+
 @router.callback_query(F.data.regexp(r"^notrial:r:(no_need|confusing|other_vpn|other):(\d+)$"))
 async def notrial_reason_handler(
     callback: types.CallbackQuery,

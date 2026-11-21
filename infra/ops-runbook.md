@@ -132,6 +132,7 @@ ssh proliv-main "cd /opt/proliv && docker compose \
 | `proliv-backup.timer` | 03:30 UTC | `/opt/proliv/backups` (14 дней) + rsync offsite на DE `/root/proliv-backups` |
 | `rotate-hosts.py` | `17 */6 * * *` | ротация первой локации в подписке, `/var/log/rotate-hosts.log` |
 | `proliv-cleanup.sh` | `30 4 * * 0` | еженедельная чистка, `/var/log/proliv-cleanup.log` |
+| `referral_broadcast.py` | `20 9 * * *` | реф-рассылка юзерам с триалом/активной подпиской, троттл 14 дней/юзер, state `.referral_broadcast_state.json`, лог `/var/log/referral-broadcast.log` |
 
 Скрипт ничего не хранит - дампы в `mktemp -d`, удаляются после отправки.
 

@@ -103,18 +103,14 @@ async def _core_state_policy(ctx: PromoRedemptionContext) -> PromoRedemptionDeci
         ):
             return PromoRedemptionDecision.allow()
         return PromoRedemptionDecision.deny("promo_code_already_used_by_user")
-    has_pending = await promo_code_dal.user_has_pending_payment_with_promo(
-        ctx.session,
-        ctx.user_id,
-        int(promo.promo_code_id),
-        exclude_payment_id=ctx.payment_id,
-    )
-    if has_pending:
-        return PromoRedemptionDecision.deny("promo_code_pending_payment_exists")
+    # A user's own earlier pending invoices do not block a replacement
+    # checkout: they are superseded (canceled at the provider) once the new
+    # payment record exists, see promo_pending_supersede.
     pending_reservations = await promo_code_dal.count_pending_payments_with_promo(
         ctx.session,
         int(promo.promo_code_id),
         exclude_payment_id=ctx.payment_id,
+        exclude_user_id=ctx.user_id,
     )
     if int(getattr(promo, "current_activations", 0) or 0) + pending_reservations >= int(
         getattr(promo, "max_activations", 0) or 0

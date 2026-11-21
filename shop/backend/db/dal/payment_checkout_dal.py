@@ -196,6 +196,47 @@ async def list_earlier_pending_provider_payments_for_checkout_scope(
     return list(result.scalars().all())
 
 
+async def list_earlier_pending_payments_with_promo(
+    session: AsyncSession,
+    payment: Any,
+    *,
+    limit: int = 20,
+) -> list[Payment]:
+    """Return the user's older pending invoices that carry the same promo code.
+
+    These invoices reserve the promo slot and stay payable at the provider;
+    a replacement checkout supersedes them so the code cannot be consumed
+    twice.
+    """
+
+    promo_code_id = getattr(payment, "promo_code_id", None)
+    user_id = getattr(payment, "user_id", None)
+    payment_id = getattr(payment, "payment_id", None)
+    if promo_code_id is None or user_id is None or payment_id is None:
+        return []
+
+    status = func.lower(Payment.status)
+    stmt = (
+        select(Payment)
+        .where(
+            and_(
+                Payment.user_id == int(user_id),
+                Payment.promo_code_id == int(promo_code_id),
+                Payment.payment_id < int(payment_id),
+                Payment.is_auto_renew.is_(False),
+                or_(
+                    status.like("pending%"),
+                    status.in_(("created", "new", "waiting_for_capture")),
+                ),
+            )
+        )
+        .order_by(Payment.payment_id.desc())
+        .limit(max(1, min(int(limit), 50)))
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
 async def find_later_equivalent_succeeded_payment(
     session: AsyncSession,
     payment: Any,

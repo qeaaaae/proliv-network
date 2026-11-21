@@ -25,8 +25,10 @@ TIMEOUT = 5
 
 # kind=location -> TCP check; kind=service -> HTTP check
 TARGETS = [
-    {"id": "ee", "kind": "location", "group": "locations", "name": "Эстония · Таллин",
+    {"id": "ee", "kind": "location", "group": "locations", "name": "Эстония Резерв · Таллин",
      "flag": "ee", "host": "31.76.70.98", "port": 443},
+    {"id": "ee2", "kind": "location", "group": "locations", "name": "Эстония · Таллин",
+     "flag": "ee", "host": "2.26.182.86", "port": 443},
     {"id": "uk", "kind": "location", "group": "locations", "name": "Великобритания · Лондон",
      "flag": "gb", "host": "31.76.60.63", "port": 443},
     {"id": "de", "kind": "location", "group": "locations", "name": "Германия · Франкфурт",

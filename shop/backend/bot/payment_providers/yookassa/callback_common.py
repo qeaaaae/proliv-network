@@ -14,6 +14,7 @@ from bot.keyboards.inline.user_keyboards import (
 )
 from bot.middlewares.i18n import JsonI18n
 from bot.services.checkout_promos import CheckoutPromoResult, checkout_promo_payment_fields
+from bot.services.promo_pending_supersede import supersede_pending_promo_payments
 from bot.services.subscription_order_terms import freeze_subscription_terms
 from bot.utils.callback_answer import callback_message_or_none
 from config.settings import Settings
@@ -120,6 +121,16 @@ async def _initiate_yk_payment(
         with contextlib.suppress(Exception):
             await message.edit_text(get_text("error_creating_payment_record"))
         return False
+
+    if getattr(db_payment_record, "promo_code_id", None) is not None:
+        try:
+            await supersede_pending_promo_payments(session, db_payment_record)
+        except Exception:
+            await session.rollback()
+            logger.exception(
+                "Failed to retire superseded promo invoices after payment %s.",
+                db_payment_record.payment_id,
+            )
 
     yookassa_metadata = {
         "user_id": str(user_id),

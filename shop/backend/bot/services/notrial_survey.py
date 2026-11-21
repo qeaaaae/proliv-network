@@ -11,6 +11,7 @@ survey these users have no subscription row to attach a marker to.
 """
 
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from html import escape
 
@@ -38,6 +39,25 @@ NOTRIAL_SENT_EVENT = "notrial_survey_sent"
 NOTRIAL_RESPONSE_EVENT = "notrial_survey_response"
 NOTRIAL_MIN_AGE = timedelta(days=3)
 NOTRIAL_DISCOUNT_PERCENT = 10.0
+NOTRIAL_CLOSE_ICON = "5778527486270770928"
+
+REASON_ICONS = {
+    "no_need": "5872829476143894491",
+    "confusing": "5873121512445187130",
+    "other_vpn": "5839200986022812209",
+    "other": "5879841310902324730",
+}
+TRY_ICON = "6032937473162614352"
+
+_BUTTON_EMOJI_PREFIX_RE = re.compile(
+    r"^[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200D]+\s*"
+)
+
+
+def _strip_button_emoji(text: str) -> str:
+    return _BUTTON_EMOJI_PREFIX_RE.sub("", text).strip()
+
+
 NOTRIAL_PROMO_VALID_DAYS = 7
 NOTRIAL_PROMO_ORIGIN = "notrial"
 
@@ -97,18 +117,27 @@ def survey_markup(
     builder = InlineKeyboardBuilder()
     for reason, label_key in REASON_LABEL_KEYS.items():
         builder.button(
-            text=i18n.gettext(lang, label_key),
+            text=_strip_button_emoji(i18n.gettext(lang, label_key)),
             callback_data=f"notrial:r:{reason}:{user_id}",
+            icon_custom_emoji_id=REASON_ICONS.get(reason),
         )
     builder.adjust(1)
     mini_app_url = getattr(settings, "SUBSCRIPTION_MINI_APP_URL", "") or ""
     if mini_app_url:
         builder.row(
             types.InlineKeyboardButton(
-                text=i18n.gettext(lang, "notrial_try_button"),
+                text=_strip_button_emoji(i18n.gettext(lang, "notrial_try_button")),
                 web_app=types.WebAppInfo(url=mini_app_url),
+                icon_custom_emoji_id=TRY_ICON,
             )
         )
+    builder.row(
+        types.InlineKeyboardButton(
+            text=i18n.gettext(lang, "wa_close"),
+            callback_data="notrial:close",
+            icon_custom_emoji_id=NOTRIAL_CLOSE_ICON,
+        )
+    )
     return builder
 
 

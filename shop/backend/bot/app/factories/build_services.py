@@ -26,6 +26,7 @@ from bot.services.partner_commission_service import PartnerCommissionService
 from bot.services.partner_program_service import PartnerProgramService
 from bot.services.partner_withdrawal_service import PartnerWithdrawalService
 from bot.services.promo_code_service import PromoCodeService
+from bot.services.promo_pending_supersede import register_payment_service_resolver
 from bot.services.referral_service import ReferralService
 from bot.services.subscription_service_impl.core import SubscriptionService
 from bot.services.support_service import SupportService
@@ -111,6 +112,7 @@ def build_core_services(
     subscription_service.managed_recurring_provider_services = managed_recurring_provider_services(
         payment_services
     )
+    register_payment_service_resolver(payment_services.get)
     panel_webhook_service.subscription_service = subscription_service
 
     return CoreServices(

@@ -10,6 +10,7 @@ lapsed subscription row), answers are stored in ``message_logs``.
 """
 
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from html import escape
 
@@ -52,6 +53,23 @@ REASON_LABEL_KEYS = {
     REASON_MISSING_LOCATION: "winback_reason_missing_location",
     REASON_UNSTABLE: "winback_reason_unstable",
 }
+
+REASON_ICONS = {
+    REASON_EXPENSIVE: "5811989245761426317",
+    REASON_MISSING_LOCATION: "5883955653348692941",
+    REASON_UNSTABLE: "5967432491684860012",
+}
+RENEW_ICON = "5967548335542767952"
+
+_BUTTON_EMOJI_PREFIX_RE = re.compile(
+    r"^[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200D]+\s*"
+)
+
+
+def _strip_button_emoji(text: str) -> str:
+    return _BUTTON_EMOJI_PREFIX_RE.sub("", text).strip()
+
+
 
 
 async def find_survey_targets(session: AsyncSession, now: datetime) -> list[Subscription]:
@@ -97,16 +115,18 @@ def survey_markup(
     builder = InlineKeyboardBuilder()
     for reason, label_key in REASON_LABEL_KEYS.items():
         builder.button(
-            text=i18n.gettext(lang, label_key),
+            text=_strip_button_emoji(i18n.gettext(lang, label_key)),
             callback_data=f"winback:r:{reason}:{subscription_id}",
+            icon_custom_emoji_id=REASON_ICONS.get(reason),
         )
     builder.adjust(1)
     mini_app_url = getattr(settings, "SUBSCRIPTION_MINI_APP_URL", "") or ""
     if mini_app_url:
         builder.row(
             types.InlineKeyboardButton(
-                text=i18n.gettext(lang, "winback_renew_button"),
+                text=_strip_button_emoji(i18n.gettext(lang, "winback_renew_button")),
                 web_app=types.WebAppInfo(url=f"{mini_app_url}/purchases"),
+                icon_custom_emoji_id=RENEW_ICON,
             )
         )
     return builder
