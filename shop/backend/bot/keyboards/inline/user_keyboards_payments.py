@@ -50,6 +50,7 @@ def get_payment_method_keyboard(
     hwid_renewal_selected: bool = True,
     checkout_promo: Any | None = None,
     checkout_stars_promo: Any | None = None,
+    collected_methods: list[tuple[str, str]] | None = None,
 ) -> InlineKeyboardMarkup:
     _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
     builder = InlineKeyboardBuilder()
@@ -138,10 +139,10 @@ def get_payment_method_keyboard(
         )
         if not callback_data:
             continue
-        builder.button(
-            text=provider_telegram_button_text(spec, settings, language=lang),
-            callback_data=callback_data,
-        )
+        button_text = provider_telegram_button_text(spec, settings, language=lang)
+        builder.button(text=button_text, callback_data=callback_data)
+        if collected_methods is not None:
+            collected_methods.append((callback_data, button_text))
     builder.button(
         text=_(key="cancel_button"),
         callback_data=back_callback or payment_options_back_callback(sale_mode),

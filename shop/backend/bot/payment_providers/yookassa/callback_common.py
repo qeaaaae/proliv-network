@@ -252,6 +252,7 @@ async def _initiate_yk_payment(
         link_text = payment_link_message_text(
             get_text,
             PaymentCallbackParts(months=months, price=price_rub, sale_mode=sale_mode),
+            payment_url=payment_response_yk["confirmation_url"],
         )
         try:
             await message.edit_text(

@@ -99,8 +99,10 @@ df -h /
 logrotate -f /etc/logrotate.d/<name>
 ```
 
-Алиасы ssh: `proliv-main`, `proliv-node-de|ee|fi|uk|nl|kz|rf`.
-LTE-ноды = `docker exec`/`ssh` на тот же хост + контейнер `remnanode-lte`.
+Алиасы ssh: `proliv-main`, `proliv-node-de|ee|ee2|fi|uk|nl|kz|rf`.
+(`proliv-node-qwins` = EE2, 163.245.52.213; контейнеры `remnanode` +
+`remnanode-lte`). LTE-ноды = `docker exec`/`ssh` на тот же хост +
+контейнер `remnanode-lte`.
 
 ## Ловушки, найденные в этой чистке
 

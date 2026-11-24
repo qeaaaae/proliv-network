@@ -23,7 +23,7 @@ cat >"$BASE/run.sh" <<'EOF'
 set -uo pipefail
 cd /opt/ipregion
 ./ipregion.sh -j -4 >last.json.tmp 2>/dev/null </dev/null
-if jq -e '.results.primary | length > 0' last.json.tmp >/dev/null 2>&1; then
+if jq -e '.verdict.country | length > 0' last.json.tmp >/dev/null 2>&1; then
   mv last.json.tmp last.json
 else
   rm -f last.json.tmp

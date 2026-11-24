@@ -1,4 +1,4 @@
-from aiogram import F, types
+from aiogram import Bot, Dispatcher, F, types
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +12,7 @@ from bot.services.device_topup_availability import (
     device_topup_reason_locale_key,
     resolve_device_topup_availability,
 )
+from bot.services.payment_callback_dispatch import dispatch_lone_payment_method
 from bot.services.subscription_service_impl.core import SubscriptionService
 from bot.services.telegram_account import require_telegram_account_id
 from bot.services.traffic_topup_availability import (
@@ -166,7 +167,12 @@ async def tariff_topup_list_callback(
 
 @router.callback_query(F.data.startswith("tariff:premium_package:"))
 async def select_tariff_premium_package_callback(
-    callback: types.CallbackQuery, i18n_data: dict, settings: Settings, session: AsyncSession
+    callback: types.CallbackQuery,
+    i18n_data: dict,
+    settings: Settings,
+    session: AsyncSession,
+    dispatcher: Dispatcher,
+    bot: Bot,
 ) -> None:
     account_user_id = await require_telegram_account_id(session, callback.from_user.id)
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
@@ -195,6 +201,7 @@ async def select_tariff_premium_package_callback(
     if not package:
         await callback.answer(get_text("error_try_again"), show_alert=True)
         return
+    collected_methods: list[tuple[str, str]] = []
     markup = get_payment_method_keyboard(
         gb,
         package.price,
@@ -206,7 +213,12 @@ async def select_tariff_premium_package_callback(
         sale_mode=f"premium_topup@{tariff.key}",
         back_callback="tariff_topup:list",
         user_id=account_user_id,
+        collected_methods=collected_methods,
     )
+    if await dispatch_lone_payment_method(
+        dispatcher=dispatcher, bot=bot, source=callback, methods=collected_methods
+    ):
+        return
     await render_card(callback, get_text("choose_payment_method_traffic"), markup)
     await callback.answer()
 
@@ -277,6 +289,8 @@ async def hwid_devices_package_callback(
     settings: Settings,
     session: AsyncSession,
     subscription_service: SubscriptionService,
+    dispatcher: Dispatcher,
+    bot: Bot,
 ) -> None:
     account_user_id = await require_telegram_account_id(session, callback.from_user.id)
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
@@ -343,6 +357,7 @@ async def hwid_devices_package_callback(
     if not currency_quote and not stars_quote:
         await callback.answer(get_text("error_try_again"), show_alert=True)
         return
+    collected_methods: list[tuple[str, str]] = []
     markup = get_payment_method_keyboard(
         count,
         float(currency_quote.get("price") if currency_quote else 0),
@@ -356,7 +371,12 @@ async def hwid_devices_package_callback(
         sale_mode=f"{sale_mode_base}@{tariff.key}",
         back_callback="hwid_devices:list",
         user_id=account_user_id,
+        collected_methods=collected_methods,
     )
+    if await dispatch_lone_payment_method(
+        dispatcher=dispatcher, bot=bot, source=callback, methods=collected_methods
+    ):
+        return
     await render_card(callback, get_text("choose_payment_method_hwid_devices"), markup)
     await callback.answer()
 
@@ -665,7 +685,12 @@ async def tariff_change_apply_callback(
 
 @router.callback_query(F.data.startswith("tariff_change:pay:"))
 async def tariff_change_pay_callback(
-    callback: types.CallbackQuery, i18n_data: dict, settings: Settings, session: AsyncSession
+    callback: types.CallbackQuery,
+    i18n_data: dict,
+    settings: Settings,
+    session: AsyncSession,
+    dispatcher: Dispatcher,
+    bot: Bot,
 ) -> None:
     account_user_id = await require_telegram_account_id(session, callback.from_user.id)
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
@@ -674,6 +699,7 @@ async def tariff_change_pay_callback(
     _, _, tariff_key, amount_raw = callback_data(callback).split(":", 3)
     amount = float(amount_raw)
     currency_code = default_payment_currency_code_for_settings(settings)
+    collected_methods: list[tuple[str, str]] = []
     markup = get_payment_method_keyboard(
         1,
         amount,
@@ -685,6 +711,11 @@ async def tariff_change_pay_callback(
         sale_mode=f"tariff_upgrade@{tariff_key}",
         back_callback=f"tariff_change:confirm_pay:{tariff_key}:{amount_raw}",
         user_id=account_user_id,
+        collected_methods=collected_methods,
     )
+    if await dispatch_lone_payment_method(
+        dispatcher=dispatcher, bot=bot, source=callback, methods=collected_methods
+    ):
+        return
     await render_card(callback, get_text("choose_payment_method"), markup)
     await callback.answer()

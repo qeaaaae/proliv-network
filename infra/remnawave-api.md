@@ -122,7 +122,7 @@ ssh <node-alias> "docker logs remnanode --since 10m | grep users"
 - Отдельного sync/restart endpoint у нод нет - только `docker restart remnanode`
   на ноде или ждать hash-poll (~1 мин)
 
-## Актуальное состояние (2026-11-17)
+## Актуальное состояние (2026-11-21)
 
 | Node | Profile | Profile UUID |
 |------|---------|--------------|
@@ -130,6 +130,8 @@ ssh <node-alias> "docker logs remnanode --since 10m | grep users"
 | DE-Node-LTE | DE-LTE-Profile | 11a59109-ce23-46b1-ae7a-bbcbcb2b6b14 |
 | EE-Node-01 | EE-Profile | 9110bb10-a34c-4e75-b3fc-f9e1c5cf4a57 |
 | EE-Node-LTE | EE-LTE-Profile | 9381c9d1-5c85-4671-8f2f-f0ce7ab6c3ba |
+| EE2-Node-01 | EE2-Profile | 2df5b530-aa93-4bf8-866e-e13d1a743716 |
+| EE2-Node-LTE | EE2-LTE-Profile | acb4e3b4-3fa8-4188-9fa3-a90c579909a0 |
 | FI-Node-01 | FI-Profile | 9b29115f-ae59-43dd-92d1-09f9d24c38ba |
 | FI-Node-LTE | FI-LTE-Profile | 268460a0-7d23-4d70-8785-95aadcf20530 |
 | UK-Node-01 | Default-Profile | 00000000-0000-0000-0000-000000000000 |

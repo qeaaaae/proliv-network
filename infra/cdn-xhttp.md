@@ -494,7 +494,25 @@ AS13238-основной (`storage.yandexcloud.net` = 213.180.x открывае
 на UK-Node-01 и FI-Node-01 добавлены `bbr`+`fq` персистентно —
 `/etc/sysctl.d/99-proliv-net.conf` (было cubic/fq_codel).
 
-## VK Cloud CDN + LTE №3 на FI (2026-11-11)
+## VK Cloud CDN + LTE на EE2 (2026-11-21, актуальный LTE-Основной)
+
+С 21.11.2026 `🇪🇺 LTE - Основной` = EE2-нода (qwins, 163.245.52.213), FI-вариант
+переименован в `🇪🇺 LTE - Основной 2`. Чейн идентичен FI:
+`клиент → VK CDN edge (ee-2.proliv-network.xyz) → rf-src ssl_preread
+(добавлен `ee-2.proliv-network.xyz ee2_lte;` + `upstream ee2_lte { server
+163.245.52.213:443; }`) → EE2 :443 REALITY self-steal → nginx 127.0.0.1:8443
+vhost `ee-2.proliv-network.xyz` → xray :9445 remnanode-lte → выход 163.245.52.213`.
+
+Объекты: `EE2-LTE-Profile` (`acb4e3b4…`), нода `EE2-Node-LTE` (`57987690…`),
+инбаунд `VLESS-XHTTP-CDN-EE2-LTE`, хост `🇪🇺 LTE - Основной` (`aab3d7ba…`).
+Путь `/media/feed/preview`, VK-extra идентичен FI (sessionKey media_sid и пр. —
+см. ниже). На EE2 два контейнера: `remnanode` (EE2-Profile, :2222 host-net)
+и `remnanode-lte` (:2223 bridge, xhttp :9445). DNS: `ee-2-src` A→163.245.52.213,
+`ee-2` CNAME→VK edge. Обычный `🇪🇪 Эстония` = `ee-2-src:443` Reality,
+SNI `ee-2.proliv-network.xyz`; старый EE = `🇪🇪 Эстония Резерв`
+(`ee-src:443`).
+
+## VK Cloud CDN + LTE №3 на FI (2026-11-11, теперь LTE-Основной 2)
 
 LTE доступ №3 поднят по чейну `клиент → VK CDN edge (fi.proliv-network.xyz) →
 rf-src (РФ-релей, nginx stream ssl_preread :443) → FI-нода :443 REALITY

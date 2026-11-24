@@ -1,7 +1,7 @@
 import contextlib
 import logging
 
-from aiogram import F, Router, types
+from aiogram import Bot, Dispatcher, F, Router, types
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.keyboards.inline.user_keyboards import (
@@ -15,6 +15,7 @@ from bot.keyboards.inline.user_keyboards import (
 )
 from bot.middlewares.i18n import JsonI18n
 from bot.services.checkout_promos import CheckoutPromoResult
+from bot.services.payment_callback_dispatch import dispatch_lone_payment_method
 from bot.services.telegram_account import require_telegram_account_id
 from bot.utils.callback_answer import callback_data
 from config.settings import Settings
@@ -33,6 +34,8 @@ async def select_subscription_period_callback_handler(
     settings: Settings,
     i18n_data: dict,
     session: AsyncSession,
+    dispatcher: Dispatcher,
+    bot: Bot,
 ) -> None:
     account_user_id = await require_telegram_account_id(session, callback.from_user.id)
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
@@ -134,6 +137,7 @@ async def select_subscription_period_callback_handler(
             )
     elif not traffic_mode:
         sale_mode = sale_mode_with_token(sale_mode, PROMO_DISABLED_TOKEN)
+    collected_methods: list[tuple[str, str]] = []
     reply_markup = get_payment_method_keyboard(
         months,
         price_rub,
@@ -150,7 +154,12 @@ async def select_subscription_period_callback_handler(
         user_id=account_user_id,
         checkout_promo=promo_quote,
         checkout_stars_promo=stars_promo_quote,
+        collected_methods=collected_methods,
     )
+    if await dispatch_lone_payment_method(
+        dispatcher=dispatcher, bot=bot, source=callback, methods=collected_methods
+    ):
+        return
 
     await render_card(callback, text_content, reply_markup)
     with contextlib.suppress(Exception):

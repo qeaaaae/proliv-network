@@ -13,11 +13,12 @@ ChatGPT при этом работал. UK (qwins) и NL (qwins) осталис�
 | **DE** | ✅ локальный | Cloudflare IPv4 (через shim) | нет | `category-ai-chat` → `ai-via-warp` |
 | **EE** | ✅ локальный | **104.28.233.140** (CF) | нет | `category-ai-chat` → `ai-via-warp` |
 | **FI** | ✅ локальный | **104.28.204.144** (CF) | нет | `category-ai-chat` → `ai-via-warp` |
+| **EE2** (qwins, 163.245.52.213) | ✅ локальный (с 21.11) | Cloudflare IPv4 (через shim) | нет | EE2-Profile/EE2-LTE-Profile: AI→`ai-via-warp`, google→`yt-via-nl` |
 | **NL** | ✅ локальный | Cloudflare IPv4 (через shim) | **есть** (2a12:bec4:1a80:1c3::2) | NL-Profile-v2: google→`yt-via-nl`, AI→`ai-via-warp` |
 | **UK** | ❌ нет | — | нет | DIRECT (пока чистый) |
 | **KZ** | ❌ нет | — | нет | DIRECT (пока чистый) |
 
-**WARP на DE/EE/FI с 11.11.2026, на NL тоже (кто-то поставил).** На UK, KZ — нет.
+**WARP на DE/EE/FI с 11.11.2026, на NL тоже, на EE2 с 21.11.2026.** На UK, KZ — нет.
 
 ---
 
@@ -44,6 +45,16 @@ ChatGPT при этом работал. UK (qwins) и NL (qwins) осталис�
 
 `yt-via-nl` outbound = socks5 на `87.58.201.121:8444` = **`/opt/socks-relay/socks5.py`**
 (systemd `socks-relay.service`) на NL-хосте. UFW пускает только IP нод.
+
+**ВАЙТЛИСТ NL `8444/tcp` — ручной.** При смене/добавлении ноды ОБЯЗАТЕЛЬНО
+обновить на `proliv-node-nl`:
+`ufw allow from <NEW_NODE_IP> to any port 8444 proto tcp comment '<name> yt-socks'`
+и удалить старый IP. Инцидент 24.11.2026: EE2 переехал `2.26.182.86` →
+`163.245.52.213`, вайтлист не обновили → YouTube+Google (gemini и пр.)
+мёртвы на EE2/EE2-LTE, при этом DIRECT и ai-via-warp работали.
+Симптом в логах нет — просто timeout на socks-коннекте.
+Текущий список: DE 13.143.192.49, UK 31.76.60.63, EE 31.76.70.98,
+FI 179.253.82.201, NL 87.58.201.121, KZ 79.183.193.149, EE2 163.245.52.213.
 
 Релей сам выбирает семейство адресов (`open_preferred`):
 - YouTube-family (`youtube`, `googlevideo`, `ytimg`, `ggpht`) → **IPv4**
@@ -123,6 +134,8 @@ default → DIRECT. Первые три reject-правила (private IP, по�
 | **FI-Node-01** (`FI-Profile`) | то же | то же | то же | то же |
 | **DE-Node-LTE** (`DE-LTE-Profile`) | то же | то же | `ai-via-warp` → **`172.17.0.1:40001`** | `ai-via-warp` |
 | **EE-Node-LTE** (`EE-LTE-Profile`) | то же | то же | `172.17.0.1:40001` | `ai-via-warp` |
+| **EE2-Node-01** (`EE2-Profile`) | то же | то же | `127.0.0.1:40001` (WARP IPv4 shim на host-net) | `ai-via-warp` |
+| **EE2-Node-LTE** (`EE2-LTE-Profile`) | то же | то же | `172.17.0.1:40001` | `ai-via-warp` |
 | **FI-Node-LTE** (`FI-LTE-Profile`) | то же | то же | `172.17.0.1:40001` | `ai-via-warp` |
 | **NL-Node-01** (`NL-Profile-v2`) | `yt-via-nl` → релей на самом NL → **NL IPv4** | `yt-via-nl` → **NL IPv6** | `ai-via-warp` → `127.0.0.1:40001` | DIRECT* |
 

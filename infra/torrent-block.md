@@ -36,7 +36,8 @@ iptables на ноде). Снесено полностью: сервис/скр�
   `POST /api/node-plugins` (`torrentBlocker.enabled=true`,
   `blockDuration=3600` - бан IP юзера на час через nftables на ноде).
 - Привязан `activePluginUuid` ко всем нодам через `PATCH /api/nodes`
-  (см. `infra/remnawave-api.md`).
+  (см. `infra/remnawave-api.md`). С 21.11 плагин включён и на новых
+  `EE2-Node-01`/`EE2-Node-LTE` (qwins).
 - Детект = штатный xray-сниффер bittorrent (в 26.7.28 ЕСТЬ - вывод
   «сниффера нет» от 15.11 был неверен, тогда крашился невалидный
   `destOverride`, а не сниффер).

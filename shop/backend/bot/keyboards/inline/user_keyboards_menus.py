@@ -30,6 +30,7 @@ def get_main_menu_inline_keyboard(
     user_id: int | None = None,
     is_admin: bool = False,
     button_ids: list[list[str]] | None = None,
+    show_personal_account: bool = True,
 ) -> InlineKeyboardMarkup:
     _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
     builder = MenuKeyboardBuilder(settings, button_ids)
@@ -38,7 +39,7 @@ def get_main_menu_inline_keyboard(
     if show_trial_button and settings.TRIAL_ENABLED:
         builder.row(_trial_activation_button(lang, i18n_instance))
 
-    if settings.SUBSCRIPTION_MINI_APP_URL:
+    if show_personal_account and settings.SUBSCRIPTION_MINI_APP_URL:
         builder.row(
             menu_button(
                 "personal_account",
@@ -46,7 +47,7 @@ def get_main_menu_inline_keyboard(
                 web_app=WebAppInfo(url=settings.SUBSCRIPTION_MINI_APP_URL),
             )
         )
-    else:
+    elif show_personal_account:
         builder.row(
             menu_button(
                 "personal_account",
@@ -121,6 +122,7 @@ def get_bot_interface_inline_keyboard(
     *,
     referral_program_enabled: bool = True,
     button_ids: list[list[str]] | None = None,
+    show_personal_account: bool = True,
 ) -> InlineKeyboardMarkup:
     _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
     builder = MenuKeyboardBuilder(settings, button_ids)
@@ -129,7 +131,7 @@ def get_bot_interface_inline_keyboard(
     if show_trial_button and settings.TRIAL_ENABLED:
         builder.row(_trial_activation_button(lang, i18n_instance))
 
-    if settings.SUBSCRIPTION_MINI_APP_URL:
+    if show_personal_account and settings.SUBSCRIPTION_MINI_APP_URL:
         builder.row(
             menu_button(
                 "personal_account",
@@ -213,6 +215,7 @@ def get_purchases_keyboard(
     lang: str,
     i18n_instance: JsonI18n,
     settings: Settings,
+    has_active_subscription: bool = True,
 ) -> InlineKeyboardMarkup:
     """Purchases hub: renew/activate promo/back. Reuses menu appearance ids for icons."""
     _ = lambda key, **kwargs: i18n_instance.gettext(lang, key, **kwargs)
@@ -220,7 +223,11 @@ def get_purchases_keyboard(
     builder.row(
         menu_button(
             "subscribe",
-            text=_(key="purchases_renew_button"),
+            text=_(
+                key="purchases_renew_button"
+                if has_active_subscription
+                else "purchases_buy_button"
+            ),
             callback_data="main_action:bot_subscribe",
         )
     )

@@ -1,7 +1,7 @@
 import contextlib
 from collections.abc import Callable, Hashable, Sequence
 
-from aiogram import F, types
+from aiogram import Bot, Dispatcher, F, types
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.infra.promo_policies import (
@@ -31,6 +31,7 @@ from bot.services.checkout_promos import (
     resolve_best_checkout_promo,
     resolve_checkout_promo,
 )
+from bot.services.payment_callback_dispatch import dispatch_lone_payment_method
 from bot.services.subscription_service_impl.core import SubscriptionService
 from bot.services.telegram_account import require_telegram_account_id
 from bot.utils.callback_answer import (
@@ -536,6 +537,8 @@ async def select_tariff_period_callback(
     settings: Settings,
     session: AsyncSession,
     subscription_service: SubscriptionService,
+    dispatcher: Dispatcher,
+    bot: Bot,
 ) -> None:
     account_user_id = await require_telegram_account_id(session, callback.from_user.id)
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
@@ -618,6 +621,7 @@ async def select_tariff_period_callback(
             currency="stars",
         )
     )
+    collected_methods: list[tuple[str, str]] = []
     markup = get_payment_method_keyboard(
         months,
         price_rub,
@@ -637,7 +641,12 @@ async def select_tariff_period_callback(
         hwid_renewal_selected=bool(renew_hwid_devices),
         checkout_promo=promo_quote,
         checkout_stars_promo=stars_promo_quote,
+        collected_methods=collected_methods,
     )
+    if await dispatch_lone_payment_method(
+        dispatcher=dispatcher, bot=bot, source=callback, methods=collected_methods
+    ):
+        return
     payment_text = _with_checkout_promo_notice(
         get_text("choose_payment_method"),
         get_text,
@@ -650,7 +659,12 @@ async def select_tariff_period_callback(
 
 @router.callback_query(F.data.startswith("tariff:package:"))
 async def select_tariff_package_callback(
-    callback: types.CallbackQuery, i18n_data: dict, settings: Settings, session: AsyncSession
+    callback: types.CallbackQuery,
+    i18n_data: dict,
+    settings: Settings,
+    session: AsyncSession,
+    dispatcher: Dispatcher,
+    bot: Bot,
 ) -> None:
     account_user_id = await require_telegram_account_id(session, callback.from_user.id)
     current_lang = i18n_data.get("current_language", settings.DEFAULT_LANGUAGE)
@@ -697,6 +711,7 @@ async def select_tariff_package_callback(
         if tariff.billing_model == "traffic"
         else "tariff_topup:list"
     )
+    collected_methods: list[tuple[str, str]] = []
     markup = get_payment_method_keyboard(
         gb,
         package.price,
@@ -708,6 +723,11 @@ async def select_tariff_package_callback(
         sale_mode=sale_mode,
         back_callback=back_callback,
         user_id=account_user_id,
+        collected_methods=collected_methods,
     )
+    if await dispatch_lone_payment_method(
+        dispatcher=dispatcher, bot=bot, source=callback, methods=collected_methods
+    ):
+        return
     await render_card(callback, get_text("choose_payment_method_traffic"), markup)
     await callback.answer()

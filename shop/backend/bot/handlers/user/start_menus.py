@@ -121,6 +121,7 @@ async def send_main_menu(
         settings,
         show_trial_button_in_menu,
         user_id=user_id,
+        show_personal_account=active_sub is not None,
     )
 
     target_message_obj: types.Message | None = None
@@ -188,9 +189,11 @@ async def send_bot_interface_menu(
         session,
         user_id=user_id,
     )
+    active_sub = await subscription_dal.get_active_subscription_by_user_id(session, user_id)
+    show_personal_account = active_sub is not None
 
     text = i18n.gettext(current_lang, "bot_interface_menu_title")
-    if settings.SUBSCRIPTION_MINI_APP_URL:
+    if settings.SUBSCRIPTION_MINI_APP_URL and show_personal_account:
         text = f"{text}\n\n{i18n.gettext(current_lang, 'bot_interface_menu_webapp_hint')}"
     reply_markup = get_bot_interface_inline_keyboard(
         current_lang,
@@ -198,6 +201,7 @@ async def send_bot_interface_menu(
         settings,
         show_trial_button_in_menu,
         referral_program_enabled=referral_program_enabled,
+        show_personal_account=show_personal_account,
     )
 
     target_message_obj: types.Message | None = None

@@ -27,13 +27,13 @@ from bot.utils.callback_answer import (
     safe_answer_callback,
 )
 from config.settings import Settings
-from db.dal import user_dal
+from db.dal import subscription_dal, user_dal
 
+from .menu_card import card_enabled, render_card
 from .start_channel import ensure_required_channel_subscription
 from .start_common import (
     router,
 )
-from .menu_card import card_enabled, render_card
 from .start_menus import send_bot_interface_menu, send_main_menu
 from .welcome_banner import send_welcome_message
 
@@ -285,10 +285,19 @@ async def main_action_callback_handler(
             )
             return
         _ = lambda key, **kwargs: i18n.gettext(current_lang, key, **kwargs)
+        account_user_id = await require_telegram_account_id(session, callback.from_user.id)
+        active_sub = await subscription_dal.get_active_subscription_by_user_id(
+            session, account_user_id
+        )
         await render_card(
             callback,
             _(key="purchases_screen_title"),
-            get_purchases_keyboard(current_lang, i18n, settings),
+            get_purchases_keyboard(
+                current_lang,
+                i18n,
+                settings,
+                has_active_subscription=active_sub is not None,
+            ),
         )
         await safe_answer_callback(callback)
     elif action == "subscribe":

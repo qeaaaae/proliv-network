@@ -33,7 +33,10 @@ services:
   remnanode:
     container_name: remnanode
     hostname: remnanode
-    image: remnawave/node:latest
+    # НЕ latest! 3.4.6 (Xray 26.11.9) ломал REALITY auth для клиентов
+    # (инцидент EE2 23.11.2026). Держать запиненным на 3.4.3 (Xray 26.7.28),
+    # как на всех нодах. Обновлять только после проверки REALITY на стейдже.
+    image: remnawave/node:3.4.3
     restart: always
     network_mode: host
     environment:

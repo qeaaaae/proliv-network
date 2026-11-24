@@ -25,19 +25,21 @@ Subscription template (как JSON-конфиг собирается для кл
 - **Squad** — список inbound uuid'ов, по которым панель раздаёт юзеров.
   Инбаунд вне squad = 0 юзеров = `invalid request user id`.
 
-## Текущие хосты (GET /api/hosts, 17.11)
+## Текущие хосты (GET /api/hosts, 21.11)
 
 | remark | address:port | sni | host (CDN) | nodes |
 |---|---|---|---|---|
 | 🇬🇧 Великобритания | uk.proliv-network.xyz:443 | uk.proliv-network.xyz | — | UK-Node |
-| 🇪🇪 Эстония | ee-src.proliv-network.xyz:443 | ee.proliv-network.xyz | — | EE-Node |
+| 🇪🇪 Эстония | ee-2-src.proliv-network.xyz:443 | ee-2.proliv-network.xyz | — | EE2-Node-01 (163.245.52.213, qwins) |
+| 🇪🇪 Эстония Резерв | ee-src.proliv-network.xyz:443 | ee.proliv-network.xyz | — | EE-Node-01 (31.76.70.98) |
 | 🇳🇱 Нидерланды | nl.proliv-network.xyz:443 | nl.proliv-network.xyz | — | NL-Node |
 | 🇩🇪 Германия | de-src.proliv-network.xyz:443 | de.proliv-network.xyz | — | DE-Node |
 | 🇫🇮 Финляндия | fi-src.proliv-network.xyz:443 | fi.proliv-network.xyz | — | FI-Node |
 | 🇰🇿 Казахстан | kz.proliv-network.xyz:443 | kz.proliv-network.xyz | — | KZ-Node |
-| 🇪🇺 LTE - Основной | fi.proliv-network.xyz:443 | fi.proliv-network.xyz | fi.proliv-network.xyz | FI-Node-LTE |
-| 🇪🇺 LTE - Резерв 1 | ee.proliv-network.xyz:443 | ee.proliv-network.xyz | ee.proliv-network.xyz | EE-Node-LTE |
-| 🇪🇺 LTE - Резерв 2 | de.proliv-network.xyz:443 | de.proliv-network.xyz | de.proliv-network.xyz | DE-Node-LTE |
+| 🇪🇺 LTE - Основной | ee-2.proliv-network.xyz:443 | ee-2.proliv-network.xyz | ee-2.proliv-network.xyz | EE2-Node-LTE (VK CDN) |
+| 🇪🇺 LTE - Основной 2 | fi.proliv-network.xyz:443 | fi.proliv-network.xyz | fi.proliv-network.xyz | FI-Node-LTE (VK CDN) |
+| 🇪🇺 LTE - Резерв 1 | ee.proliv-network.xyz:443 | ee.proliv-network.xyz | ee.proliv-network.xyz | EE-Node-LTE (yccdn) |
+| 🇪🇺 LTE - Резерв 2 | de.proliv-network.xyz:443 | de.proliv-network.xyz | de.proliv-network.xyz | DE-Node-LTE (yccdn) |
 
 У прямых локаций `host` пустой (не CDN). У LTE `host` = front-домен —
 edge шлёт его в Host-заголовке на origin.
@@ -100,6 +102,12 @@ PY
    - nodes = [uuid ноды];
    - для xhttp: `xhttpExtraParams` = копия `xhttpSettings.extra`
      инбаунда (клиент и сервер должны совпадать!);
+   - для xhttp за CDN также копировать ТРАНСПОРТНЫЕ поля с рабочего
+     хоста: `securityLayer: "TLS"`, `fingerprint: "chrome"`,
+     `alpn: ["h2","http/1.1"]`, `path` (со слешем на конце),
+     `xhttpExtraParams.path: "/"`. Без них клиент падает с
+     `failed to parse json config failed to build outbounding`
+     (инцидент EE2-LTE 23.11);
    - для Reality: `sockoptParams` = `{"tcpFastOpen":true,"tcpNoDelay":true}`.
 4. Проверка: `GET /api/sub/<shortUuid>` с UA клиента → новый хост в
    выдаче; реальное подключение → выход = IP ноды.
@@ -132,12 +140,32 @@ PY
 Cron на main: `17 */6 * * * /usr/bin/python3 /opt/proliv/rotate-hosts.py`
 (лог `/var/log/rotate-hosts.log`).
 
-Скрипт каждый запуск **переносит первый «обычный» хост в конец
-ротируемого блока** — первая локация в подписке у всех юзеров
-чередуется (антифинг/балансировка). Не трогает:
-- хосты с `LTE` в remark;
-- пинned `Казахстан`;
-- disabled-хосты.
+**Отложенное скрытие хостов**: `/opt/proliv/infra/host-hide-schedule.py`,
+cron `15 0 * * *` (03:15 MSK). Скрипт работает **по UUID хостов**
+(переименования remark его не ломают) и по датам МСК проставляет
+`isHidden=true` (хост исчезает из подписки, сам не удаляется):
+- 2026-11-27: `🇪🇪 Эстония Резерв` (старая EE), `🇪🇺 LTE - Резерв 1`, `🇪🇺 LTE - Резерв 2`, `🇬🇧 Великобритания`
+- 2026-11-29: `🇫🇮 Финляндия`, `🇪🇺 LTE - Основной 2` (FI)
+- 2026-12-09: `🇰🇿 Казахстан`
+Откат: `isHidden=false` через PATCH /api/hosts. Лог `/var/log/host-hide.log`.
+
+Скрипт каждый запуск **ротирует ГРУППЫ локаций** (антифинг/балансировка
+первой строки в подписке). Не трогает:
+- хосты с `LTE` в remark и `Казахстан` (pinned);
+- disabled/hidden-хосты.
+
+Правила порядка (важно, проверено 23.11):
+- **Резерв не может быть выше основной локации.** Хосты группируются по
+  remark без суффикса ` Резерв`: `🇪🇪 Эстония` + `🇪🇪 Эстония Резерв` =
+  одна группа, резерв всегда идёт сразу после основной и двигается
+  вместе с ней при ротации.
+- **LTE строго по номерам:** `LTE - Основной`, `LTE - Основной 2`,
+  `LTE - Резерв 1`, `LTE - Резерв 2`. Скрипт каждый запуск пересортировывает
+  LTE-хосты (основные по номеру, потом резервы по номеру) и раздаёт им
+  позиции 8-11 - порядок не поплывёт даже после переименований.
+- Переименования remark безопасны для hide-скрипта (он по UUID), но
+  rotate-hosts.py группирует по remark - при смене схемы имён сверить
+  `RESERVE_SUFFIX`/`PINNED_MARKERS` в скрипте.
 
 JWT для API берёт из `/root/.panel-jwt` (HS256, APP_SECRET).
 
@@ -173,6 +201,9 @@ curl -s -A 'Happ' 'https://<sub-domain>/api/sub/<shortUuid>' | head -c 500
 - Не дублировать remark — клиент запутается.
 - Не забывать `xhttpExtraParams` для xhttp-хостов — без него клиент
   шлёт дефолтные параметры, сервер их не поймёт (инцидент VK 12.11).
+- Не создавать xhttp-хост с `securityLayer: DEFAULT` — клиентский
+  outbound не собирается (`failed to build outbounding`). TLS-поля
+  обязательны, см. чеклист выше.
 - Не удалять хосты — `isDisabled: true` обратимо, удаление ломает
   существующие подписки.
 

@@ -530,6 +530,7 @@ def payment_link_message_text(
     parts: PaymentCallbackParts,
     *,
     lead_text: str | None = None,
+    payment_url: str | None = None,
 ) -> str:
     """Build the ``payment_link_message`` text (with optional lead block)."""
     traffic_like = sale_mode_base(parts.sale_mode) in {
@@ -544,6 +545,8 @@ def payment_link_message_text(
         body = translator("payment_link_message_days", days=duration_days)
     else:
         body = translator("payment_link_message", months=int(parts.months))
+    if payment_url:
+        body = f"{body}\n\n{translator('payment_link_vpn_fallback', url=payment_url)}"
     if lead_text:
         return f"{lead_text}\n\n{body}"
     return body
@@ -562,7 +565,9 @@ async def render_payment_link(
     log_prefix: str = "payment_providers",
 ) -> None:
     """Show the payment link with the standard back button and shared fallbacks."""
-    text = payment_link_message_text(translator, parts, lead_text=lead_text)
+    text = payment_link_message_text(
+        translator, parts, lead_text=lead_text, payment_url=payment_url
+    )
     keyboard = get_payment_url_keyboard(
         payment_url,
         current_lang,

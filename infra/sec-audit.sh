@@ -9,8 +9,10 @@ case "$MYIP" in
   87.58.201.121) NODE=nl; EXP_PUB="22 80 443 8444 2222";;
   79.183.193.149) NODE=kz; EXP_PUB="22 80 443 2222";;
   48.102.213.215) NODE=rf; EXP_PUB="22 80 443";;
+  163.245.52.213)   NODE=ee2; EXP_PUB="22 80 443 2222 2223"; SNI_DOMAIN="ee-2.proliv-network.xyz";;
   *) NODE=unknown-$MYIP; EXP_PUB="22 80 443";;
 esac
+SNI_DOMAIN=${SNI_DOMAIN:-$NODE.proliv-network.xyz}
 PANEL=144.31.240.216
 echo "###### $NODE ($MYIP) ######"
 
@@ -71,7 +73,7 @@ if [ "$NODE" = "fi" ]; then
   sysctl -n net.ipv4.icmp_echo_ignore_all 2>/dev/null | grep -q 1 && ok "ping: icmp_echo_ignore_all=1" || wn "ping: icmp_echo_ignore_all!=1"
 else
   sysctl -n net.ipv4.icmp_echo_ignore_all 2>/dev/null | grep -q 1 && ok "ping: icmp_echo_ignore_all=1" || wn "ping: sysctl not ignoring"
-  iptables -L INPUT -n 2>/dev/null | grep -iE "icmp.*DROP|icmp.*echo" | head -1 | grep -q . && ok "ping: iptables drop/echo rule" || wn "ping: no explicit drop found"
+  iptables -L INPUT -n 2>/dev/null | grep -iE "icmp.*DROP|icmp.*echo|icmptype 8" | head -1 | grep -q . && ok "ping: iptables drop/echo rule" || wn "ping: no explicit drop found"
 fi
 
 # 6. fail2ban
@@ -96,7 +98,7 @@ echo "  -- bogus SNI :443 cert: ${CERTCN:-no cert / reset}"
 [ "$NODE" != "rf" ] && { echo "$CERTCN" | grep -qi "proliv-network" && no "bogus SNI leaks domain cert!" || ok "bogus SNI no domain leak"; }
 # TLS1.3 to steal-dest :8443 (NL incident regression)
 if ss -tln 2>/dev/null | grep -q "127.0.0.1:8443"; then
-  T13=$(echo | timeout 5 openssl s_client -connect 127.0.0.1:8443 -servername ${NODE}.proliv-network.xyz -tls1_3 2>/dev/null | grep -m1 -oE "TLSv1\.[0-9]")
+  T13=$(echo | timeout 5 openssl s_client -connect 127.0.0.1:8443 -servername $SNI_DOMAIN -tls1_3 2>/dev/null | grep -m1 -oE "TLSv1\.[0-9]")
   [ "$T13" = "TLSv1.3" ] && ok "steal-dest :8443 negotiates TLS1.3" || no "steal-dest :8443 NO TLS1.3 ($T13) - reality mimicry broken!"
 fi
 # decoy on :80

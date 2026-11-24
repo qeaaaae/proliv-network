@@ -5,32 +5,34 @@
 Глубокая техника (все грабли VK edge, extra-параметры, инциденты) —
 `infra/cdn-xhttp.md`, раздел «VK Cloud CDN + LTE №3 на FI».
 
-## Что есть сейчас (факт из панели, 17.11)
+## Что есть сейчас (факт из панели, 21.11)
 
 | Хост в подписке | address:port | За чем | Нода | Профиль |
 |---|---|---|---|---|
-| `🇪🇺 LTE - Основной` | `fi.proliv-network.xyz:443` | **VK Cloud CDN** | FI-Node-LTE | FI-LTE-Profile |
+| `🇪🇺 LTE - Основной` | `ee-2.proliv-network.xyz:443` | **VK Cloud CDN** | EE2-Node-LTE (qwins, 163.245.52.213) | EE2-LTE-Profile |
+| `🇪🇺 LTE - Основной 2` | `fi.proliv-network.xyz:443` | VK Cloud CDN | FI-Node-LTE | FI-LTE-Profile |
 | `🇪🇺 LTE - Резерв 1` | `ee.proliv-network.xyz:443` | Яндекс CDN (yccdn) | EE-Node-LTE | EE-LTE-Profile |
 | `🇪🇺 LTE - Резерв 2` | `de.proliv-network.xyz:443` | Яндекс CDN (yccdn) | DE-Node-LTE | DE-LTE-Profile |
 
-«LTE - Основной» = VK-вариант. Резервы на yccdn остаются как fallback —
-если VK-эдж ляжет, юзер переключается на резерв руками в клиенте.
+Основной LTE с 21.11.2026 - EE2 (qwins Estonia). Бывший FI-вариант
+переименован в `Основной 2` и остаётся VK-фолбэком. Резервы на yccdn -
+fallback если VK-эдж ляжет.
 
 ## Цепочка трафика (VK)
 
 ```
 клиент (Happ/Incy, VLESS-xhttp)
-  -> VK Cloud CDN edge (fi.proliv-network.xyz, AS-диапазоны VK)
+  -> VK Cloud CDN edge (ee-2.proliv-network.xyz, AS-диапазоны VK)
   -> rf-src.proliv-network.xyz  (РФ-релей 48.102.213.215,
      nginx stream ssl_preread :443, роутит по SNI)
-  -> FI-нода :443  REALITY (self-steal)
-  -> nginx 127.0.0.1:8443 (vhost по SNI, LE-серт)
-  -> xray :9445  (контейнер remnanode-lte на FI)
-  -> выход с IP FI-ноды (179.253.82.201)
+  -> EE2-нода :443  REALITY (self-steal, EE2-Profile serverNames)
+  -> nginx 127.0.0.1:8443 (vhost ee-2.proliv-network.xyz)
+  -> xray :9445  (контейнер remnanode-lte на EE2, EE2-LTE-Profile)
+  -> выход с IP EE2-ноды (163.245.52.213)
 ```
 
-CDN видит только `rf-src` — про Финляндию не знает. Юзерский uuid доезжает
-до FI целиком, учёт трафика/юзеров на FI-Node-LTE в панели корректный.
+CDN видит только `rf-src` — про выходную ноду не знает. Юзерский uuid доезжает
+до EE2 целиком, учёт трафика/юзеров на EE2-Node-LTE в панели корректный.
 
 ## Как юзер подключается (ответ на «как подключать»)
 
@@ -39,8 +41,9 @@ CDN видит только `rf-src` — про Финляндию не знае
 1. Клиент (Happ/Incy/любой с xhttp) → обновить подписку.
 2. В списке серверов появится `🇪🇺 LTE - Основной` — выбрать и
    подключиться. Тот же профиль/подписка, что и обычные локации.
-3. Проверка что реально через VK: в клиенте/на ноде выход = IP FI-ноды,
-   а в `/var/log/nginx/xhttp_hdr.log` на FI видны запросы с edge-IP VK.
+3. Проверка что реально через VK: в клиенте/на ноде выход = IP EE2-ноды
+   (163.245.52.213), а в `/var/log/nginx/xhttp_access.log` на EE2 видны
+   запросы с edge-IP VK.
 
 Ручной конфиг не требуется: `xhttpExtraParams` хоста и
 `xhttpSettings.extra` инбаунда уже содержат VK-вариант параметров
@@ -74,33 +77,33 @@ CDN видит только `rf-src` — про Финляндию не знае
 ```bash
 # 1. Edge жив? (400 = дошло до xray, 403 = edge режет, 000 = сеть)
 curl -sk -o /dev/null -w '%{http_code}' \
-  'https://fi.proliv-network.xyz/media/feed/preview/?sess_id=t'
+  'https://ee-2.proliv-network.xyz/media/feed/preview/?sess_id=t'
 
-# 2. Запросы доходят до FI-ноды? (смотрим свежие строки)
-ssh proliv-node-fi "tail -20 /var/log/nginx/xhttp_hdr.log"
+# 2. Запросы доходят до EE2-ноды? (смотрим свежие строки)
+ssh proliv-node-qwins "tail -20 /var/log/nginx/xhttp_access.log"
 # пусто при живом юзере = пакеты умирают до edge (оператор/шатдаун),
 # не сервер. См. инцидент 06.11 в cdn-xhttp.md.
 
 # 3. xhttp на :9445 жив?
-ssh proliv-node-fi "docker logs remnanode-lte --tail 20"
+ssh proliv-node-qwins "docker logs remnanode-lte --tail 20"
 # 'invalid padding ()' пачками = клиент шлёт старый extra —
 # обновить подписку на клиенте.
 
 # 4. Нода в панели:
-# GET /api/nodes -> FI-Node-LTE isConnected, юзеры на инбаунде
-# VLESS-XHTTP-CDN-FI-LTE (в логе 'N users').
+# GET /api/nodes -> EE2-Node-LTE isConnected, юзеры на инбаунде
+# VLESS-XHTTP-CDN-EE2-LTE (в логе 'N users').
 
-# 5. Что видит edge -> tcpdump на FI:
-ssh proliv-node-fi "tcpdump -i any -A -s0 'tcp port 9445' | head -50"
+# 5. Что видит edge -> tcpdump на EE2:
+ssh proliv-node-qwins "tcpdump -i any -A -s0 'tcp port 9445' | head -50"
 # показывает заголовки как их видит xray (edge-добавки X-CDN-*,
 # X-Forwarded-*, CDN-Loop).
 ```
 
-## Как поднять ещё один хост на VK CDN (например, второй LTE-выход)
+## Как поднять ещё один хост на VK CDN (например, третий LTE-выход)
 
 1. **VPS-донора не надо** — используется та же схема: CDN edge ->
    `rf-src` (РФ-релей) -> целевая нода. Нужна только **нода-приёмник**
-   (уже есть: FI-Node-LTE) или новая LTE-нода на существующем VPS
+   (как EE2-Node-LTE на qwins) или новый LTE-контейнер на существующем VPS
    (как EE/DE-LTE — второй контейнер `remnanode-lte` на хосте).
 2. **Профиль**: клон `FI-LTE-Profile` (`268460a0-7d23-4d70-8785-95aadcf20530`),
    новые теги инбаундов с суффиксом страны. `PATCH /api/config-profiles`.
