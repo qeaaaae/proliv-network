@@ -94,6 +94,9 @@ async def ensure_user_install_guide_share_url(
             local_sub,
             panel_short_uuid=panel_short_uuid,
         )
+        subscription_url = str(panel_user.get("subscriptionUrl") or "").strip()
+        if subscription_url:
+            return subscription_url
         return subscription_public_install_url(settings, share_token)
     except Exception:
         logger.exception("Failed to resolve install guide share link for user %s.", user_id)
